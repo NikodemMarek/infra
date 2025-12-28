@@ -25,6 +25,3 @@ spec:
     api:
       dashboard: true
       insecure: true
-    ingressRoute:
-      dashboard:
-        enabled: true
