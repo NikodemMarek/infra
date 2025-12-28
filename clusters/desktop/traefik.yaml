@@ -23,5 +23,8 @@ spec:
   interval: 1m
   values:
     api:
-      dashboard: true
-      insecure: true
+      enabled: true
+      insecure: false
+    ingressRoute:
+      dashboard:
+        enabled: true
