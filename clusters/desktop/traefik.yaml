@@ -22,8 +22,8 @@ spec:
       version: 38.0.1
   interval: 1m
   values:
-    dashboard:
-      enabled: true
+    api:
+      dashboard: true
       insecure: true
     ingressRoute:
       dashboard:
