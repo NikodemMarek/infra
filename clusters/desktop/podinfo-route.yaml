@@ -1,0 +1,19 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: podinfo
+  namespace: default
+spec:
+  parentRefs:
+    - name: traefik
+      namespace: default
+  hostnames:
+    - "podinfo.local"
+  rules:
+    - matches:
+        - path:
+            type: HostRegexp
+            value: "^podinfo\..+*$"
+      backendRefs:
+        - name: podinfo
+          port: 9898
