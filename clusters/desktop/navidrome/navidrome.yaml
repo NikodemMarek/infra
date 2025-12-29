@@ -34,7 +34,10 @@ spec:
               mountPath: /data
       volumes:
         - name: data
-          emptyDir: {}
+          nfs:
+            server: 192.168.74.1
+            path: /persist/apps/navidrome
+            readOnly: false
 ---
 apiVersion: v1
 kind: Service
