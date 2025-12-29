@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navidrome
+  namespace: default
+  labels:
+    app: navidrome
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: navidrome
+  template:
+    metadata:
+      labels:
+        app: navidrome
+    spec:
+      containers:
+        - name: navidrome
+          image: deluan/navidrome:0.59.0
+          ports:
+            - containerPort: 4533
+          env:
+            - name: ND_ENABLEINSIGHTSCOLLECTOR
+              value: false
+            - name: ND_LOGLEVEL
+              value: "info"
+            - name: ND_MUSICFOLDER
+              value: "/music"
+            - name: ND_DATAFOLDER
+              value: "/data"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: navidrome
+  namespace: default
+spec:
+  selector:
+    app: navidrome
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 4533
