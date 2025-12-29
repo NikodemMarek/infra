@@ -24,4 +24,4 @@ spec:
   values:
     grafana.ini:
       server:
-        root_url: http://grafana.local
+        root_url: http://grafana.nkmrk.com

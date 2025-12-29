@@ -50,3 +50,9 @@ spec:
           protocol: HTTP
           namespacePolicy:
             from: All
+
+    logs:
+      general:
+        level: INFO
+      access:
+        enabled: true

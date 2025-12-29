@@ -8,7 +8,7 @@ spec:
   - name: traefik
     namespace: default
   hostnames:
-  - "grafana.local"
+  - "grafana.nkmrk.com"
   rules:
   - matches:
     - path:
