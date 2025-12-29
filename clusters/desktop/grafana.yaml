@@ -1,0 +1,27 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: grafana
+  namespace: default
+spec:
+  interval: 1m
+  url: https://grafana.github.io/helm-charts
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: grafana
+  namespace: default
+spec:
+  chart:
+    spec:
+      chart: grafana
+      sourceRef:
+        kind: HelmRepository
+        name: grafana
+      version: 10.4.0
+  interval: 1m
+  values:
+    grafana.ini:
+      server:
+        root_url: http://grafana.local
