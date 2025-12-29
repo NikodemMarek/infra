@@ -9,7 +9,10 @@ spec:
       namespace: default
   rules:
     - matches:
-        - headers:
+        - path:
+            type: RegularExpression
+            value: ".*"
+          headers:
             - name: Host
               type: RegularExpression
               value: "^podinfo\\..*$"
