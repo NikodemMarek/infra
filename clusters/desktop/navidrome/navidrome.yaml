@@ -38,6 +38,11 @@ spec:
             server: 192.168.74.1
             path: /persist/apps/navidrome
             readOnly: false
+        - name: music
+          nfs:
+            server: 192.168.74.1
+            path: /mnt/data/music
+            readOnly: true
 ---
 apiVersion: v1
 kind: Service
