@@ -10,6 +10,6 @@ spec:
   hostnames:
     - "podinfo.*"
   rules:
-    backendRefs:
-      - name: podinfo
-        port: 9898
+    - backendRefs:
+        - name: podinfo
+          port: 9898
