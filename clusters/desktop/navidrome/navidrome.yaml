@@ -35,12 +35,12 @@ spec:
       volumes:
         - name: data
           nfs:
-            server: 192.168.74.1
+            server: storage.host
             path: /persist/apps/navidrome
             readOnly: false
         - name: music
           nfs:
-            server: 192.168.74.1
+            server: storage.host
             path: /mnt/data/music
             readOnly: true
 ---
