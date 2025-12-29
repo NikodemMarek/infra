@@ -22,7 +22,7 @@ spec:
             - containerPort: 4533
           env:
             - name: ND_ENABLEINSIGHTSCOLLECTOR
-              value: false
+              value: "false"
             - name: ND_LOGLEVEL
               value: "info"
             - name: ND_MUSICFOLDER
