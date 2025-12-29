@@ -18,4 +18,5 @@ spec:
               value: "^podinfo\\..*$"
       backendRefs:
         - name: podinfo
+          namespace: default
           port: 9898
