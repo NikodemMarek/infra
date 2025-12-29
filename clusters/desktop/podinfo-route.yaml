@@ -7,12 +7,9 @@ spec:
   parentRefs:
     - name: traefik-gateway
       namespace: default
+  hostnames:
+    - "podinfo.*"
   rules:
-    - matches:
-        - headers:
-            - name: Host
-              type: RegularExpression
-              value: "^podinfo\\..*$"
       backendRefs:
         - name: podinfo
           port: 9898
