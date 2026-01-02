@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jellyfin
+  namespace: default
+  labels:
+    app: jellyfin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jellyfin
+  template:
+    metadata:
+      labels:
+        app: jellyfin
+    spec:
+      containers:
+        - name: jellyfin
+          image: jellyfin/jellyfin:2025122905
+          ports:
+            - containerPort: 8096
+          env:
+            - name: ND_ENABLEINSIGHTSCOLLECTOR
+              value: "/data/data"
+            - name: JELLYFIN_CONFIG_DIR
+              value: "/data/config"
+            - name: JELLYFIN_CACHE_DIR
+              value: "/data/cache"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: movies
+              mountPath: /movies
+              readOnly: true
+            - name: shows
+              mountPath: /shows
+              readOnly: true
+      volumes:
+        - name: data
+          nfs:
+            server: storage.host
+            path: /persist/apps/jellyfin
+            readOnly: false
+        - name: movies
+          nfs:
+            server: storage.host
+            path: /mnt/data/movies
+            readOnly: true
+        - name: shows
+          nfs:
+            server: storage.host
+            path: /mnt/data/shows
+            readOnly: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jellyfin
+  namespace: default
+spec:
+  selector:
+    app: jellyfin
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8096
