@@ -21,7 +21,7 @@ spec:
           ports:
             - containerPort: 8096
           env:
-            - name: ND_ENABLEINSIGHTSCOLLECTOR
+            - name: JELLYFIN_DATA_DIR
               value: "/data/data"
             - name: JELLYFIN_CONFIG_DIR
               value: "/data/config"
