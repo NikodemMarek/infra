@@ -22,13 +22,6 @@ spec:
       version: 38.0.1
   interval: 1m
   values:
-    api:
-      enabled: true
-      insecure: false
-    ingressRoute:
-      dashboard:
-        enabled: true
-
     ports:
       web:
         port: 80
