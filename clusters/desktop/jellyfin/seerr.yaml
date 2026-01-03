@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: seerr
-          image: fallenbagel/jellyseerr:latest
+          image: ghcr.io/fallenbagel/jellyseerr:latest
           ports:
             - containerPort: 5055
           volumeMounts:
