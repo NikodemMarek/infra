@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seerr
+  namespace: default
+  labels:
+    app: seerr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: seerr
+  template:
+    metadata:
+      labels:
+        app: seerr
+    spec:
+      containers:
+        - name: seerr
+          image: ghcr.io/fallenbagel/jellyseerr:latest
+          ports:
+            - containerPort: 5055
+          volumeMounts:
+            - name: data
+              mountPath: /app/config
+      volumes:
+        - name: data
+          nfs:
+            server: storage.host
+            path: /persist/apps/seerr
+            readOnly: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seerr
+  namespace: default
+spec:
+  selector:
+    app: seerr
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 5055
