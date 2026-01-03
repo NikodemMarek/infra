@@ -36,6 +36,9 @@ spec:
             - name: shows
               mountPath: /shows
               readOnly: true
+            - name: books
+              mountPath: /books
+              readOnly: true
       volumes:
         - name: data
           nfs:
@@ -51,6 +54,11 @@ spec:
           nfs:
             server: storage.host
             path: /mnt/data/shows
+            readOnly: true
+        - name: books
+          nfs:
+            server: storage.host
+            path: /mnt/data/books
             readOnly: true
 ---
 apiVersion: v1
