@@ -6,3 +6,8 @@ creation_rules:
     key_groups:
     - age:
       - *desktop_cluster
+
+  - path_regex: clusters/desktop/.+\.enc.+$
+    key_groups:
+    - age:
+      - *desktop_cluster
