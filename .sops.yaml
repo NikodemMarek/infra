@@ -1,0 +1,8 @@
+keys:
+  - &desktop_cluster age1qj5g0znauuspvr9upl4l2mt25ww69ljxc7rvw3e8f220e2jggsdqqkx5wa
+
+creation_rules:
+  - path_regex: clusters/desktop/secrets/.+$
+    key_groups:
+    - age:
+      - *desktop_cluster
