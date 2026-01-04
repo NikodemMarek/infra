@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: jellyfin
-          image: jellyfin/jellyfin:2025122905
+          image: jellyfin/jellyfin:latest
           ports:
             - containerPort: 8096
           env:
