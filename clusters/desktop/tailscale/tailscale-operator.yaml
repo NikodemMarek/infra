@@ -13,8 +13,6 @@ spec:
         kind: HelmRepository
         name: tailscale
         namespace: flux-system
-  install:
-    createNamespace: true
   valuesFrom:
     - kind: Secret
       name: tailscale-operator-oauth
