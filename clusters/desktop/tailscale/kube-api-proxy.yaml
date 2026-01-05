@@ -3,9 +3,6 @@ kind: Ingress
 metadata:
   name: kube-api-ingress
   namespace: default
-  annotations:
-    tailscale.com/hostname: desktop-kube-api
-    tailscale.com/backend-protocol: "https"
 spec:
   ingressClassName: tailscale
   rules:
