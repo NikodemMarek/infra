@@ -26,16 +26,13 @@ spec:
       web:
         port: 80
         nodePort: 30000
-
     ingressClass:
       enabled: false
-
     providers:
       kubernetesIngress:
-         enabled: false
+        enabled: false
       kubernetesGateway:
-         enabled: true
-
+        enabled: true
     gateway:
       listeners:
         web:
@@ -43,7 +40,6 @@ spec:
           protocol: HTTP
           namespacePolicy:
             from: All
-
     logs:
       general:
         level: INFO

@@ -5,15 +5,15 @@ metadata:
   namespace: default
 spec:
   parentRefs:
-  - name: traefik-gateway
-    namespace: default
+    - name: traefik-gateway
+      namespace: default
   hostnames:
-  - "subsonic.nkmrk.com"
+    - "subsonic.nkmrk.com"
   rules:
-  - matches:
-    - path:
-        type: PathPrefix
-        value: /
-    backendRefs:
-    - name: navidrome
-      port: 80
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: navidrome
+          port: 80

@@ -5,15 +5,15 @@ metadata:
   namespace: default
 spec:
   parentRefs:
-  - name: traefik-gateway
-    namespace: default
+    - name: traefik-gateway
+      namespace: default
   hostnames:
-  - "grafana.nkmrk.com"
+    - "grafana.nkmrk.com"
   rules:
-  - matches:
-    - path:
-        type: PathPrefix
-        value: /
-    backendRefs:
-    - name: grafana
-      port: 80
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: grafana
+          port: 80

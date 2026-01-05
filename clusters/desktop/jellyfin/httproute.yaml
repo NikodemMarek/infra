@@ -5,18 +5,18 @@ metadata:
   namespace: default
 spec:
   parentRefs:
-  - name: traefik-gateway
-    namespace: default
+    - name: traefik-gateway
+      namespace: default
   hostnames:
-  - "jellyfin.nkmrk.com"
+    - "jellyfin.nkmrk.com"
   rules:
-  - matches:
-    - path:
-        type: PathPrefix
-        value: /
-    backendRefs:
-    - name: jellyfin
-      port: 80
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: jellyfin
+          port: 80
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -25,15 +25,15 @@ metadata:
   namespace: default
 spec:
   parentRefs:
-  - name: traefik-gateway
-    namespace: default
+    - name: traefik-gateway
+      namespace: default
   hostnames:
-  - "seerr.nkmrk.com"
+    - "seerr.nkmrk.com"
   rules:
-  - matches:
-    - path:
-        type: PathPrefix
-        value: /
-    backendRefs:
-    - name: seerr
-      port: 80
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: seerr
+          port: 80
