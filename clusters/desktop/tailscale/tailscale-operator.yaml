@@ -36,3 +36,13 @@ spec:
       name: tailscale-operator-oauth
       valuesKey: client-secret
       targetPath: oauth.clientSecret
+---
+apiVersion: tailscale.com/v1alpha1
+kind: Connector
+metadata:
+  name: k8s-subnet-router
+  namespace: tailscale
+spec:
+  subnetRoutes:
+    - "10.43.0.0/16"
+    - "10.42.0.0/16"
