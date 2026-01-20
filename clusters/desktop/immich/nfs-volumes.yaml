@@ -1,0 +1,58 @@
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: immich-media-pv
+spec:
+  capacity:
+    storage: 500Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-immich-media
+  nfs:
+    path: /mnt/data/photos
+    server: storage.host
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-media-pvc
+  namespace: default
+spec:
+  storageClassName: nfs-immich-media
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 500Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: immich-data-pv
+spec:
+  capacity:
+    storage: 15Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-immich-data
+  nfs:
+    path: /persist/apps/immich
+    server: storage.host
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-data-pvc
+  namespace: default
+spec:
+  storageClassName: nfs-immich-data
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 15Gi
