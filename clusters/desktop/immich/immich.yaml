@@ -52,7 +52,7 @@ spec:
   selector:
     app: immich
   ports:
-    - name: http
+    - name: immich-http
       protocol: TCP
       port: 80
       targetPort: 2283

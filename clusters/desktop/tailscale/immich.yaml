@@ -6,6 +6,9 @@ metadata:
 spec:
   ingressClassName: tailscale
   targetNamespace: default
+  tls:
+    - hosts:
+        - immich
   rules:
     - http:
         paths:
@@ -13,6 +16,6 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: immich
+                name: immich-http
                 port:
                   number: 80

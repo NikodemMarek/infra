@@ -47,7 +47,7 @@ spec:
   selector:
     app: immich-postgres
   ports:
-    - name: http
+    - name: postgres-port
       protocol: TCP
       port: 5432
       targetPort: 5432

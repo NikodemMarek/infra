@@ -30,7 +30,7 @@ spec:
   selector:
     app: immich-redis
   ports:
-    - name: http
+    - name: redis-port
       protocol: TCP
       port: 6379
       targetPort: 6379
