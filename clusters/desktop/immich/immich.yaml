@@ -5,8 +5,7 @@ metadata:
   namespace: default
 spec:
   interval: 1m
-  url: oci://ghcr.io/immich-app/immich-charts/immich
-  type: oci
+  url: https://immich-app.github.io/immich-charts
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
