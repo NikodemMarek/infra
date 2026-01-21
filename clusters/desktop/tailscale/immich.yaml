@@ -6,8 +6,13 @@ metadata:
 spec:
   ingressClassName: tailscale
   targetNamespace: default
-  defaultBackend:
-    service:
-      name: immich
-      port:
-        number: 80
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: immich
+                port:
+                  number: 80
