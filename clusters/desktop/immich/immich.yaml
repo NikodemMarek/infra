@@ -50,6 +50,7 @@ metadata:
   namespace: default
   annotations:
     tailscale.com/expose: "true"
+    tailscale.com/hostname: "immich"
 spec:
   selector:
     app: immich
