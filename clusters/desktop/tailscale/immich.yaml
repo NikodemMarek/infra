@@ -11,3 +11,6 @@ spec:
       name: immich
       port:
         name: immich-http
+  tls:
+    - hosts:
+        - immich
