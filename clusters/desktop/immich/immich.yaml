@@ -25,6 +25,9 @@ spec:
           ports:
             - containerPort: 2283
           env:
+            - name: IMMICH_PORT
+              value: 2283
+
             - name: DB_HOSTNAME
               value: immich-postgres
             - name: DB_USERNAME
