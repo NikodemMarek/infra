@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: immich-postgres
+  namespace: default
+  labels:
+    app: immich-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: immich-postgres
+  template:
+    metadata:
+      labels:
+        app: immich-postgres
+    spec:
+      volumes:
+        - name: immich-data-storage
+          persistentVolumeClaim:
+            claimName: immich-data-pv
+      containers:
+        - name: immich-postgres
+          image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0@sha256:bcf63357191b76a916ae5eb93464d65c07511da41e3bf7a8416db519b40b1c23
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: immich-data-storage
+              mountPath: /var/lib/postgresql/data
+              subPath: postgres
+          env:
+            - name: POSTGRES_PASSWORD
+              value: immich
+            - name: POSTGRES_USER
+              value: immich
+            - name: POSTGRES_DB
+              value: immich
+            - name: POSTGRES_INITDB_ARGS
+              value: '--data-checksums'
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: immich-postgres
+  namespace: default
+spec:
+  selector:
+    app: immich-postgres
+  ports:
+    - name: http
+      protocol: TCP
+      port: 5432
+      targetPort: 5432

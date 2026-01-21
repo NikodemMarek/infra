@@ -1,47 +1,55 @@
-apiVersion: source.toolkit.fluxcd.io/v1
-kind: HelmRepository
+apiVersion: apps/v1
+kind: Deployment
 metadata:
   name: immich
   namespace: default
+  labels:
+    app: immich
 spec:
-  interval: 1m
-  url: https://immich-app.github.io/immich-charts
----
-apiVersion: helm.toolkit.fluxcd.io/v2
-kind: HelmRelease
-metadata:
-  name: immich
-  namespace: default
-spec:
-  chart:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: immich
+  template:
+    metadata:
+      labels:
+        app: immich
     spec:
-      chart: immich
-      sourceRef:
-        kind: HelmRepository
-        name: immich
-      version: 0.10.3
-  interval: 1m
-  values:
-    immich:
-      persistence:
-        library:
-          enabled: true
-          existingClaim: immich-media-pvc
-    controllers:
-      main:
-        containers:
-          main:
-            env:
-              DB_HOSTNAME: immich-postgresql
-              DB_PORT: "5432"
-              DB_DATABASE_NAME: immich
-              DB_USERNAME: immich
-              DB_PASSWORD: immich
-    valkey:
-      enabled: true
-      persistence:
-        data:
-          enabled: true
-          type: persistentVolumeClaim
-          existingClaim: immich-data-pvc
-          subPath: redis
+      volumes:
+        - name: immich-media-storage
+          persistentVolumeClaim:
+            claimName: immich-media-pv
+      containers:
+        - name: immich
+          image: ghcr.io/immich-app/immich-server:latest
+          ports:
+            - containerPort: 2283
+          env:
+            - name: DB_HOSTNAME
+              value: immich-postgres
+            - name: DB_USERNAME
+              value: immich
+            - name: DB_PASSWORD
+              value: immich
+            - name: DB_DATABASE_NAME
+              value: immich
+
+            - name: REDIS_HOSTNAME
+              value: immich-redis
+          volumeMounts:
+            - name: immich-media-storage
+              mountPath: /data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: immich
+  namespace: default
+spec:
+  selector:
+    app: immich
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 2283
