@@ -4,6 +4,7 @@ metadata:
   name: immich
 spec:
   ingressClassName: tailscale
+  targetNamespace: default
   defaultBackend:
     service:
       name: immich
