@@ -27,11 +27,11 @@ spec:
         library:
           enabled: true
           existingClaim: immich-media-pvc
-        database:
-          enabled: true
-          existingClaim: immich-data-pvc
-          subPath: postgresql
-        redis:
-          enabled: true
-          existingClaim: immich-data-pvc
-          subPath: redis
+    valkey:
+        enabled: true
+        persistence:
+          data:
+            enabled: true
+            type: persistentVolumeClaim
+            existingClaim: immich-data-pvc
+            subPath: redis
