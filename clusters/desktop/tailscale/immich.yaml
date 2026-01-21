@@ -5,7 +5,6 @@ metadata:
   namespace: default
 spec:
   ingressClassName: tailscale
-  targetNamespace: default
   tls:
     - hosts:
         - immich
@@ -18,4 +17,4 @@ spec:
               service:
                 name: immich
                 port:
-                  name: immich-http
+                  number: 80
