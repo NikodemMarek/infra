@@ -21,7 +21,7 @@ spec:
             claimName: immich-media-pvc
       containers:
         - name: immich
-          image: ghcr.io/immich-app/immich-server:latest
+          image: ghcr.io/immich-app/immich-server:2.4.1
           ports:
             - containerPort: 2283
           env:
