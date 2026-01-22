@@ -3,6 +3,8 @@ kind: Ingress
 metadata:
   name: immich
   namespace: tailscale
+  annotations:
+    tailscale.com/proxy-request-body-size: "0"
 spec:
   ingressClassName: tailscale
   targetNamespace: default
