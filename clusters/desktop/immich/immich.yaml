@@ -51,6 +51,7 @@ metadata:
   annotations:
     tailscale.com/expose: "true"
     tailscale.com/hostname: "immich"
+    tailscale.com/proxy-read-timeout: "30m"
 spec:
   selector:
     app: immich
