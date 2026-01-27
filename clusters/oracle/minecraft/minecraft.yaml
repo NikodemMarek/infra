@@ -39,6 +39,6 @@ spec:
       # whitelist: "Nikodoom"
       # ops: "Nikodoom"
       viewDistance: 8
-      levelSeed: 7129675918896372374
+      levelSeed: "7129675918896372374"
       gameMode: survival
       onlineMode: false
