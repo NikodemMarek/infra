@@ -19,6 +19,7 @@ spec:
       sourceRef:
         kind: HelmRepository
         name: minecraft
+      version: 5.0.0
   interval: 1m
   values:
     resources:
