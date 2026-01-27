@@ -35,8 +35,8 @@ spec:
       version: "1.20.6"
       type: "FABRIC"
       difficulty: hard
-      whitelist: "Nikodoom"
-      ops: "Nikodoom"
+      # whitelist: "Nikodoom"
+      # ops: "Nikodoom"
       viewDistance: 8
       levelSeed: 7129675918896372374
       gameMode: survival
