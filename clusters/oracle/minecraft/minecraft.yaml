@@ -1,0 +1,43 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: minecraft
+  namespace: default
+spec:
+  interval: 1m
+  url: https://itzg.github.io/minecraft-server-charts
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: minecraft
+  namespace: default
+spec:
+  chart:
+    spec:
+      chart: minecraft
+      sourceRef:
+        kind: HelmRepository
+        name: minecraft
+  interval: 1m
+  values:
+    resources:
+      requests:
+        memory: 8Gi
+        cpu: "1"
+
+    persistence:
+      dataDir:
+        existingClaim: minecraft-pvc
+
+    minecraftServer:
+      eula: "TRUE"
+      version: "1.20.6"
+      type: "FABRIC"
+      difficulty: hard
+      whitelist: Nikodoom
+      ops: Nikodoom
+      viewDistance: 8
+      levelSeed: 7129675918896372374
+      gameMode: survival
+      onlineMode: false
