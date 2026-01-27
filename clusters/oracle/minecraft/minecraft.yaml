@@ -28,6 +28,7 @@ spec:
 
     persistence:
       dataDir:
+        enabled: true
         existingClaim: minecraft-pvc
 
     minecraftServer:
