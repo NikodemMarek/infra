@@ -51,6 +51,4 @@ spec:
           - advanced-shulkerboxes
           - ferrite-core
           - lithium
-          - c2me-fabric
-          - servercore
           - krypton
