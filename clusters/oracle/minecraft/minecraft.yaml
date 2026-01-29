@@ -52,6 +52,5 @@ spec:
           - ferrite-core
           - lithium
           - c2me-fabric
-          - vmp-fabric
           - servercore
           - krypton
