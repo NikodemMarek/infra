@@ -48,3 +48,11 @@ spec:
         downloadDependencies: required
         projects:
           - carpet
+          - quickshulker
+          - ferrite-core
+          - lithium
+          - c2me-fabric
+          - vmp-fabric
+          - servercore
+          - scalablelux
+          - krypton
