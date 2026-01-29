@@ -48,7 +48,7 @@ spec:
         downloadDependencies: required
         projects:
           - carpet
-          - quickshulker
+          - easy-shulker-boxes
           - ferrite-core
           - lithium
           - c2me-fabric
