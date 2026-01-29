@@ -46,6 +46,7 @@ spec:
 
       modrinth:
         downloadDependencies: required
+        allowedVersionType: beta
         projects:
           - carpet
           - advanced-shulkerboxes
