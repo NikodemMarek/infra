@@ -55,5 +55,4 @@ spec:
           - krypton
           - vmp-fabric
           - c2me-fabric
-          - servercore
           - scalablelux
