@@ -1,0 +1,29 @@
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: steam-pv
+spec:
+  capacity:
+    storage: 500Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-steam
+  nfs:
+    path: /persist/apps/steam
+    server: storage.host
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: steam-pvc
+  namespace: default
+spec:
+  storageClassName: nfs-steam
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 500Gi
