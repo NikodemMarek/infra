@@ -1,0 +1,210 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: steam-config
+  namespace: default
+data:
+  TZ: "Europe/Warsaw"
+  USER_LOCALES: "en_US.UTF-8"
+  DISPLAY: ":0"
+  PUID: "1000"
+  PGID: "1000"
+  UMASK: "002"
+  MODE: "desktop"
+  WEB_UI_MODE: "neko"
+  ENABLE_VNC_AUDIO: "false"
+  PORT_NOVNC_WEB: "8083"
+  NEKO_NAT1TO1: ""
+  ENABLE_STEAM: "true"
+  ENABLE_SUNSHINE: "true"
+  ENABLE_EVDEV_INPUTS: "true"
+  FORCE_X11_DUMMY_CONFIG: "false"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: steam
+  namespace: default
+  labels:
+    app: steam
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: steam
+  template:
+    metadata:
+      labels:
+        app: steam
+      annotations:
+        container.apparmor.security.beta.kubernetes.io/steam-headless: unconfined
+    spec:
+      hostname: steam-headless
+      hostIPC: true
+      hostNetwork: false
+      hostAliases:
+      - ip: "127.0.0.1"
+        hostnames:
+        - "steam-headless"
+      securityContext:
+        seccompProfile:
+          type: Unconfined
+      volumes:
+        - name: steam-storage
+          persistentVolumeClaim:
+            claimName: steam-pvc
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Gi
+        - name: dev-fuse
+          hostPath:
+            path: /dev/fuse
+        - name: dev-uinput
+          hostPath:
+            path: /dev/uinput
+        - name: dev-dri
+          hostPath:
+            path: /dev/dri
+        - name: x11-unix
+          hostPath:
+            path: /tmp/.X11-unix
+        - name: pulse
+          hostPath:
+            path: /tmp/pulse
+      containers:
+        - name: steam-headless
+          image: josh5/steam-headless:latest
+          imagePullPolicy: Always
+          securityContext:
+            capabilities:
+              add:
+              - NET_ADMIN
+              - SYS_ADMIN
+              - SYS_NICE
+          ports:
+            - name: http-webui
+              containerPort: 8083
+              protocol: TCP
+            - name: sunshine-https
+              containerPort: 47989
+              protocol: TCP
+            - name: sunshine-http
+              containerPort: 47990
+              protocol: TCP
+            - name: sunshine-ctrl
+              containerPort: 48010
+              protocol: TCP
+            - name: steam-tcp-1
+              containerPort: 27036
+              protocol: TCP
+            - name: steam-tcp-2
+              containerPort: 27037
+              protocol: TCP
+            - name: steam-udp-1
+              containerPort: 27031
+              protocol: UDP
+            - name: steam-udp-2
+              containerPort: 27036
+              protocol: UDP
+            - name: sunshine-udp-1
+              containerPort: 47998
+              protocol: UDP
+            - name: sunshine-udp-2
+              containerPort: 47999
+              protocol: UDP
+            - name: sunshine-udp-3
+              containerPort: 48000
+              protocol: UDP
+            - name: sunshine-udp-4
+              containerPort: 48002
+              protocol: UDP
+            - name: sunshine-udp-5
+              containerPort: 48010
+              protocol: UDP
+          envFrom:
+            - configMapRef:
+                name: steam-config
+            - secretRef:
+                name: steam-secret
+          volumeMounts:
+            - name: steam-storage
+              mountPath: /home/default
+              subPath: steam-headless
+            - name: steam-storage
+              mountPath: /mnt/games
+              subPath: games
+            - name: shm
+              mountPath: /dev/shm
+            - name: dev-fuse
+              mountPath: /dev/fuse
+            - name: dev-uinput
+              mountPath: /dev/uinput
+            - name: dev-dri
+              mountPath: /dev/dri
+            - name: x11-unix
+              mountPath: /tmp/.X11-unix
+            - name: pulse
+              mountPath: /tmp/pulse
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: steam
+  namespace: default
+spec:
+  selector:
+    app: steam
+  ports:
+    - name: steam-http
+      protocol: TCP
+      port: 80
+      targetPort: http-webui
+    - name: sunshine-https
+      protocol: TCP
+      port: 47989
+      targetPort: sunshine-https
+    - name: sunshine-http
+      protocol: TCP
+      port: 47990
+      targetPort: sunshine-http
+    - name: sunshine-ctrl
+      protocol: TCP
+      port: 48010
+      targetPort: sunshine-ctrl
+    - name: steam-tcp-1
+      protocol: TCP
+      port: 27036
+      targetPort: steam-tcp-1
+    - name: steam-tcp-2
+      protocol: TCP
+      port: 27037
+      targetPort: steam-tcp-2
+    - name: steam-udp-1
+      protocol: UDP
+      port: 27031
+      targetPort: steam-udp-1
+    - name: steam-udp-2
+      protocol: UDP
+      port: 27036
+      targetPort: steam-udp-2
+    - name: sunshine-udp-1
+      protocol: UDP
+      port: 47998
+      targetPort: sunshine-udp-1
+    - name: sunshine-udp-2
+      protocol: UDP
+      port: 47999
+      targetPort: sunshine-udp-2
+    - name: sunshine-udp-3
+      protocol: UDP
+      port: 48000
+      targetPort: sunshine-udp-3
+    - name: sunshine-udp-4
+      protocol: UDP
+      port: 48002
+      targetPort: sunshine-udp-4
+    - name: sunshine-udp-5
+      protocol: UDP
+      port: 48010
+      targetPort: sunshine-udp-5
