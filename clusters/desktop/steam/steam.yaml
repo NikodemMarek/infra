@@ -49,6 +49,19 @@ spec:
       securityContext:
         seccompProfile:
           type: Unconfined
+      initContainers:
+      - name: setup-dirs
+        image: busybox
+        command:
+        - sh
+        - -c
+        - |
+          mkdir -p /data/.X11-unix /data/pulse
+          chown -R 1000:1000 /data/.X11-unix
+          chown -R 1000:1000 /data/pulse
+        volumeMounts:
+        - name: steam-storage
+          mountPath: /data
       volumes:
         - name: steam-storage
           persistentVolumeClaim:
@@ -138,6 +151,12 @@ spec:
               mountPath: /dev/uinput
             - name: dev-dri
               mountPath: /dev/dri
+            - name: steam-storage
+              mountPath: /tmp/.X11-unix
+              subPath: .X11-unix
+            - name: steam-storage
+              mountPath: /tmp/pulse
+              subPath: pulse
 
 ---
 apiVersion: v1
