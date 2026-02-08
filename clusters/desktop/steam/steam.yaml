@@ -18,7 +18,7 @@ data:
   ENABLE_STEAM: "true"
   ENABLE_SUNSHINE: "true"
   ENABLE_EVDEV_INPUTS: "true"
-  FORCE_X11_DUMMY_CONFIG: "false"
+  FORCE_X11_DUMMY_CONFIG: "true"
 ---
 apiVersion: apps/v1
 kind: Deployment
