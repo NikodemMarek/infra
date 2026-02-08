@@ -66,12 +66,7 @@ spec:
         - name: dev-dri
           hostPath:
             path: /dev/dri
-        - name: x11-unix
-          hostPath:
-            path: /tmp/.X11-unix
-        - name: pulse
-          hostPath:
-            path: /tmp/pulse
+
       containers:
         - name: steam-headless
           image: josh5/steam-headless:latest
@@ -143,10 +138,7 @@ spec:
               mountPath: /dev/uinput
             - name: dev-dri
               mountPath: /dev/dri
-            - name: x11-unix
-              mountPath: /tmp/.X11-unix
-            - name: pulse
-              mountPath: /tmp/pulse
+
 ---
 apiVersion: v1
 kind: Service
