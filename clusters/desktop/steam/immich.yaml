@@ -25,10 +25,10 @@ spec:
           ports:
             - containerPort: 8083
           volumeMounts:
-            - name: steam-headless-storage
+            - name: steam-storage
               mountPath: /opt/container-services/steam-headless
               subPath: steam-headless
-            - name: steam-games-storage
+            - name: steam-storage
               mountPath: /mnt/games
               subPath: games
 ---
