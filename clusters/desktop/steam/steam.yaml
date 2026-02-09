@@ -60,6 +60,7 @@ spec:
           chown 1000:1000 /mnt/games
           chown 1000:1000 /tmp/.X11-unix
           chown 1000:1000 /tmp/pulse
+          chown 1000:1000 /dev/input
           chown 1000:1000 /tmp
           chmod 1777 /tmp
         volumeMounts:
@@ -71,6 +72,8 @@ spec:
           mountPath: /tmp/.X11-unix
         - name: pulse-dir
           mountPath: /tmp/pulse
+        - name: dev-input
+          mountPath: /dev/input
       volumes:
         - name: home-dir
           emptyDir: {}
@@ -93,6 +96,9 @@ spec:
         - name: dev-dri
           hostPath:
             path: /dev/dri
+        - name: dev-input
+          hostPath:
+            path: /dev/input
 
       containers:
         - name: steam-headless
@@ -174,6 +180,8 @@ spec:
               mountPath: /tmp/.X11-unix
             - name: pulse-dir
               mountPath: /tmp/pulse
+            - name: dev-input
+              mountPath: /dev/input
 
 ---
 apiVersion: v1
