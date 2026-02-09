@@ -91,6 +91,13 @@ spec:
               - NET_ADMIN
               - SYS_ADMIN
               - SYS_NICE
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "2000m"
+            limits:
+              memory: "8Gi"
+              cpu: "4000m"
           ports:
             - name: http-webui
               containerPort: 8083
