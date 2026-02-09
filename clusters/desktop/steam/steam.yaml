@@ -6,6 +6,7 @@ metadata:
 data:
   TZ: "Europe/Warsaw"
   USER_LOCALES: "en_US.UTF-8"
+  DISPLAY: ":55"
   PUID: "1000"
   PGID: "1000"
   UMASK: "002"
