@@ -59,6 +59,7 @@ spec:
           mkdir -p /data/.X11-unix /data/pulse
           chown -R 1000:1000 /data/.X11-unix
           chown -R 1000:1000 /data/pulse
+          chown 1000:1000 /tmp
         volumeMounts:
         - name: steam-storage
           mountPath: /data
