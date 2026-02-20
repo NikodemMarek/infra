@@ -1,11 +1,12 @@
 keys:
   - &desktop_cluster age1qj5g0znauuspvr9upl4l2mt25ww69ljxc7rvw3e8f220e2jggsdqqkx5wa
+  - &oracle_cluster age1l58pzs8ex5e72lgpgcavaxvx7g80937cjtqkr743hdnjvy5jramsycjtp4
 creation_rules:
-  - path_regex: clusters/desktop/secrets/.+$
-    key_groups:
-      - age:
-          - *desktop_cluster
   - path_regex: clusters/desktop/.+\.enc.+$
     key_groups:
       - age:
           - *desktop_cluster
+  - path_regex: clusters/oracle/.+\.enc.+$
+    key_groups:
+      - age:
+          - *oracle_cluster

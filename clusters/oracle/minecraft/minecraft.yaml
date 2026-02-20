@@ -26,12 +26,10 @@ spec:
       requests:
         memory: 8Gi
         cpu: "1"
-
     persistence:
       dataDir:
         enabled: true
         existingClaim: minecraft-pvc
-
     minecraftServer:
       eula: "TRUE"
       version: "1.21.11"
@@ -43,7 +41,6 @@ spec:
       levelSeed: "7129675918896372374"
       gameMode: survival
       onlineMode: true
-
       modrinth:
         downloadDependencies: required
         allowedVersionType: alpha
