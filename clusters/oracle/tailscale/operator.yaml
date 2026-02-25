@@ -27,6 +27,9 @@ spec:
         kind: HelmRepository
         name: tailscale
         namespace: tailscale
+  values:
+    operatorConfig:
+      hostname: "oracle-tailscale-operator"
   valuesFrom:
     - kind: Secret
       name: tailscale-operator-oauth
