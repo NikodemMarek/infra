@@ -5,7 +5,6 @@ metadata:
   namespace: tailscale
   annotations:
     tailscale.com/tailnet-ip: 100.109.230.83
-    tailscale.com/exposed: "true"
 spec:
   type: ExternalName
   externalName: roach
