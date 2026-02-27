@@ -23,7 +23,7 @@ spec:
     - ReadOnlyMany
   persistentVolumeReclaimPolicy: Retain
   nfs:
-    server: tailscale-nfs-egress.tailscale.svc.cluster.local
+    server: roach
     path: /mnt/data/music
 ---
 apiVersion: v1
