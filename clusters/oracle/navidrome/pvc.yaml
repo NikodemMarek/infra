@@ -15,7 +15,6 @@ apiVersion: v1
 kind: PersistentVolume
 metadata:
   name: music-pv
-  namespace: default
 spec:
   capacity:
     storage: 200Gi
