@@ -1,9 +1,12 @@
 apiVersion: longhorn.io/v1beta2
-kind: Setting
+kind: BackupTarget
 metadata:
-  name: backup-target
+  name: nfs-backup-target
   namespace: longhorn-system
-value: "nfs://roach:/persist/apps/longhorn"
+spec:
+  backupTargetURL: "nfs://roach:/persist/apps/longhorn"
+  credentialSecret: ""
+  pollInterval: 10m0s
 ---
 apiVersion: longhorn.io/v1beta2
 kind: RecurringJob
@@ -14,6 +17,6 @@ spec:
   cron: "0 0 * * *"
   task: "backup"
   groups:
-  - default
+    - default
   retain: 7
   concurrency: 1
