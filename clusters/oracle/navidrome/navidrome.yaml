@@ -40,10 +40,8 @@ spec:
           persistentVolumeClaim:
             claimName: navidrome-data-pvc
         - name: music
-          nfs:
-            server: roach
-            path: /mnt/data/music
-            readOnly: true
+          persistentVolumeClaim:
+            claimName: music-pvc
 ---
 apiVersion: v1
 kind: Service
