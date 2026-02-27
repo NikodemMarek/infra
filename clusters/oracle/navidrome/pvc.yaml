@@ -22,6 +22,7 @@ spec:
   accessModes:
     - ReadOnlyMany
   persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs
   nfs:
     server: roach
     path: /mnt/data/music
@@ -34,6 +35,7 @@ metadata:
 spec:
   accessModes:
     - ReadOnlyMany
+  storageClassName: nfs
   resources:
     requests:
       storage: 200Gi
