@@ -4,7 +4,7 @@ metadata:
   name: nfs-backup-target
   namespace: longhorn-system
 spec:
-  backupTargetURL: "nfs://roach:/persist/apps/longhorn"
+  backupTargetURL: "nfs://100.109.230.83:/persist/apps/longhorn"
   credentialSecret: ""
   pollInterval: 10m0s
 ---
