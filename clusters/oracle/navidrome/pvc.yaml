@@ -15,6 +15,7 @@ apiVersion: v1
 kind: PersistentVolume
 metadata:
   name: music-pv
+  namespace: default
 spec:
   capacity:
     storage: 200Gi
@@ -30,6 +31,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: music-pvc
+  namespace: default
 spec:
   accessModes:
     - ReadOnlyMany
