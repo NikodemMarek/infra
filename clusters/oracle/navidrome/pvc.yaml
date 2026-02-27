@@ -23,7 +23,7 @@ spec:
     - ReadOnlyMany
   persistentVolumeReclaimPolicy: Retain
   nfs:
-    server: 100.109.230.83
+    server: tailscale-nfs-egress.tailscale.svc.cluster.local
     path: /mnt/data/music
 ---
 apiVersion: v1
