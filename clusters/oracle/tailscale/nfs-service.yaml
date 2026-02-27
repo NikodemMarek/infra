@@ -7,8 +7,5 @@ metadata:
     tailscale.com/tailnet-ip: 100.109.230.83
     tailscale.com/exposed: "true"
 spec:
-  type: ClusterIP
-  ports:
-  - name: nfs
-    port: 2049
-    targetPort: 2049
+  type: ExternalName
+  externalName: roach
