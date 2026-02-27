@@ -41,7 +41,7 @@ spec:
             claimName: navidrome-data-pvc
         - name: music
           nfs:
-            server: storage.host
+            server: roach
             path: /mnt/data/music
             readOnly: true
 ---
