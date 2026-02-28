@@ -24,6 +24,9 @@ spec:
           image: ghcr.io/immich-app/immich-machine-learning:v2.4.1
           ports:
             - containerPort: 3003
+          env:
+            - name: IMMICH_PORT
+              value: "3003"
           volumeMounts:
             - name: immich-ml-storage
               mountPath: /cache
