@@ -1,12 +1,13 @@
-apiVersion: longhorn.io/v1beta2
-kind: BackupTarget
+apiVersion: v1
+kind: ConfigMap
 metadata:
-  name: nfs-backup-target
+  name: longhorn-default-resource
   namespace: longhorn-system
-spec:
-  backupTargetURL: "nfs://100.109.230.83:/persist/apps/longhorn"
-  credentialSecret: ""
-  pollInterval: 10m0s
+data:
+  default-resource.yaml: |
+    "backup-target": "nfs://100.109.230.83:/persist/apps/longhorn"
+    "backup-target-credential-secret": ""
+    "backupstore-poll-interval": "600"
 ---
 apiVersion: longhorn.io/v1beta2
 kind: RecurringJob
