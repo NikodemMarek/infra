@@ -50,6 +50,7 @@ metadata:
   namespace: default
   annotations:
     tailscale.com/expose: "true"
+    tailscale.com/hostname: "navidrome"
 spec:
   selector:
     app: navidrome

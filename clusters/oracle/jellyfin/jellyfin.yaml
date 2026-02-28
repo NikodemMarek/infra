@@ -54,6 +54,7 @@ metadata:
   namespace: default
   annotations:
     tailscale.com/expose: "true"
+    tailscale.com/hostname: "jellyfin"
 spec:
   selector:
     app: jellyfin
