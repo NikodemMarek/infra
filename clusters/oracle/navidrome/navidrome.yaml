@@ -48,6 +48,8 @@ kind: Service
 metadata:
   name: navidrome
   namespace: default
+  annotations:
+    tailscale.com/expose: "true"
 spec:
   selector:
     app: navidrome

@@ -52,6 +52,8 @@ kind: Service
 metadata:
   name: jellyfin
   namespace: default
+  annotations:
+    tailscale.com/expose: "true"
 spec:
   selector:
     app: jellyfin
