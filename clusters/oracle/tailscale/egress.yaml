@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    tailscale.com/tailnet-ip: 100.109.230.83
+  name: roach
+spec:
+  externalName: roach
+  type: ExternalName
