@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: tunnel-token
-  namespace: default
+  namespace: cloudflare
 stringData:
   token: ENC[AES256_GCM,data:xCycNtV+T0rNhLeRD9Eaa6JrhAsNaOIVJzXIqclvS+VAaFYUPo2XKw69VsiGNsbMsuaVH6woinJzWPoJI94Jbs4o2NIgLyplEqMw6VmV/n9PL5VUJ+8NWfYyhZH7e3QQBgITFP1hfQD3y6aoAfCfIZ3rhPOOzNwml/qvm/vynEG5YU+pwpRqMEdVt/unC74Fl+DTX/XfCv995JQVFA0kIhNlvrXW6W8XZfJ1hFdDhkno6VPQIvFeRw==,iv:lnf5GZ0/DGudsH8lBr8zDbLPZycsln5HH6xwBF94gEk=,tag:Z1EUEA7nobyMmh8U4jd3+A==,type:str]
 sops:
