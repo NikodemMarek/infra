@@ -1,0 +1,31 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: audiomuse-ai-repo
+  namespace: default
+spec:
+  interval: 10m0s
+  url: https://NeptuneHub.github.io/AudioMuse-AI-helm
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: audiomuse-ai-release
+  namespace: default
+spec:
+  chart:
+    spec:
+      chart: audiomuse-ai
+      reconcileStrategy: ChartVersion
+      sourceRef:
+        kind: HelmRepository
+        name: audiomuse-ai-repo
+      version: v1.0.40
+      valuesFrom:
+        - kind: ConfigMap
+          name: audiomuse-ai-config
+          valuesKey: values.yaml
+        - kind: Secret
+          name: audiomuse-ai-secrets
+          valuesKey: values.yaml
+  interval: 10m0s
