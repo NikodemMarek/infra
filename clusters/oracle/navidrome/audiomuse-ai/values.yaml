@@ -10,9 +10,9 @@ data:
       password: "audiomuse"
       aiChatDbUser: "ai_user"
       aiChatDbUserPassword: "aipassword"
-      persistence:
-        mountPath: /var/lib/postgresql/data
-        subPath: "data"
+      env:
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
 
     navidrome:
       url: "http://navidrome.default.svc.cluster.local:4533"
