@@ -11,6 +11,10 @@
     mksecret.exec = "sops --encrypt --encrypted-regex '^(data|stringData)$' --in-place $1";
   };
 
+  git-hooks.hooks = {
+    yamlfmt.enable = true;
+  };
+
   enterShell = ''
     export KUBECONFIG=kubeconfig.yaml
   '';
