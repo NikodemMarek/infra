@@ -21,11 +21,11 @@ spec:
         kind: HelmRepository
         name: audiomuse-ai-repo
       version: v1.0.40
-      valuesFrom:
-        - kind: ConfigMap
-          name: audiomuse-ai-config
-          valuesKey: values.yaml
-        - kind: Secret
-          name: audiomuse-ai-secrets
-          valuesKey: values.yaml
   interval: 10m0s
+  valuesFrom:
+    - kind: ConfigMap
+      name: audiomuse-ai-config
+      valuesKey: values.yaml
+    - kind: Secret
+      name: audiomuse-ai-secrets
+      valuesKey: values.yaml
