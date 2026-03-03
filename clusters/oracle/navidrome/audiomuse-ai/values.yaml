@@ -8,9 +8,6 @@ data:
     postgres:
       persistence:
         enabled: true
-      env:
-        - name: PGDATA
-          value: /var/lib/postgresql/data/pgdata
       user: "audiomuse"
       password: "audiomuse"
       aiChatDbUser: "ai_user"
