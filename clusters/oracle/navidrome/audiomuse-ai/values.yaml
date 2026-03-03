@@ -14,7 +14,7 @@ data:
       aiChatDbUserPassword: "aipassword"
 
     navidrome:
-      url: "http://navidrome.default.svc.cluster.local:4533"
+      url: "http://navidrome.default.svc.cluster.local"
 
     config:
       mediaServerType: "navidrome"
