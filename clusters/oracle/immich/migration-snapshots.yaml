@@ -1,7 +1,7 @@
 apiVersion: snapshot.storage.k8s.io/v1
 kind: VolumeSnapshot
 metadata:
-  name: migration-snapshot
+  name: migration-snapshot-immich-data
   namespace: default
 spec:
   volumeSnapshotClassName: longhorn
@@ -11,7 +11,7 @@ spec:
 apiVersion: snapshot.storage.k8s.io/v1
 kind: VolumeSnapshot
 metadata:
-  name: migration-snapshot
+  name: migration-snapshot-immich-ml
   namespace: default
 spec:
   volumeSnapshotClassName: longhorn
