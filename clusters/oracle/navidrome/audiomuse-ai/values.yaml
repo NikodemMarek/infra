@@ -6,13 +6,12 @@ metadata:
 data:
   values.yaml: |
     postgres:
+      persistence:
+        enabled: true
       user: "audiomuse"
       password: "audiomuse"
       aiChatDbUser: "ai_user"
       aiChatDbUserPassword: "aipassword"
-      env:
-        - name: PGDATA
-          value: /var/lib/postgresql/data/pgdata
 
     navidrome:
       url: "http://navidrome.default.svc.cluster.local:4533"
