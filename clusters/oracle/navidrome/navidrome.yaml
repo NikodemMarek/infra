@@ -16,7 +16,7 @@ spec:
         app: navidrome
     spec:
       initContainers:
-        - name: init-myservice
+        - name: get-plugins
           image: busybox:latest
           command:
             - curl
