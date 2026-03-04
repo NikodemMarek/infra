@@ -18,8 +18,11 @@ spec:
       initContainers:
         - name: init-myservice
           image: busybox:latest
-          command: |
-            curl -o /data/plugins/audiomuseai.ndp https://github.com/NeptuneHub/AudioMuse-AI-NV-plugin/releases/download/latest/audiomuseai.ndp
+          command:
+            - curl
+            - -o
+            - /data/plugins/audiomuseai.ndp
+            - https://github.com/NeptuneHub/AudioMuse-AI-NV-plugin/releases/download/latest/audiomuseai.ndp
           volumeMounts:
             - name: data
               mountPath: /data
