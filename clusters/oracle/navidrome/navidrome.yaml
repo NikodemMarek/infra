@@ -19,8 +19,8 @@ spec:
         - name: get-plugins
           image: busybox:latest
           command:
-            - curl
-            - -o
+            - wget
+            - -O
             - /data/plugins/audiomuseai.ndp
             - https://github.com/NeptuneHub/AudioMuse-AI-NV-plugin/releases/download/latest/audiomuseai.ndp
           volumeMounts:
