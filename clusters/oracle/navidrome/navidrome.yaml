@@ -15,9 +15,17 @@ spec:
       labels:
         app: navidrome
     spec:
+      initContainers:
+        - name: init-myservice
+          image: busybox:latest
+          command: |
+            curl -o /data/plugins/audiomuseai.ndp https://github.com/NeptuneHub/AudioMuse-AI-NV-plugin/releases/download/latest/audiomuseai.ndp
+          volumeMounts:
+            - name: data
+              mountPath: /data
       containers:
         - name: navidrome
-          image: deluan/navidrome:0.59.0
+          image: deluan/navidrome:latest
           ports:
             - containerPort: 4533
           env:
@@ -29,6 +37,14 @@ spec:
               value: "/music"
             - name: ND_DATAFOLDER
               value: "/data"
+            - name: ND_PLUGINS_ENABLED
+              value: "true"
+            - name: ND_PLUGINS_AUTORELOAD
+              value: "true"
+            - name: ND_AGENTS
+              value: "audiomuseai,lastfm,spotify,deezer"
+            - name: ND_DEVARTISTINFOTIMETOLIVE
+              value: "1s"
           volumeMounts:
             - name: data
               mountPath: /data
