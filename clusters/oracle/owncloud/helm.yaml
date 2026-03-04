@@ -1,0 +1,24 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: owncloud
+  namespace: owncloud
+spec:
+  interval: 10m0s
+  url: https://owncloud-docker.github.io/helm-charts
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: owncloud
+  namespace: owncloud
+spec:
+  chart:
+    spec:
+      chart: owncloud
+      reconcileStrategy: ChartVersion
+      sourceRef:
+        kind: HelmRepository
+        name: owncloud
+      version: v0.8.0
+  interval: 10m0s
