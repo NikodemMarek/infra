@@ -22,7 +22,7 @@ spec:
             - wget
             - -O
             - /data/plugins/audiomuseai.ndp
-            - https://github.com/NeptuneHub/AudioMuse-AI-NV-plugin/releases/download/latest/audiomuseai.ndp
+            - https://github.com/NeptuneHub/AudioMuse-AI-NV-plugin/releases/download/v6/audiomuseai.ndp
           volumeMounts:
             - name: data
               mountPath: /data
