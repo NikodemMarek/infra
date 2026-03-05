@@ -3,6 +3,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: audiomuse-ai-release-postgres-pvc
   namespace: default
+  labels:
+    recurring-job-group.longhorn.io/default: "enabled"
 spec:
   accessModes:
     - ReadWriteOnce
