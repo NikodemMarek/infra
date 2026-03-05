@@ -47,7 +47,7 @@ spec:
               value: "redis"
           volumeMounts:
             - name: files
-              mountPath: /mnt/data
+              mountPath: /mnt/data/files
       volumes:
         - name: files
           persistentVolumeClaim:
