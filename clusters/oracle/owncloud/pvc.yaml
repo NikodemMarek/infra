@@ -20,7 +20,7 @@ metadata:
   namespace: owncloud
 spec:
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
   storageClassName: nfs
   resources:
     requests:
