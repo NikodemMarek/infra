@@ -13,17 +13,3 @@ spec:
   nfs:
     server: roach
     path: /mnt/data/files
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: files-pvc
-  namespace: default
-spec:
-  accessModes:
-    - ReadWriteMany
-  storageClassName: nfs
-  resources:
-    requests:
-      storage: 200Gi
-  volumeName: files-pv
