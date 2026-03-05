@@ -45,6 +45,13 @@ spec:
               value: "true"
             - name: OWNCLOUD_REDIS_HOST
               value: "redis"
+          volumeMounts:
+            - name: files
+              mountPath: /mnt/data
+      volumes:
+        - name: files
+          persistentVolumeClaim:
+            claimName: files-pvc
 ---
 apiVersion: v1
 kind: Service

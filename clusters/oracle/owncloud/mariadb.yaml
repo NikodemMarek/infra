@@ -31,6 +31,13 @@ spec:
               value: "owncloud"
             - name: MARIADB_AUTO_UPGRADE
               value: "1"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: owncloud-data-pvc
 ---
 apiVersion: v1
 kind: Service
