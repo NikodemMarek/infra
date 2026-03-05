@@ -17,3 +17,23 @@ spec:
       backendRefs:
         - name: owncloud
           port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: collabora
+  namespace: owncloud
+spec:
+  parentRefs:
+    - name: traefik-gateway
+      namespace: default
+  hostnames:
+    - "collabora.nkmrk.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: collabora
+          port: 80
