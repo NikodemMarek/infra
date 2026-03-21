@@ -58,6 +58,9 @@ kind: Service
 metadata:
   name: owncloud
   namespace: owncloud
+  annotations:
+    tailscale.com/expose: "true"
+    tailscale.com/hostname: "cloud.nkmrk.com"
 spec:
   selector:
     app: owncloud
