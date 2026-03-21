@@ -60,7 +60,7 @@ metadata:
   namespace: owncloud
   annotations:
     tailscale.com/expose: "true"
-    tailscale.com/hostname: "cloud.nkmrk.com"
+    tailscale.com/hostname: "cloud"
 spec:
   selector:
     app: owncloud
