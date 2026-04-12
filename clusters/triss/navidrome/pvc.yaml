@@ -5,6 +5,8 @@ metadata:
   namespace: default
   labels:
     recurring-job-group.longhorn.io/default: "enabled"
+  annotations:
+    longhorn.io/volume-restore-from-backup: "nfs://100.109.230.83:/persist/apps/longhorn?backup=backup-259371240ca241d5&volume=pvc-536e823d-7298-40c8-9b90-6d4eedbe4ce1"
 spec:
   accessModes:
     - ReadWriteOnce
