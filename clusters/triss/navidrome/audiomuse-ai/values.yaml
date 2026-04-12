@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: audiomuse-ai-config
+  namespace: default
+data:
+  values.yaml: |
+    postgres:
+      persistence:
+        enabled: true
+      user: "audiomuse"
+      password: "audiomuse"
+      aiChatDbUser: "ai_user"
+      aiChatDbUserPassword: "aipassword"
+
+    navidrome:
+      url: "http://navidrome.default.svc.cluster.local"
+
+    config:
+      mediaServerType: "navidrome"
+      aiModelProvider: "OLLAMA"
+      ollamaServerUrl: "http://ollama-service.ollama-system.svc.cluster.local:11434/api/generate"
+      ollamaModelName: "llama3.1:8b"
+      aiChatDbUserName: "ai_user"
