@@ -27,3 +27,31 @@ spec:
   resources:
     requests:
       storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: movies-pvc
+  namespace: jellyfin
+spec:
+  accessModes:
+    - ReadOnlyMany
+  storageClassName: nfs
+  resources:
+    requests:
+      storage: 200Gi
+  volumeName: movies-pv
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: shows-pvc
+  namespace: jellyfin
+spec:
+  accessModes:
+    - ReadOnlyMany
+  storageClassName: nfs
+  resources:
+    requests:
+      storage: 200Gi
+  volumeName: shows-pv
