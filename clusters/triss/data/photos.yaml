@@ -13,17 +13,3 @@ spec:
   nfs:
     server: roach
     path: /mnt/data/photos
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: photos-pvc
-  namespace: default
-spec:
-  accessModes:
-    - ReadOnlyMany
-  storageClassName: nfs
-  resources:
-    requests:
-      storage: 200Gi
-  volumeName: photos-pv

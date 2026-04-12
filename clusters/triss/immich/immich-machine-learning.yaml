@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: immich-machine-learning
+  namespace: immich
+  labels:
+    app: immich-machine-learning
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: immich-machine-learning
+  template:
+    metadata:
+      labels:
+        app: immich-machine-learning
+    spec:
+      volumes:
+        - name: immich-ml-storage
+          persistentVolumeClaim:
+            claimName: immich-ml-pvc
+      containers:
+        - name: immich-machine-learning
+          image: ghcr.io/immich-app/immich-machine-learning:v2.4.1
+          ports:
+            - containerPort: 3003
+          env:
+            - name: IMMICH_PORT
+              value: "3003"
+          volumeMounts:
+            - name: immich-ml-storage
+              mountPath: /cache
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: immich-machine-learning
+  namespace: immich
+spec:
+  selector:
+    app: immich-machine-learning
+  ports:
+    - name: immich-machine-learning-http
+      protocol: TCP
+      port: 80
+      targetPort: 3003
