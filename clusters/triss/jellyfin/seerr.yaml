@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: seerr
-          image: seerr/seerr:sha-c23117e
+          image: seerr/seerr:latest
           ports:
             - containerPort: 5055
           volumeMounts:
