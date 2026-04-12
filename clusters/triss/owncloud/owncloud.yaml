@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: owncloud
-          image: owncloud/server:latest
+          image: owncloud/server:10.16.1
           ports:
             - containerPort: 8080
           env:
