@@ -5,8 +5,6 @@ metadata:
   namespace: default
   labels:
     recurring-job-group.longhorn.io/default: "enabled"
-  annotations:
-    longhorn.io/volume-restore-from-backup: "navidrome-6cfdb486d6-wvddl"
 spec:
   accessModes:
     - ReadWriteOnce
