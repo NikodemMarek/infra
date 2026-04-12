@@ -5,6 +5,7 @@ metadata:
   namespace: longhorn-system
 data:
   default-resource.yaml: |
+    "default-replica-count": "1"
     "backup-target": "nfs://100.109.230.83:/persist/apps/longhorn"
     "backup-target-credential-secret": ""
     "backupstore-poll-interval": "600"
