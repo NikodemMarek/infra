@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: owncloud
+  namespace: owncloud
+  labels:
+    app: owncloud
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: owncloud
+  template:
+    metadata:
+      labels:
+        app: owncloud
+    spec:
+      containers:
+        - name: owncloud
+          image: owncloud/server:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: OWNCLOUD_DOMAIN
+              value: "cloud.nkmrk.com"
+            - name: OWNCLOUD_TRUSTED_DOMAINS
+              value: "cloud.nkmrk.com"
+            - name: OWNCLOUD_DB_TYPE
+              value: "mysql"
+            - name: OWNCLOUD_DB_NAME
+              value: "owncloud"
+            - name: OWNCLOUD_DB_USERNAME
+              value: "owncloud"
+            - name: OWNCLOUD_DB_PASSWORD
+              value: "owncloud"
+            - name: OWNCLOUD_DB_HOST
+              value: "mariadb"
+            - name: OWNCLOUD_ADMIN_USERNAME
+              value: "admin"
+            - name: OWNCLOUD_ADMIN_PASSWORD
+              value: "admin"
+            - name: OWNCLOUD_MYSQL_UTF8MB4
+              value: "true"
+            - name: OWNCLOUD_REDIS_ENABLED
+              value: "true"
+            - name: OWNCLOUD_REDIS_HOST
+              value: "redis"
+          volumeMounts:
+            - name: files
+              mountPath: /mnt/data
+      volumes:
+        - name: files
+          persistentVolumeClaim:
+            claimName: files-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: owncloud
+  namespace: owncloud
+  annotations:
+    tailscale.com/expose: "true"
+    tailscale.com/hostname: "cloud"
+spec:
+  selector:
+    app: owncloud
+  ports:
+    - name: owncloud
+      protocol: TCP
+      port: 80
+      targetPort: 8080
