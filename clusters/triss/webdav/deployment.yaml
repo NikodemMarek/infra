@@ -18,17 +18,18 @@ spec:
           persistentVolumeClaim:
             claimName: books-pvc
       containers:
-        - name: webdav
-          image: bytemark/webdav:latest
-          ports:
-            - containerPort: 80
-          env:
-            - name: USERNAME
-              value: "test"
-            - name: PASSWORD
-              value: "test"
-            - name: AUTH_TYPE
-              value: "Basic"
+        - name: rclone
+          image: rclone/rclone:latest
+          args:
+            - serve
+            - webdav
+            - /data
+            - --addr
+            - :80
+            - --user
+            - "test"
+            - --pass
+            - "test"
           volumeMounts:
             - name: books
-              mountPath: /var/lib/dav
+              mountPath: /data
