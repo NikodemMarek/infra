@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: books
+  namespace: webdav
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: books
+  template:
+    metadata:
+      labels:
+        app: books
+    spec:
+      volumes:
+        - name: books
+          persistentVolumeClaim:
+            claimName: books-pvc
+      containers:
+        - name: webdav
+          image: bytemark/webdav:latest
+          ports:
+            - containerPort: 80
+          env:
+            - name: USERNAME
+              value: "test"
+            - name: PASSWORD
+              value: "test"
+            - name: AUTH_TYPE
+              value: "Basic"
+          volumeMounts:
+            - name: books
+              mountPath: /var/lib/dav
