@@ -20,6 +20,17 @@ spec:
       containers:
         - name: rclone
           image: rclone/rclone:latest
+          env:
+            - name: DAV_USER
+              valueFrom:
+                secretKeyRef:
+                  name: books-webdav-auth
+                  key: user
+            - name: DAV_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: books-webdav-auth
+                  key: password
           args:
             - serve
             - webdav
@@ -27,9 +38,9 @@ spec:
             - --addr
             - :80
             - --user
-            - "test"
+            - $(DAV_USER)
             - --pass
-            - "test"
+            - $(DAV_PASS)
           volumeMounts:
             - name: books
               mountPath: /data
