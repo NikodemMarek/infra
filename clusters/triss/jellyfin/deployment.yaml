@@ -15,6 +15,19 @@ spec:
       labels:
         app: jellyfin
     spec:
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: jellyfin-data-pvc
+        - name: movies
+          persistentVolumeClaim:
+            claimName: movies-pvc
+        - name: shows
+          persistentVolumeClaim:
+            claimName: shows-pvc
+        - name: books
+          persistentVolumeClaim:
+            claimName: books-pvc
       containers:
         - name: jellyfin
           image: jellyfin/jellyfin:latest
@@ -36,16 +49,9 @@ spec:
             - name: shows
               mountPath: /shows
               readOnly: true
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: jellyfin-data-pvc
-        - name: movies
-          persistentVolumeClaim:
-            claimName: movies-pvc
-        - name: shows
-          persistentVolumeClaim:
-            claimName: shows-pvc
+            - name: books
+              mountPath: /books
+              readOnly: true
 ---
 apiVersion: v1
 kind: Service
@@ -63,3 +69,33 @@ spec:
       protocol: TCP
       port: 80
       targetPort: 8096
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seerr
+  namespace: jellyfin
+  labels:
+    app: seerr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: seerr
+  template:
+    metadata:
+      labels:
+        app: seerr
+    spec:
+      containers:
+        - name: seerr
+          image: seerr/seerr:latest
+          ports:
+            - containerPort: 5055
+          volumeMounts:
+            - name: data
+              mountPath: /app/config
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: seerr-data-pvc

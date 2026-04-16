@@ -55,3 +55,17 @@ spec:
     requests:
       storage: 200Gi
   volumeName: shows-pv
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: books-pvc
+  namespace: jellyfin
+spec:
+  accessModes:
+    - ReadOnlyMany
+  storageClassName: nfs
+  resources:
+    requests:
+      storage: 200Gi
+  volumeName: jellyfin-books-pv
