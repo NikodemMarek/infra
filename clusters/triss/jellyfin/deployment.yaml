@@ -53,23 +53,6 @@ spec:
               mountPath: /books
               readOnly: true
 ---
-apiVersion: v1
-kind: Service
-metadata:
-  name: jellyfin
-  namespace: jellyfin
-  annotations:
-    tailscale.com/expose: "true"
-    tailscale.com/hostname: "jellyfin"
-spec:
-  selector:
-    app: jellyfin
-  ports:
-    - name: http
-      protocol: TCP
-      port: 80
-      targetPort: 8096
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
