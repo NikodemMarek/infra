@@ -34,7 +34,7 @@ spec:
           args:
             - serve
             - webdav
-            - /data
+            - /data/library
             - --addr
             - :80
             - --user
