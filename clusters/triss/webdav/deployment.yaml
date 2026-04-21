@@ -35,6 +35,7 @@ spec:
             - serve
             - webdav
             - /data/library
+            - --copy-links
             - --addr
             - :80
             - --user
