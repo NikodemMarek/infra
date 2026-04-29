@@ -25,9 +25,6 @@ spec:
         - name: shows
           persistentVolumeClaim:
             claimName: shows-pvc
-        - name: books
-          persistentVolumeClaim:
-            claimName: books-pvc
       containers:
         - name: jellyfin
           image: jellyfin/jellyfin:latest
@@ -48,9 +45,6 @@ spec:
               readOnly: true
             - name: shows
               mountPath: /shows
-              readOnly: true
-            - name: books
-              mountPath: /books
               readOnly: true
 ---
 apiVersion: apps/v1
