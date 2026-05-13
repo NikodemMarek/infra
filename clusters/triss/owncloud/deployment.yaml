@@ -6,7 +6,7 @@ metadata:
   labels:
     app: owncloud
 spec:
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app: owncloud
@@ -68,7 +68,7 @@ metadata:
   labels:
     app: mariadb
 spec:
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app: mariadb
@@ -116,7 +116,7 @@ metadata:
   labels:
     app: redis
 spec:
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app: redis
@@ -146,7 +146,7 @@ metadata:
   labels:
     app: collabora
 spec:
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app: collabora
