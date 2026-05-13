@@ -8,7 +8,7 @@ data:
     resources:
       requests:
         memory: "128Mi"
-        cpu: "50m"
+        cpu: "20m"
       limits:
         memory: "384Mi"
         cpu: "500m"
@@ -23,7 +23,7 @@ data:
       resources:
         requests:
           memory: "64Mi"
-          cpu: "50m"
+          cpu: "20m"
         limits:
           memory: "128Mi"
           cpu: "300m"
