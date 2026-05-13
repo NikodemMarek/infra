@@ -5,6 +5,14 @@ metadata:
   namespace: default
 data:
   values.yaml: |
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "50m"
+      limits:
+        memory: "384Mi"
+        cpu: "500m"
+
     postgres:
       persistence:
         enabled: true
@@ -12,6 +20,13 @@ data:
       password: "audiomuse"
       aiChatDbUser: "ai_user"
       aiChatDbUserPassword: "aipassword"
+      resources:
+        requests:
+          memory: "64Mi"
+          cpu: "50m"
+        limits:
+          memory: "128Mi"
+          cpu: "300m"
 
     navidrome:
       url: "http://navidrome.default.svc.cluster.local"

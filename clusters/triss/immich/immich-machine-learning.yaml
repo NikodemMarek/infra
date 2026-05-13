@@ -30,6 +30,13 @@ spec:
           volumeMounts:
             - name: immich-ml-storage
               mountPath: /cache
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "100m"
+            limits:
+              memory: "1536Mi"
+              cpu: "2000m"
 ---
 apiVersion: v1
 kind: Service

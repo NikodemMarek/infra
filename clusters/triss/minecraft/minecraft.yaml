@@ -24,8 +24,11 @@ spec:
   values:
     resources:
       requests:
-        memory: 8Gi
-        cpu: "1"
+        memory: 4Gi
+        cpu: "500m"
+      limits:
+        memory: 6Gi
+        cpu: "2"
     persistence:
       dataDir:
         enabled: true

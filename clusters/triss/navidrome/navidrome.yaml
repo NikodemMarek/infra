@@ -27,6 +27,13 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+            limits:
+              memory: "64Mi"
+              cpu: "200m"
       containers:
         - name: navidrome
           image: deluan/navidrome:latest
@@ -55,6 +62,13 @@ spec:
             - name: music
               mountPath: /music
               readOnly: true
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "384Mi"
+              cpu: "1000m"
       volumes:
         - name: data
           persistentVolumeClaim:

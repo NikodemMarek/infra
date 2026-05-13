@@ -20,6 +20,13 @@ spec:
           image: docker.io/valkey/valkey:9@sha256:fb8d272e529ea567b9bf1302245796f21a2672b8368ca3fcb938ac334e613c8f
           ports:
             - containerPort: 6379
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "20m"
+            limits:
+              memory: "128Mi"
+              cpu: "300m"
 ---
 apiVersion: v1
 kind: Service

@@ -45,3 +45,10 @@ spec:
           volumeMounts:
             - name: books
               mountPath: /data
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "20m"
+            limits:
+              memory: "128Mi"
+              cpu: "300m"

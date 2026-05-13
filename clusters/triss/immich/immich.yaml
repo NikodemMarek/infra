@@ -36,6 +36,13 @@ spec:
           volumeMounts:
             - name: photos
               mountPath: /data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "768Mi"
+              cpu: "1000m"
       volumes:
         - name: photos
           persistentVolumeClaim:
