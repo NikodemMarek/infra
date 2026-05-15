@@ -91,7 +91,7 @@ spec:
               memory: "256Mi"
       containers:
         - name: qbittorrent
-          image: lscr.io/linuxserver/qbittorrent:5.0.5
+          image: linuxserver/qbittorrent:5.2.0
           env:
             - name: PUID
               value: "1000"
