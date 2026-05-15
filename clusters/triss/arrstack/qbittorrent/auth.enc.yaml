@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: qbittorrent-tailscale-auth
+  namespace: arrstack
+type: Opaque
+stringData:
+  authkey: ENC[AES256_GCM,data:A5K08i4GFP8c4WtUDkM6WkvEDAXHZPJCKe2H/KpazeNZkxykDZI/sdmntGkyGMWL3lMWPwj2BsUyqiS2KA==,iv:y7BQrCLsMQvKAUL66zWx/uInjmXJk8P3JjmI11j94QM=,tag:pHwBlshtP8GkUVNnAurVqA==,type:str]
+sops:
+  age:
+    - recipient: age1l58pzs8ex5e72lgpgcavaxvx7g80937cjtqkr743hdnjvy5jramsycjtp4
+      enc: |
+        -----BEGIN AGE ENCRYPTED FILE-----
+        YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBJZ1dJWTVRenRKN20yZ2xT
+        SHlwOWxhaTBhRk5rQlkza0NzVG56ajRVUzJVCmVFZWo4dVI2a0oxWmZTY1o1OUs3
+        SFNmM3JGaUZFMFExTVpmYytXNnM0S3cKLS0tIGVXWk5qcnlFNFdZdStkU2p0cUtS
+        R2hZNmM3MGUvaXI4MnI1emdBV2g1VGcKHTDAYbfmdUpIbEK29KYvXTR4ioWNv4hs
+        NQWU329FUoq/FCnjCynfzbGPbYvwW6o1JUW0RzEdbyzDA6fu7TQfUw==
+        -----END AGE ENCRYPTED FILE-----
+  lastmodified: "2026-05-15T18:07:31Z"
+  mac: ENC[AES256_GCM,data:8wleK7Nk+eei9P6SfjprYy4B3tXLgMz8L9jY8CeW2Cw2lZ0ldcNoVEsbUtUukwhGir05NoxycQC08KqdvLmyzQADzPyRfzXAwdUfSEvzYq6rBxugakmLIWp+sxc/DrNGhyAe1m8okf1ZYyQRRs8RfQWFSSRKr+8poK12wNhQ+94=,iv:YTaEjdBh22E/yFFeCvuS9rZcGJcXIGoOygWaCkSwI7Y=,tag:Wh2xPpJO2ApXt30xrFlRWA==,type:str]
+  encrypted_regex: ^(data|stringData)$
+  version: 3.12.2
