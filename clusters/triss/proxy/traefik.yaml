@@ -52,3 +52,6 @@ spec:
         level: INFO
       access:
         enabled: true
+    additionalArguments:
+      - "--entrypoints.web.http.encodedcharacters.allowencodedslash=true"
+      - "--entrypoints.web.http.encodedcharacters.allowencodedquestionmark=true"
