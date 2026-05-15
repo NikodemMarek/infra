@@ -6,7 +6,7 @@ metadata:
   labels:
     app: jellyfin
 spec:
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app: jellyfin
@@ -62,7 +62,7 @@ metadata:
   labels:
     app: seerr
 spec:
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app: seerr
