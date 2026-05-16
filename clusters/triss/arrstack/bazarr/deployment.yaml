@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bazarr
+  namespace: arrstack
+  labels:
+    app: bazarr
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: bazarr
+  template:
+    metadata:
+      labels:
+        app: bazarr
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: triss
+      containers:
+        - name: bazarr
+          image: linuxserver/bazarr:latest
+          env:
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+          ports:
+            - name: webui
+              containerPort: 6767
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              subPath: bazarr
+            - name: shows
+              mountPath: /tv
+            - name: movies
+              mountPath: /movies
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: config-pvc
+        - name: shows
+          persistentVolumeClaim:
+            claimName: shows-pvc
+        - name: movies
+          persistentVolumeClaim:
+            claimName: movies-pvc

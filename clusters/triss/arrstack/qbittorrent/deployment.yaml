@@ -111,6 +111,7 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /config
+              subPath: qbittorrent
             - name: downloads
               mountPath: /downloads
           resources:
@@ -123,10 +124,10 @@ spec:
       volumes:
         - name: config
           persistentVolumeClaim:
-            claimName: qbittorrent-config-pvc
+            claimName: config-pvc
         - name: downloads
           persistentVolumeClaim:
-            claimName: qbittorrent-downloads-pvc
+            claimName: downloads-pvc
         - name: dev-net-tun
           hostPath:
             path: /dev/net/tun
