@@ -6,6 +6,7 @@ metadata:
   annotations:
     tailscale.com/expose: "true"
     tailscale.com/hostname: "qbittorrent"
+    tailscale.com/proxy-class: "triss-pinned"
 spec:
   selector:
     app: qbittorrent

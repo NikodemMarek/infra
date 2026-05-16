@@ -1,0 +1,9 @@
+apiVersion: tailscale.com/v1alpha1
+kind: ProxyClass
+metadata:
+  name: triss-pinned
+spec:
+  statefulSet:
+    pod:
+      nodeSelector:
+        kubernetes.io/hostname: triss
