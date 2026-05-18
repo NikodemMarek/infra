@@ -13,6 +13,8 @@ spec:
       labels:
         app: books
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: triss
       volumes:
         - name: books
           persistentVolumeClaim:
