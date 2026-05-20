@@ -15,7 +15,7 @@ spec:
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
-  name: triss-tailscale-operator
+  name: dijkstra-tailscale-operator
   namespace: tailscale
 spec:
   interval: 5m
@@ -29,7 +29,7 @@ spec:
         namespace: tailscale
   values:
     operatorConfig:
-      hostname: "triss-tailscale-operator"
+      hostname: "dijkstra-tailscale-operator"
       resources:
         requests:
           memory: "32Mi"
