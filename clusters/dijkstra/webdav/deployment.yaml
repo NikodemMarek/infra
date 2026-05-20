@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: books
+  namespace: webdav
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: books
+  template:
+    metadata:
+      labels:
+        app: books
+    spec:
+      volumes:
+        - name: books
+          persistentVolumeClaim:
+            claimName: books-pvc
+      containers:
+        - name: rclone
+          image: rclone/rclone:latest
+          env:
+            - name: DAV_USER
+              valueFrom:
+                secretKeyRef:
+                  name: books-webdav-auth
+                  key: user
+            - name: DAV_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: books-webdav-auth
+                  key: password
+          args:
+            - serve
+            - webdav
+            - /data/library
+            - --copy-links
+            - --addr
+            - :80
+            - --user
+            - $(DAV_USER)
+            - --pass
+            - $(DAV_PASS)
+          volumeMounts:
+            - name: books
+              mountPath: /data
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
+              memory: "128Mi"
+              cpu: "300m"
