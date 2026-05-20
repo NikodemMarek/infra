@@ -75,4 +75,4 @@ spec:
             claimName: navidrome-data-pvc
         - name: music
           persistentVolumeClaim:
-            claimName: music-pvc
+            claimName: navidrome-music-pvc
