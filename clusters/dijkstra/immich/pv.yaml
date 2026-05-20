@@ -11,5 +11,5 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: nfs
   nfs:
-    server: roach
+    server: 100.109.230.83
     path: /mnt/data/photos
