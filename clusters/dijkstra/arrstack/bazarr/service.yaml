@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: bazarr
+  namespace: arrstack
+  annotations:
+    tailscale.com/expose: "true"
+    tailscale.com/hostname: "bazarr"
+    tailscale.com/proxy-class: "triss-pinned"
+spec:
+  selector:
+    app: bazarr
+  ports:
+    - name: webui
+      protocol: TCP
+      port: 80
+      targetPort: 6767
