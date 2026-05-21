@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: arrstack-config-pvc
+  namespace: arrstack
+  labels:
+    recurring-job-group.longhorn.io/default: "enabled"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: arrstack-downloads-pvc
+  namespace: arrstack
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs
+  resources:
+    requests:
+      storage: 100Gi
+  volumeName: arrstack-downloads-pv
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: arrstack-shows-pvc
+  namespace: arrstack
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs
+  resources:
+    requests:
+      storage: 200Gi
+  volumeName: arrstack-shows-pv
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: arrstack-movies-pvc
+  namespace: arrstack
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs
+  resources:
+    requests:
+      storage: 200Gi
+  volumeName: arrstack-movies-pv
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: arrstack-music-pvc
+  namespace: arrstack
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs
+  resources:
+    requests:
+      storage: 200Gi
+  volumeName: arrstack-music-pv
