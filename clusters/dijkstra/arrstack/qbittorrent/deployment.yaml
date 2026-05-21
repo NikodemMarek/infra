@@ -51,6 +51,8 @@ spec:
       labels:
         app: qbittorrent
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: triss
       serviceAccountName: qbittorrent-tailscale
       # Tailscale as a native sidecar (starts before main, keeps running).
       # First deploy with TS_EXTRA_ARGS empty so the device can register before Mullvad is enabled.
