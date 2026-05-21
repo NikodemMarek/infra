@@ -35,7 +35,13 @@ data:
         AUTHOR="${AUTHOR:0:100}"
         SERIES="${SERIES:0:100}"
 
-        INITIAL=$(printf '%s' "$AUTHOR" | cut -c1 | tr '[:lower:]' '[:upper:]')
+        if [[ "$AUTHOR" == *,* ]]; then
+            SURNAME="${AUTHOR%%,*}"
+        else
+            CLEANED=$(printf '%s' "$AUTHOR" | sed -E 's/[[:space:]]+(Jr\.?|Sr\.?|I{1,3}|IV|VI{0,3})$//I')
+            SURNAME=$(printf '%s' "$CLEANED" | awk '{print $NF}')
+        fi
+        INITIAL=$(printf '%s' "$SURNAME" | cut -c1 | tr '[:lower:]' '[:upper:]')
         [[ -z "$INITIAL" ]] && INITIAL="#"
 
         if [[ -n "$SERIES" ]]; then
