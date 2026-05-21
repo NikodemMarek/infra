@@ -1,0 +1,132 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: qbittorrent-tailscale
+  namespace: arrstack
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: qbittorrent-tailscale
+  namespace: arrstack
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["qbittorrent-tailscale-state"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: qbittorrent-tailscale
+  namespace: arrstack
+subjects:
+  - kind: ServiceAccount
+    name: qbittorrent-tailscale
+    namespace: arrstack
+roleRef:
+  kind: Role
+  name: qbittorrent-tailscale
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qbittorrent
+  namespace: arrstack
+  labels:
+    app: qbittorrent
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: qbittorrent
+  template:
+    metadata:
+      labels:
+        app: qbittorrent
+    spec:
+      serviceAccountName: qbittorrent-tailscale
+      # Tailscale as a native sidecar (starts before main, keeps running).
+      # First deploy with TS_EXTRA_ARGS empty so the device can register before Mullvad is enabled.
+      # Then set it to "--exit-node=bg-sof-wg-001.mullvad.ts.net --exit-node-allow-lan-access=true"
+      initContainers:
+        - name: tailscale
+          image: tailscale/tailscale:v1.92.5
+          restartPolicy: Always
+          env:
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: qbittorrent-tailscale-auth
+                  key: authkey
+            - name: TS_HOSTNAME
+              value: qbittorrent-tailscale
+            - name: TS_USERSPACE
+              value: "false"
+            - name: TS_EXTRA_ARGS
+              value: ""
+            - name: TS_KUBE_SECRET
+              value: "qbittorrent-tailscale-state"
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+          volumeMounts:
+            - name: dev-net-tun
+              mountPath: /dev/net/tun
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+      containers:
+        - name: qbittorrent
+          image: linuxserver/qbittorrent:5.2.0
+          env:
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+            - name: WEBUI_PORT
+              value: "8080"
+          ports:
+            - name: webui
+              containerPort: 8080
+            - name: bt-tcp
+              containerPort: 6881
+              protocol: TCP
+            - name: bt-udp
+              containerPort: 6881
+              protocol: UDP
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              subPath: qbittorrent
+            - name: downloads
+              mountPath: /downloads
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "256Mi"
+            limits:
+              cpu: "2000m"
+              memory: "2Gi"
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: arrstack-config-pvc
+        - name: downloads
+          persistentVolumeClaim:
+            claimName: arrstack-downloads-pvc
+        - name: dev-net-tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice
