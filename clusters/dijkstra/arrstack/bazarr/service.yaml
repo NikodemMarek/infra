@@ -6,7 +6,6 @@ metadata:
   annotations:
     tailscale.com/expose: "true"
     tailscale.com/hostname: "bazarr"
-    tailscale.com/proxy-class: "triss-pinned"
 spec:
   selector:
     app: bazarr

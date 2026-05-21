@@ -6,7 +6,6 @@ metadata:
   annotations:
     tailscale.com/expose: "true"
     tailscale.com/hostname: "radarr"
-    tailscale.com/proxy-class: "triss-pinned"
 spec:
   selector:
     app: radarr
