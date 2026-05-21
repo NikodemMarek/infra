@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gutenberg-scripts
+  namespace: cron
+data:
+  sync.sh: |
+    #!/bin/sh
+    set -eu
+    DEST_DIR=/data/gutenberg
+    mkdir -p "$DEST_DIR"
+    rsync -avHS --timeout 600 --delete --prune-empty-dirs \
+      --include='*/' \
+      --include='*images-3.epub' \
+      --exclude='*' \
+      aleph.gutenberg.org::gutenberg-epub "$DEST_DIR"
+  symlink.sh: |
+    #!/bin/bash
+    set -eu
+    SOURCE_DIR=/data/gutenberg
+    TARGET_DIR=/data/library
+
+    mkdir -p "$TARGET_DIR"
+    find "$TARGET_DIR" -xtype l -delete
+
+    find "$SOURCE_DIR" -name "*-images-3.epub" | while read -r epub_path; do
+        TITLE=$(exiftool -s3 -Title "$epub_path" | sed 's/[/\\:*"<>|]//g' | tr -d '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        AUTHOR=$(exiftool -s3 -Creator "$epub_path" | sed 's/[/\\:*"<>|]//g' | tr -d '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        SERIES=$(exiftool -s3 -Series "$epub_path" | sed 's/[/\\:*"<>|]//g' | tr -d '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+        [[ -z "$TITLE" ]] && TITLE="Unknown"
+        [[ -z "$AUTHOR" ]] && AUTHOR="Unknown"
+
+        TITLE="${TITLE:0:200}"
+        AUTHOR="${AUTHOR:0:100}"
+        SERIES="${SERIES:0:100}"
+
+        INITIAL=$(printf '%s' "$AUTHOR" | cut -c1 | tr '[:lower:]' '[:upper:]')
+        [[ -z "$INITIAL" ]] && INITIAL="#"
+
+        if [[ -n "$SERIES" ]]; then
+            BOOK_DIR="$TARGET_DIR/$INITIAL/$AUTHOR/$SERIES"
+        else
+            BOOK_DIR="$TARGET_DIR/$INITIAL/$AUTHOR"
+        fi
+
+        mkdir -p "$BOOK_DIR"
+
+        RELATIVE_PATH=$(realpath --relative-to="$BOOK_DIR" "$epub_path")
+        ln -sf "$RELATIVE_PATH" "$BOOK_DIR/$TITLE.epub"
+    done
