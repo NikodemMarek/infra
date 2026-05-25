@@ -1,7 +1,7 @@
 keys:
-  - &triss_cluster age1l58pzs8ex5e72lgpgcavaxvx7g80937cjtqkr743hdnjvy5jramsycjtp4
+  - &dijkstra_cluster age1l58pzs8ex5e72lgpgcavaxvx7g80937cjtqkr743hdnjvy5jramsycjtp4
 creation_rules:
-  - path_regex: clusters/triss/.+\.enc.+$
+  - path_regex: clusters/dijkstra/.+\.enc.+$
     key_groups:
       - age:
-          - *triss_cluster
+          - *dijkstra_cluster
