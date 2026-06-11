@@ -25,3 +25,6 @@ spec:
   values:
     defaultSettings:
       defaultReplicaCount: 1
+    metrics:
+      serviceMonitor:
+        enabled: true
