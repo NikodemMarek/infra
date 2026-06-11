@@ -18,6 +18,26 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
+  name: immich-metrics
+  namespace: immich
+  labels:
+    app: immich-metrics
+spec:
+  selector:
+    app: immich
+  ports:
+    - name: metrics-api
+      protocol: TCP
+      port: 8081
+      targetPort: metrics-api
+    - name: metrics-micro
+      protocol: TCP
+      port: 8082
+      targetPort: metrics-micro
+---
+apiVersion: v1
+kind: Service
+metadata:
   name: immich-redis
   namespace: immich
 spec:

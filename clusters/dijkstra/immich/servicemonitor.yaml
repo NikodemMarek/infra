@@ -1,0 +1,16 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: immich
+  namespace: immich
+spec:
+  selector:
+    matchLabels:
+      app: immich-metrics
+  endpoints:
+    - port: metrics-api
+      path: /metrics
+      interval: 30s
+    - port: metrics-micro
+      path: /metrics
+      interval: 30s
