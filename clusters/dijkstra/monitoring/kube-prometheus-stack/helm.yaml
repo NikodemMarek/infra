@@ -81,6 +81,24 @@ spec:
         annotations:
           tailscale.com/expose: "true"
           tailscale.com/hostname: "grafana"
+      # First boot on the Longhorn-backed PVC (DB migrations + provisioning) is slow;
+      # give it a generous runway so the probes don't kill it mid-startup.
+      readinessProbe:
+        httpGet:
+          path: /api/health
+          port: 3000
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 10
+        failureThreshold: 30
+      livenessProbe:
+        httpGet:
+          path: /api/health
+          port: 3000
+        initialDelaySeconds: 90
+        periodSeconds: 15
+        timeoutSeconds: 30
+        failureThreshold: 20
       resources:
         requests:
           memory: "128Mi"
