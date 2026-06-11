@@ -1,0 +1,116 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: prometheus-community
+  namespace: monitoring
+spec:
+  interval: 1h
+  url: https://prometheus-community.github.io/helm-charts
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kube-prometheus-stack
+  namespace: monitoring
+spec:
+  chart:
+    spec:
+      chart: kube-prometheus-stack
+      reconcileStrategy: ChartVersion
+      sourceRef:
+        kind: HelmRepository
+        name: prometheus-community
+      version: 86.2.2
+  interval: 1h
+  install:
+    crds: Create
+  upgrade:
+    crds: CreateReplace
+  values:
+    # k3s runs control-plane components as a single process and does not expose
+    # them as separate scrape targets, so disable these jobs to avoid down targets.
+    kubeControllerManager:
+      enabled: false
+    kubeScheduler:
+      enabled: false
+    kubeProxy:
+      enabled: false
+    kubeEtcd:
+      enabled: false
+    alertmanager:
+      enabled: false
+    prometheus:
+      prometheusSpec:
+        retention: 15d
+        # Scrape ServiceMonitors / PodMonitors from every namespace, not just the
+        # ones labelled with this Helm release (needed for app instrumentation).
+        serviceMonitorSelectorNilUsesHelmValues: false
+        podMonitorSelectorNilUsesHelmValues: false
+        ruleSelectorNilUsesHelmValues: false
+        probeSelectorNilUsesHelmValues: false
+        scrapeConfigSelectorNilUsesHelmValues: false
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "100m"
+          limits:
+            memory: "1536Mi"
+            cpu: "1000m"
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: longhorn
+              accessModes:
+                - ReadWriteOnce
+              resources:
+                requests:
+                  storage: 20Gi
+    grafana:
+      admin:
+        existingSecret: grafana-admin
+        userKey: admin-user
+        passwordKey: admin-password
+      persistence:
+        enabled: true
+        type: pvc
+        storageClassName: longhorn
+        accessModes:
+          - ReadWriteOnce
+        size: 5Gi
+      service:
+        annotations:
+          tailscale.com/expose: "true"
+          tailscale.com/hostname: "grafana"
+      resources:
+        requests:
+          memory: "128Mi"
+          cpu: "30m"
+        limits:
+          memory: "512Mi"
+          cpu: "500m"
+      # Prometheus is auto-provisioned by the stack; add Loki (live once Chunk 2 lands).
+      additionalDataSources:
+        - name: Loki
+          type: loki
+          uid: loki
+          access: proxy
+          url: http://loki-gateway.monitoring.svc.cluster.local
+          jsonData:
+            maxLines: 1000
+    # Reduce node-exporter / kube-state-metrics footprint a touch for a homelab.
+    prometheus-node-exporter:
+      resources:
+        requests:
+          memory: "32Mi"
+          cpu: "10m"
+        limits:
+          memory: "128Mi"
+          cpu: "200m"
+    kube-state-metrics:
+      resources:
+        requests:
+          memory: "32Mi"
+          cpu: "10m"
+        limits:
+          memory: "256Mi"
+          cpu: "300m"
