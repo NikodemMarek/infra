@@ -31,7 +31,13 @@ spec:
       volumes:
         - name: config
           persistentVolumeClaim:
-            claimName: jellyfin-lsio-data-pvc
+            claimName: jellyfin-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: jellyfin-data
+        - name: cache
+          persistentVolumeClaim:
+            claimName: jellyfin-cache
         - name: movies
           persistentVolumeClaim:
             claimName: jellyfin-movies-pvc
@@ -50,9 +56,19 @@ spec:
               value: "1000"
             - name: TZ
               value: "Europe/Warsaw"
+            - name: JELLYFIN_CONFIG_DIR
+              value: "/config"
+            - name: JELLYFIN_DATA_DIR
+              value: "/data"
+            - name: JELLYFIN_CACHE_DIR
+              value: "/cache"
           volumeMounts:
             - name: config
               mountPath: /config
+            - name: data
+              mountPath: /data
+            - name: cache
+              mountPath: /cache
             - name: movies
               mountPath: /movies
               readOnly: true
