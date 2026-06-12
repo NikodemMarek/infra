@@ -27,8 +27,6 @@ spec:
   upgrade:
     crds: CreateReplace
   values:
-    # k3s runs control-plane components as a single process and does not expose
-    # them as separate scrape targets, so disable these jobs to avoid down targets.
     kubeControllerManager:
       enabled: false
     kubeScheduler:
@@ -42,8 +40,6 @@ spec:
     prometheus:
       prometheusSpec:
         retention: 15d
-        # Scrape ServiceMonitors / PodMonitors from every namespace, not just the
-        # ones labelled with this Helm release (needed for app instrumentation).
         serviceMonitorSelectorNilUsesHelmValues: false
         podMonitorSelectorNilUsesHelmValues: false
         ruleSelectorNilUsesHelmValues: false
@@ -81,8 +77,6 @@ spec:
         annotations:
           tailscale.com/expose: "true"
           tailscale.com/hostname: "grafana"
-      # First boot on the Longhorn-backed PVC (DB migrations + provisioning) is slow;
-      # give it a generous runway so the probes don't kill it mid-startup.
       readinessProbe:
         httpGet:
           path: /api/health
@@ -106,7 +100,6 @@ spec:
         limits:
           memory: "512Mi"
           cpu: "500m"
-      # Prometheus is auto-provisioned by the stack; add Loki (live once Chunk 2 lands).
       additionalDataSources:
         - name: Loki
           type: loki
@@ -115,7 +108,6 @@ spec:
           url: http://loki-gateway.monitoring.svc.cluster.local
           jsonData:
             maxLines: 1000
-    # Reduce node-exporter / kube-state-metrics footprint a touch for a homelab.
     prometheus-node-exporter:
       resources:
         requests:

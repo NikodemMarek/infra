@@ -5,7 +5,6 @@ metadata:
   namespace: monitoring
 spec:
   interval: 1h
-  # OSS Loki chart moved here from grafana/helm-charts in early 2026.
   url: https://grafana-community.github.io/helm-charts
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
@@ -14,7 +13,6 @@ metadata:
   name: loki
   namespace: monitoring
 spec:
-  # ServiceMonitor CRD comes from kube-prometheus-stack, so wait for it.
   dependsOn:
     - name: kube-prometheus-stack
   chart:
@@ -27,7 +25,6 @@ spec:
       version: 17.3.1
   interval: 1h
   values:
-    # Single-binary, filesystem-backed — right scale for one homelab cluster.
     deploymentMode: SingleBinary
     loki:
       auth_enabled: false
@@ -62,7 +59,6 @@ spec:
         limits:
           memory: "512Mi"
           cpu: "500m"
-    # Disable the scalable/distributed components and the memcached tiers.
     read:
       replicas: 0
     write:
@@ -73,10 +69,8 @@ spec:
       enabled: false
     resultsCache:
       enabled: false
-    # nginx gateway in front of the single binary -> Service "loki-gateway".
     gateway:
       enabled: true
-    # No self-monitoring substack / canary / helm test; just expose a ServiceMonitor.
     lokiCanary:
       enabled: false
     test:

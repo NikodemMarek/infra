@@ -13,7 +13,6 @@ metadata:
   name: alloy
   namespace: monitoring
 spec:
-  # Needs Loki's push endpoint up, and the ServiceMonitor CRD from the stack.
   dependsOn:
     - name: loki
   chart:
@@ -29,8 +28,6 @@ spec:
     controller:
       type: daemonset
     alloy:
-      # Tail pod logs from the host filesystem. As a DaemonSet each node only sees
-      # its own /var/log/pods/* files, so there is no cross-node duplication.
       mounts:
         varlog: true
       resources:
