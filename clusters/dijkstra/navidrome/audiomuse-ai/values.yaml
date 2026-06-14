@@ -22,10 +22,10 @@ data:
       aiChatDbUserPassword: "aipassword"
       resources:
         requests:
-          memory: "64Mi"
+          memory: "256Mi"
           cpu: "20m"
         limits:
-          memory: "128Mi"
+          memory: "512Mi"
           cpu: "300m"
 
     navidrome:
