@@ -21,7 +21,7 @@ spec:
         kubernetes.io/hostname: triss
       containers:
         - name: lidarr
-          image: linuxserver/lidarr:latest
+          image: linuxserver/lidarr:nightly
           env:
             - name: PUID
               value: "1000"
