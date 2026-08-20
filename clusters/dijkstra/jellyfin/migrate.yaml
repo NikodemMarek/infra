@@ -1,0 +1,65 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: jellyfin-config-migrate-job
+  namespace: jellyfin
+spec:
+  template:
+    spec:
+      containers:
+      - name: data-copier
+        image: debian:bookworm-slim
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            apt-get update && apt-get install -y rsync
+            rsync -avP --delete /src/ /dst/
+            echo "Copy complete!"
+        volumeMounts:
+        - mountPath: /src
+          name: source-vol
+          readOnly: true
+        - mountPath: /dst
+          name: dest-vol
+      restartPolicy: Never
+      volumes:
+      - name: source-vol
+        persistentVolumeClaim:
+          claimName: jellyfin-config
+      - name: dest-vol
+        persistentVolumeClaim:
+          claimName: jellyfin-config-openebs
+  backoffLimit: 1
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: jellyfin-data-migrate-job
+  namespace: jellyfin
+spec:
+  template:
+    spec:
+      containers:
+      - name: data-copier
+        image: debian:bookworm-slim
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            apt-get update && apt-get install -y rsync
+            rsync -avP --delete /src/ /dst/
+            echo "Copy complete!"
+        volumeMounts:
+        - mountPath: /src
+          name: source-vol
+          readOnly: true
+        - mountPath: /dst
+          name: dest-vol
+      restartPolicy: Never
+      volumes:
+      - name: source-vol
+        persistentVolumeClaim:
+          claimName: jellyfin-data
+      - name: dest-vol
+        persistentVolumeClaim:
+          claimName: jellyfin-data-openebs
+  backoffLimit: 1
