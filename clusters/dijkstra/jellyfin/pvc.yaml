@@ -16,6 +16,19 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
+  name: jellyfin-config-openebs
+  namespace: jellyfin
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: openebs-zfs
+  resources:
+    requests:
+      storage: 3Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
   name: jellyfin-data
   namespace: jellyfin
   labels:
@@ -24,6 +37,19 @@ spec:
   accessModes:
     - ReadWriteOnce
   storageClassName: longhorn
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyfin-data-openebs
+  namespace: jellyfin
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: openebs-zfs
   resources:
     requests:
       storage: 5Gi
