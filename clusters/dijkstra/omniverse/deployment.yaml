@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: git-sync
+  namespace: omniverse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: git-sync
+  template:
+    metadata:
+      labels:
+        app: git-sync
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: triss
+      volumes:
+        - name: omniverse-volume
+          persistentVolumeClaim:
+            claimName: omniverse-pvc
+      containers:
+        - name: git-sync
+          image: registry.k8s.io/git-sync/git-sync:v4.7.1
+          args:
+            - "--repo=https://github.com/$(GIT_USER)/omniverse.git"
+            - "--ref=main"
+            - "--root=/omniverse"
+            - "--link=current"
+            - "--period=60s"
+            - "--username=$(GIT_USER)"
+          env:
+            - name: GIT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: git-secret
+                  key: username
+            - name: GITSYNC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: git-secret
+                  key: token
+          volumeMounts:
+            - name: omniverse-volume
+              mountPath: /omniverse
