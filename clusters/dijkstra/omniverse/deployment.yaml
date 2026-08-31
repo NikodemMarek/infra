@@ -21,28 +21,21 @@ spec:
             claimName: omniverse-pvc
       containers:
         - name: git-sync
-          image: registry.k8s.io/git-sync/git-sync:v4.7.1
-          args:
-            - "--repo=https://github.com/$(GIT_USER)/omniverse.git"
-            - "--ref=main"
-            - "--root=/omniverse"
-            - "--link=current"
-            - "--period=60s"
-            - "--username=$(GIT_USER)"
+          image: alpine/git:latest
+          volumeMounts:
+            - name: omniverse-volume
+              mountPath: /omniverse
           env:
             - name: GIT_USER
               valueFrom:
                 secretKeyRef:
                   name: git-secret
                   key: username
-            - name: GITSYNC_PASSWORD
+            - name: GIT_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: git-secret
                   key: token
-          volumeMounts:
-            - name: omniverse-volume
-              mountPath: /omniverse
           resources:
             requests:
               memory: "128Mi"
@@ -50,6 +43,38 @@ spec:
             limits:
               memory: "512Mi"
               cpu: "300m"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              cd /omniverse
+
+              git config --global --add safe.directory /omniverse
+              git config --global advice.addEmptyPathspec false
+              git config --global user.email "git-sync@omniverse.local"
+              git config --global user.name "Git Sync"
+
+              if [ ! -d ".git" ]; then
+                echo "Cloning the repository..."
+                git clone https://${GIT_USER}:${GIT_TOKEN}@github.com/${GIT_USER}/omniverse.git .
+              fi
+
+              SIZE_LIMIT="90M"
+
+              while true; do
+                find . -path ./.git -prune -o -type f -size -${SIZE_LIMIT} -print0 | xargs -0 git add -f
+
+                git add -u
+
+                if ! git diff --cached --quiet; then
+                  echo "Eligible changes detected. Committing and pushing..."
+                  git commit -m "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+                  git push https://${GIT_USER}:${GIT_TOKEN}@github.com/${GIT_USER}/omniverse.git main
+                else
+                  echo "No eligible changes under ${SIZE_LIMIT} to push."
+                fi
+
+                sleep 60
+              done
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -80,6 +105,8 @@ spec:
             - webdav
             - /omniverse
             - --copy-links
+            - --exclude
+            - .git/
             - --addr
             - :80
             - --user
@@ -100,11 +127,10 @@ spec:
           volumeMounts:
             - name: omniverse-volume
               mountPath: /omniverse
-              subPath: current
           resources:
             requests:
-              memory: "32Mi"
+              memory: "128Mi"
               cpu: "10m"
             limits:
-              memory: "128Mi"
+              memory: "512Mi"
               cpu: "300m"
