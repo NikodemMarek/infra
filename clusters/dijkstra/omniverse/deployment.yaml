@@ -43,3 +43,68 @@ spec:
           volumeMounts:
             - name: omniverse-volume
               mountPath: /omniverse
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "10m"
+            limits:
+              memory: "512Mi"
+              cpu: "300m"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webdav
+  namespace: omniverse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webdav
+  template:
+    metadata:
+      labels:
+        app: webdav
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: triss
+      volumes:
+        - name: omniverse-volume
+          persistentVolumeClaim:
+            claimName: omniverse-pvc
+      containers:
+        - name: webdav
+          image: rclone/rclone:latest
+          args:
+            - serve
+            - webdav
+            - /omniverse
+            - --copy-links
+            - --addr
+            - :80
+            - --user
+            - $(DAV_USER)
+            - --pass
+            - $(DAV_PASS)
+          env:
+            - name: DAV_USER
+              valueFrom:
+                secretKeyRef:
+                  name: webdav-secret
+                  key: user
+            - name: DAV_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: webdav-secret
+                  key: password
+          volumeMounts:
+            - name: omniverse-volume
+              mountPath: /omniverse
+              subPath: current
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
+              memory: "128Mi"
+              cpu: "300m"
