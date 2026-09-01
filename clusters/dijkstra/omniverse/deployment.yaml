@@ -58,11 +58,12 @@ spec:
                 git clone https://${GIT_USER}:${GIT_TOKEN}@github.com/${GIT_USER}/omniverse.git .
               fi
 
-              SIZE_LIMIT="90M"
+              # Prevent the Megabyte rounding error (90 MiB = 94371840 bytes)
+              SIZE_LIMIT="94371840c"
 
               while true; do
-                find . -path ./.git -prune -o -type f -size -${SIZE_LIMIT} -print0 | xargs -0 git add -f
-
+                find . \( -path ./.git -prune \) -o \( -type f -size -${SIZE_LIMIT} -print0 \) | xargs -0 -r git add -f
+                
                 git add -u
 
                 if ! git diff --cached --quiet; then
