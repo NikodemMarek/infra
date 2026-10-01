@@ -13,6 +13,7 @@ in {
   imports = [
     inputs.hardware.nixosModules.common-pc-ssd
 
+    ./tpm2.nix
     ./storage.nix
   ];
 
