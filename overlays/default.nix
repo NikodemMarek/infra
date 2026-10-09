@@ -21,6 +21,7 @@
     inherit (inputs.hyprland.packages.${prev.stdenv.hostPlatform.system}) hyprland xdg-desktop-portal-hyprland;
     neovim = inputs.neovim.packages.${prev.stdenv.hostPlatform.system}.default;
     inherit (inputs.zen-browser.packages.${prev.stdenv.hostPlatform.system}) zen-browser;
+    inherit (inputs.outlay.packages.${prev.stdenv.hostPlatform.system}) outlay;
   };
 
   deploy-rs = final: prev: {
