@@ -38,6 +38,7 @@ in {
       (pkgs.bitwarden-cli.override {dataDir = bitwarden;})
       pkgs.git
 
+      pkgs.outlay
       pkgs.alacritty
       pkgs.remmina
       (pkgs.zen-browser.override {dataDir = "${generated}/zen";})

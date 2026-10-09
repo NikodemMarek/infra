@@ -926,6 +926,26 @@
         "type": "github"
       }
     },
+    "outlay": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1793634942,
+        "narHash": "sha256-TKnlJojHJ6x9W5uOJIkDv6Bm+FUAMpJcf8Pidb4OFIg=",
+        "owner": "NikodemMarek",
+        "repo": "outlay",
+        "rev": "10b479ce6cb554daace45f047e1ead754649e645",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NikodemMarek",
+        "repo": "outlay",
+        "type": "github"
+      }
+    },
     "pre-commit-hooks": {
       "inputs": {
         "flake-compat": "flake-compat_2",
@@ -957,6 +977,7 @@
         "impermanence": "impermanence",
         "neovim": "neovim",
         "nixpkgs": "nixpkgs_4",
+        "outlay": "outlay",
         "secrets": "secrets",
         "sops-nix": "sops-nix",
         "stylix": "stylix",
