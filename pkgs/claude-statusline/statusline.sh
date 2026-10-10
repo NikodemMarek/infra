@@ -8,6 +8,11 @@ dir=$(echo "$input" | jq -r '.workspace.current_dir // .cwd // empty')
 [ -z "$dir" ] && dir=$(pwd)
 short_dir="${dir/#"$HOME"/\~}"
 
+# Name the session's jj workspace after the session title (claude-jj-workspace decides; once, in the background)
+if [ -n "$(echo "$input" | jq -r '.session_name // empty')" ] && command -v claude-jj-workspace >/dev/null 2>&1; then
+  case "$dir" in */*.agents/s-*) printf '%s' "$input" | claude-jj-workspace title >/dev/null 2>&1 & ;; esac
+fi
+
 # jj info from `jw info` (never snapshots): project, workspace, @ and its place in the stack.
 # Show only the project (plus any subdirectory), not the full path.
 jj_info=""

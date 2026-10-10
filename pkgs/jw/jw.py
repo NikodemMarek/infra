@@ -206,7 +206,7 @@ def remove(home, name):
         more = f", ... (+{len(lost) - 5} more)" if len(lost) > 5 else ""
         confirm(f"jw: {len(lost)} file(s) in {d} are not tracked by jj (ignored or too large) "
                 f"and will be lost: {', '.join(lost[:5])}{more}. Delete? [y/N] ")
-    jj("--ignore-working-copy", "workspace", "forget", name, cwd=home)
+    jj("--ignore-working-copy", "workspace", "forget", cwd=d)  # its own workspace: the jj name may differ from name
     shutil.rmtree(d)
     rmdir_agents(home)
 
@@ -218,6 +218,8 @@ def remove_broken(home, name, known):
             jj("--ignore-working-copy", "workspace", "forget", name, cwd=home)
         except Fail:
             pass  # its directory goes anyway
+    else:  # a renamed workspace: the jj name is unknown without reading the directory
+        sys.stderr.write(f"jw: the jj workspace for {name} may remain; see 'jj workspace list' / 'jj workspace forget <name>'\n")
     shutil.rmtree(f"{home}.agents/{name}")
     rmdir_agents(home)
 
@@ -256,8 +258,8 @@ def cmd_rm(a):
 
 def cmd_prune(a):
     """Remove the session (w-*) and Claude (agent-*, s-*) workspaces that hold nothing: empty, undescribed, a visible
-    head, not in use. Claude workspaces modified within the last hour stay. Directories jj cannot read (not
-    listed in the repo, or failing to load) are deleted only after asking once for all of them."""
+    head, not in use. Claude workspaces modified within the last hour stay. Directories jj cannot read
+    (failing to load) are deleted only after asking once for all of them."""
     broken_ones = []
     for r in repos():
         home = f"{ROOT}/{r}"
@@ -275,7 +277,7 @@ def cmd_prune(a):
             if not (name.startswith("w-") or agent) or not os.path.isdir(f"{d}/.jj") or in_use(d):
                 continue
             try:
-                broken = name not in known or not loads(d)
+                broken = not loads(d)
                 if (broken or agent) and recent(d):
                     continue
                 if broken:
@@ -322,14 +324,21 @@ def cmd_info(a):
         p = subprocess.run(["jj", "--no-pager", "--ignore-working-copy", "--color=never", "log", "--no-graph",
                             "-r", "(trunk()..(@::) ~ ((working_copies() ~ @) & empty())) | @",
                             "-T", 'if(current_working_copy, change_id.shortest(), "-") ++ '
-                                  'if(self.contained_in("trunk()..@"), " y", " n") ++ "\\n"'],
+                                  'if(self.contained_in("trunk()..@"), "\\ty", "\\tn") ++ '
+                                  # name=root of every workspace at @ (only the current row), tab separated
+                                  'if(current_working_copy, "\\t" ++ working_copies.map(|w| w.name() ++ "=" ++ w.root()).join("\\t")) ++ "\\n"'],
                            cwd=root, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     except OSError:
         p = None  # no jj
     if p and p.returncode == 0:
-        rows = [line.split() for line in p.stdout.splitlines()]
+        rows = [line.split("\t") for line in p.stdout.splitlines()]
         info["change"] = next((r[0] for r in rows if r[0] != "-"), None)
         info["stack"] = {"index": sum(r[1] == "y" for r in rows), "size": len(rows)}
+        mine = [w.partition("=") for r in rows if r[0] != "-" for w in r[2:] if w]
+        if len(mine) > 1:  # several workspaces share @: the one whose root is this directory
+            mine = [w for w in mine if w[2] and os.path.realpath(w[2]) == os.path.realpath(root)]
+        if len(mine) == 1 and mine[0][0]:
+            info["workspace"] = mine[0][0]
     print(json.dumps(info))
 
 

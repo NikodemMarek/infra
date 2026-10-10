@@ -272,6 +272,7 @@ let
             cd "$main" || return 0
             export CLAUDE_WORKSPACE_BASE="$base"
           fi
+          # the jj workspace is renamed to s-<title> by `claude-jj-workspace title`; the directory keeps this name
           __claude_ws="s-$(${coreutils}/bin/date +%m%d-%H%M%S)-$RANDOM"
         }
         __claude_workspace "$@" || true
