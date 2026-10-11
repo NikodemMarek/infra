@@ -1,4 +1,8 @@
-{pkgs, ...}: let
+{
+  lib,
+  pkgs,
+  ...
+}: let
   projects = "/persist/data/home/nikodem/projects";
   bitwarden = "/persist/generated/home/nikodem/bitwarden";
 in {
@@ -111,6 +115,20 @@ in {
     };
     hyprlock.enable = true;
   };
+
+  # In /etc/xdg, so jailed apps (own XDG_CONFIG_HOME) see it too.
+  xdg.mime.defaultApplications = lib.genAttrs [
+    "x-scheme-handler/http"
+    "x-scheme-handler/https"
+    "x-scheme-handler/chrome"
+    "text/html"
+    "application/x-extension-htm"
+    "application/x-extension-html"
+    "application/x-extension-shtml"
+    "application/xhtml+xml"
+    "application/x-extension-xhtml"
+    "application/x-extension-xht"
+  ] (_: "zen.desktop");
 
   secrets.users_nikodem_ssh_id_ed25519 = {
     owner = "nikodem";

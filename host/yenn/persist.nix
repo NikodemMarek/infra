@@ -45,7 +45,6 @@
 
       files = [
         ".config/sops/age/keys.txt"
-        ".config/mimeapps.list"
 
         ".ssh/known_hosts"
       ];
