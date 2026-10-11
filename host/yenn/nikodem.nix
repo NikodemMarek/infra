@@ -29,7 +29,7 @@ in {
 
       pkgs.alacritty
       pkgs.remmina
-      pkgs.zen-browser
+      (pkgs.zen-browser.override {dataDir = "${generated}/zen";})
       (pkgs.obsidian.override {dataDir = "${generated}/obsidian";})
       pkgs.ripgrep
       pkgs.eza

@@ -13,7 +13,6 @@
         ".config/Google"
         ".config/JetBrains"
         ".config/heroic"
-        ".config/zen"
         ".config/LM-Studio"
         ".config/LM Studio"
         ".lmstudio"
