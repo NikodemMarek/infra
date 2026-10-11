@@ -291,6 +291,7 @@ let
           --run "source ${workspace}" \
           --set-default DISABLE_AUTOUPDATER 1 \
           --set-default KNOWLEDGE_SKILLS_DIR ${config}/skills \
+          --set-default SUDO_ASKPASS ${claude-hooks}/bin/claude-askpass \
           --prefix PATH : ${
             lib.makeBinPath (
               [

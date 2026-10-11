@@ -28,6 +28,18 @@
         ];
       }
     ];
+    # Covers AskUserQuestion too; `|| true` keeps a failing notification from ever blocking.
+    PermissionRequest = [
+      {
+        hooks = [
+          {
+            type = "command";
+            command = "claude-route-event || true";
+            timeout = 5;
+          }
+        ];
+      }
+    ];
     WorktreeCreate = [
       {
         hooks = [

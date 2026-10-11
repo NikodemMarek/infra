@@ -3,6 +3,7 @@
   symlinkJoin,
   writeShellApplication,
   jq,
+  curl,
   coreutils,
   git,
   util-linux,
@@ -90,6 +91,37 @@ let
     ];
   };
 
+  # Posts to the event router with curl: depending on pkgs.event-router would be a dependency cycle
+  # (event-handlers.knowledge -> claude -> claude-hooks). Never fails with exit 2 (blocking code).
+  routeEvent = shellHook {
+    name = "claude-route-event";
+    src = ./route-event.sh;
+    runtimeInputs = [
+      jq
+      curl
+      coreutils
+    ];
+    bashOptions = [
+      "nounset"
+      "pipefail"
+    ];
+  };
+
+  # SUDO_ASKPASS helper: asks the user through the event router, answer comes back on a FIFO.
+  askpass = shellHook {
+    name = "claude-askpass";
+    src = ./askpass.sh;
+    runtimeInputs = [
+      jq
+      coreutils
+      routeEvent
+    ];
+    bashOptions = [
+      "nounset"
+      "pipefail"
+    ];
+  };
+
   jjWorkspace = stdenvNoCC.mkDerivation {
     pname = "claude-jj-workspace";
     version = "0.1.0";
@@ -121,11 +153,13 @@ symlinkJoin {
     guardWrites
     verifierGuard
     architectAutocommit
+    routeEvent
+    askpass
     jjWorkspace
   ];
 
   meta = {
-    description = "Claude Code hook commands: write/bash guards, architect memory autocommit, jj workspaces for isolated agents";
+    description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing and sudo askpass, jj workspaces for isolated agents";
     platforms = lib.platforms.unix;
   };
 }
