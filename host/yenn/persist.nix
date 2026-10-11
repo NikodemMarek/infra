@@ -10,7 +10,6 @@
       directories = [
         ".cache"
 
-        ".config/obsidian"
         ".config/Google"
         ".config/JetBrains"
         ".config/heroic"

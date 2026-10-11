@@ -4,7 +4,8 @@
   ...
 }: let
   projects = "/persist/data/home/nikodem/projects";
-  bitwarden = "/persist/generated/home/nikodem/bitwarden";
+  generated = "/persist/generated/home/nikodem";
+  bitwarden = "${generated}/bitwarden";
 in {
   imports = [
     ../features/optional/syncthing.nix
@@ -29,7 +30,7 @@ in {
       pkgs.alacritty
       pkgs.remmina
       pkgs.zen-browser
-      pkgs.obsidian
+      (pkgs.obsidian.override {dataDir = "${generated}/obsidian";})
       pkgs.ripgrep
       pkgs.eza
       pkgs.jq
