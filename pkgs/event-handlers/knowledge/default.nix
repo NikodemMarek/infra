@@ -15,7 +15,8 @@ writeShellApplication {
   text = ''
     event=$(cat)
     # the user's own jj, if any, comes first on PATH: ours is appended below
-    if [[ -x "$HOME/.cargo/bin/jj" ]]; then export PATH="$HOME/.cargo/bin:$PATH"; fi
+    cargo_bin="''${CARGO_HOME:-$HOME/.cargo}/bin"
+    if [[ -x "$cargo_bin/jj" ]]; then export PATH="$cargo_bin:$PATH"; fi
     export PATH="$PATH:${jujutsu}/bin"
     export KNOWLEDGE_CLAUDE=${lib.getExe claude}
     export KNOWLEDGE_SKILLS_DIR=${claude.config}/skills

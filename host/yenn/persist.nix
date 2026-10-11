@@ -29,7 +29,6 @@
 
         # TODO: For relocation
         ".npm"
-        ".cargo"
         ".java"
         ".gradle"
         ".m2"

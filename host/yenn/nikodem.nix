@@ -69,6 +69,10 @@ in {
       pkgs.wine
       pkgs.winetricks
     ];
+    # $HOME, not a fixed path, so root under sudo gets its own dirs.
+    sessionVariables = {
+      CARGO_HOME = "/persist/generated$HOME/cargo";
+    };
     shellAliases = {
       l = "eza -la --icons --group-directories-first --git";
       lt = "eza -laT --icons --group-directories-first --git";
