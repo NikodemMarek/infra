@@ -10,30 +10,20 @@
       directories = [
         ".cache"
 
-        ".config/Google"
-        ".config/JetBrains"
         ".config/LM-Studio"
         ".config/LM Studio"
         ".lmstudio"
 
         ".local/share/zoxide"
         ".local/share/direnv"
-        ".local/share/keyrings"
-        ".local/share/Google"
         ".local/share/claude"
-        ".local/share/JetBrains"
         ".local/share/nvim"
         ".local/share/fish"
         ".local/share/PrismLauncher"
         ".local/share/Steam"
 
-        # TODO: For relocation
+        # Hardcoded paths, can't be relocated
         ".java"
-        ".gradle"
-        ".m2"
-        ".android"
-        ".dockercache"
-        ".mozilla"
         ".factorio"
       ];
 
