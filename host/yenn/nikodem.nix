@@ -72,6 +72,7 @@ in {
     # $HOME, not a fixed path, so root under sudo gets its own dirs.
     sessionVariables = {
       CARGO_HOME = "/persist/generated$HOME/cargo";
+      NPM_CONFIG_CACHE = "/persist/generated$HOME/npm";
     };
     shellAliases = {
       l = "eza -la --icons --group-directories-first --git";

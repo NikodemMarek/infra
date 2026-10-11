@@ -28,7 +28,6 @@
         ".local/share/Steam"
 
         # TODO: For relocation
-        ".npm"
         ".java"
         ".gradle"
         ".m2"
