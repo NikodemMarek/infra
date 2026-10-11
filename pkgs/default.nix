@@ -43,6 +43,7 @@
   claude-hooks = pkgs.callPackage ./claude-hooks {};
   claude-statusline = pkgs.callPackage ./claude-statusline {};
   knowledge = pkgs.callPackage ./knowledge {};
+  agent-inbox = pkgs.callPackage ./agent-inbox {};
 
   event-handlers = {
     notify = pkgs.callPackage ./event-handlers/notify {};

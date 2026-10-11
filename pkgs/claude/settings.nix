@@ -29,13 +29,15 @@
       }
     ];
     # Covers AskUserQuestion too; `|| true` keeps a failing notification from ever blocking.
+    # Waits up to CLAUDE_INBOX_WAIT seconds (default and max 600; 0 = notification only) for an answer
+    # from agent-inbox while the local dialog is shown; the timeout covers that wait.
     PermissionRequest = [
       {
         hooks = [
           {
             type = "command";
-            command = "claude-route-event || true";
-            timeout = 5;
+            command = "claude-permission-hook || true";
+            timeout = 610;
           }
         ];
       }

@@ -17,6 +17,7 @@ in {
       pkgs.zellij
 
       pkgs.claude
+      pkgs.agent-inbox
       pkgs.jj-upload
       (pkgs.jw.override {projectsRoot = projects;})
       (pkgs.bitwarden-cli.override {dataDir = bitwarden;})

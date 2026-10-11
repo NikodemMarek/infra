@@ -4,6 +4,7 @@
   writeShellApplication,
   jq,
   curl,
+  jw,
   coreutils,
   git,
   util-linux,
@@ -99,6 +100,7 @@ let
     runtimeInputs = [
       jq
       curl
+      jw
       coreutils
     ];
     bashOptions = [
@@ -111,6 +113,22 @@ let
   askpass = shellHook {
     name = "claude-askpass";
     src = ./askpass.sh;
+    runtimeInputs = [
+      jq
+      coreutils
+      routeEvent
+    ];
+    bashOptions = [
+      "nounset"
+      "pipefail"
+    ];
+  };
+
+  # PermissionRequest hook: routes the request and waits for an answer from agent-inbox
+  # (CLAUDE_INBOX_WAIT=<seconds>, default 600, 0 = off) and returns it as the decision.
+  permissionHook = shellHook {
+    name = "claude-permission-hook";
+    src = ./permission-hook.sh;
     runtimeInputs = [
       jq
       coreutils
@@ -155,11 +173,12 @@ symlinkJoin {
     architectAutocommit
     routeEvent
     askpass
+    permissionHook
     jjWorkspace
   ];
 
   meta = {
-    description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing and sudo askpass, jj workspaces for isolated agents";
+    description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), jj workspaces for isolated agents";
     platforms = lib.platforms.unix;
   };
 }
