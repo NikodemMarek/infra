@@ -12,7 +12,6 @@ in {
     systemPackages = [
       pkgs.kanshi
       pkgs.antigravity-cli
-      pkgs.signal-desktop
       pkgs.jujutsu
       pkgs.zellij
 
@@ -25,7 +24,6 @@ in {
 
       pkgs.alacritty
       pkgs.remmina
-      pkgs.google-chrome
       pkgs.zen-browser
       pkgs.obsidian
       pkgs.ripgrep

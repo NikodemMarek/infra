@@ -12,7 +12,6 @@
 
         ".config/obsidian"
         ".config/Google"
-        ".config/google-chrome"
         ".config/JetBrains"
         ".config/heroic"
         ".config/zen"
@@ -28,7 +27,6 @@
         ".local/share/JetBrains"
         ".local/share/nvim"
         ".local/share/fish"
-        ".local/share/Signal"
         ".local/share/PrismLauncher"
         ".local/share/Steam"
 

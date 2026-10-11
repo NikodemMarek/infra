@@ -19,7 +19,6 @@
   jujutsu = pkgs.callPackage ./jujutsu {jujutsu = prev.jujutsu;};
   waybar = pkgs.callPackage ./waybar {waybar = prev.waybar;};
   kanshi = pkgs.callPackage ./kanshi {kanshi = prev.kanshi;};
-  signal-desktop = pkgs.callPackage ./signal-desktop {signal-desktop = prev.signal-desktop;};
   glab = pkgs.callPackage ./glab {glab = prev.glab;};
   # No nixpkgs `claude` (it wraps `claude-code`). The nulls pin the "use the
   # bundled default" arguments so a same-named top-level package (e.g. `skills`)

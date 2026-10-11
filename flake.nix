@@ -74,8 +74,8 @@
 
     overlays = allOverlays;
     packages = forEachSystem (pkgs: {
-      inherit (pkgs) zellij hyprland hyprlock hypridle hyprpaper rofi dunst jujutsu waybar kanshi signal-desktop glab claude;
-      inherit (pkgs) knowledge jj-upload jw wallpaper dictate claude-hooks claude-statusline agent-skills event-router agent-inbox;
+      inherit (pkgs) zellij hyprland hyprlock hypridle hyprpaper rofi dunst jujutsu waybar kanshi glab claude;
+      inherit (pkgs) knowledge jj-upload jw wallpaper dictate claude-hooks claude-statusline agent-skills event-router;
       # flake packages must be derivations, not nested sets
       event-handler-notify = pkgs.event-handlers.notify;
       event-handler-knowledge = pkgs.event-handlers.knowledge;
@@ -118,7 +118,8 @@
       triss = mkNode "triss" {};
     };
 
-    checks = forEachSystem (pkgs:
-      pkgs.deploy-rs.lib.deployChecks self.deploy);
+    checks =
+      forEachSystem (pkgs:
+        pkgs.deploy-rs.lib.deployChecks self.deploy);
   };
 }
