@@ -14,6 +14,7 @@
     ../features/optional/bluetooth.nix
     ../features/optional/pipewire.nix
     ../features/optional/libvirt.nix
+    ../features/optional/dictate.nix
   ];
 
   networking.hostName = "yenn";

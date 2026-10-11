@@ -38,6 +38,7 @@
   jw = pkgs.callPackage ./jw {};
   bitwarden-cli = pkgs.callPackage ./bitwarden-cli {bitwarden-cli = prev.bitwarden-cli;};
   wallpaper = pkgs.callPackage ./wallpaper {};
+  dictate = pkgs.callPackage ./dictate {};
   agent-skills = pkgs.callPackage ./agent-skills {};
   claude-hooks = pkgs.callPackage ./claude-hooks {};
   claude-statusline = pkgs.callPackage ./claude-statusline {};
