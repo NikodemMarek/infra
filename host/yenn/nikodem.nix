@@ -73,6 +73,7 @@ in {
     sessionVariables = {
       CARGO_HOME = "/persist/generated$HOME/cargo";
       NPM_CONFIG_CACHE = "/persist/generated$HOME/npm";
+      DOCKER_CONFIG = "/persist/generated$HOME/docker";
     };
     shellAliases = {
       l = "eza -la --icons --group-directories-first --git";

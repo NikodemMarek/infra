@@ -32,7 +32,6 @@
         ".gradle"
         ".m2"
         ".android"
-        ".docker"
         ".dockercache"
         ".mozilla"
         ".factorio"
