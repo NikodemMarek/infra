@@ -21,6 +21,7 @@
   kanshi = pkgs.callPackage ./kanshi {kanshi = prev.kanshi;};
   obsidian = pkgs.callPackage ./obsidian {obsidian = prev.obsidian;};
   zen-browser = pkgs.callPackage ./zen-browser {zen-browser = prev.zen-browser;};
+  heroic = pkgs.callPackage ./heroic {heroic = prev.heroic;};
   glab = pkgs.callPackage ./glab {glab = prev.glab;};
   # No nixpkgs `claude` (it wraps `claude-code`). The nulls pin the "use the
   # bundled default" arguments so a same-named top-level package (e.g. `skills`)

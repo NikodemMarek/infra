@@ -12,7 +12,6 @@
 
         ".config/Google"
         ".config/JetBrains"
-        ".config/heroic"
         ".config/LM-Studio"
         ".config/LM Studio"
         ".lmstudio"

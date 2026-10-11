@@ -63,7 +63,7 @@ in {
       pkgs.lmstudio
 
       pkgs.prismlauncher
-      pkgs.heroic
+      (pkgs.heroic.override {dataDir = "${generated}/heroic";})
       pkgs.steam
       pkgs.lutris
       pkgs.wine
