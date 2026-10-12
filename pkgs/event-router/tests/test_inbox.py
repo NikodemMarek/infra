@@ -90,6 +90,31 @@ def test_add_prunes_expired() -> None:
     assert [i.id for i in inbox.items(10.0)] == [new]
 
 
+def test_same_type_and_key_replaces() -> None:
+    inbox = Inbox(["claude"])
+    inbox.add(ev("claude.waiting", key="s1", title="a"), 1.0)
+    other = inbox.add(ev("claude.waiting", key="s2"), 2.0)
+    new = inbox.add(ev("claude.waiting", key="s1", title="b"), 3.0)
+    items = inbox.items(4.0)
+    assert [i.id for i in items] == [other, new]
+    assert items[1].event.data["title"] == "b"
+
+
+def test_same_key_other_type_is_kept() -> None:
+    inbox = Inbox(["claude"])
+    a = inbox.add(ev("claude.waiting", key="s1"), 1.0)
+    b = inbox.add(ev("claude.question", key="s1"), 2.0)
+    assert [i.id for i in inbox.items(3.0)] == [a, b]
+
+
+@pytest.mark.parametrize("key", ["", 5, None])
+def test_empty_or_non_string_key_never_replaces(key: object) -> None:
+    inbox = Inbox(["claude"])
+    a = inbox.add(ev("claude.waiting", key=key), 1.0)
+    b = inbox.add(ev("claude.waiting", key=key), 2.0)
+    assert [i.id for i in inbox.items(3.0)] == [a, b]
+
+
 def test_remove() -> None:
     inbox = Inbox(["claude"])
     i = inbox.add(ev("claude.x"), 1.0)

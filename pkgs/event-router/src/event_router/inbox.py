@@ -2,7 +2,9 @@
 
 An event is queued when its type matches a configured prefix, and expires on
 its own when it says so: `timeout` (seconds since it was received) or `reply`
-(a path; the item is gone once the path is).
+(a path; the item is gone once the path is). An event with a non-empty string
+`key` replaces any queued item of the same type and key (a status re-sent every
+turn).
 """
 
 import os
@@ -41,6 +43,11 @@ def expired(item: Item, now: float) -> bool:
     return isinstance(reply, str) and reply != "" and not os.path.lexists(reply)
 
 
+def replaces(new: Event, old: Event) -> bool:
+    key = new.data.get("key")
+    return isinstance(key, str) and key != "" and new.type == old.type and old.data.get("key") == key
+
+
 class Inbox:
     """Thread-safe: the HTTP server calls it from request threads."""
 
@@ -59,6 +66,7 @@ class Inbox:
         item = Item(secrets.token_hex(8), now, event)
         with self._lock:
             self._prune(now)
+            self._items = [i for i in self._items if not replaces(event, i.event)]
             self._items.append(item)
             del self._items[:-CAP]
         return item.id

@@ -52,6 +52,13 @@ def test_queued_event_is_listed_and_deletable(base: str) -> None:
     assert inbox(base) == []
 
 
+def test_event_with_same_key_replaces_the_queued_one(base: str) -> None:
+    for title in ("a", "b"):
+        assert call("POST", f"{base}/events", {"type": "claude.waiting", "key": "s1", "title": title})[0] == 202
+    (item,) = inbox(base)
+    assert item["event"]["title"] == "b"
+
+
 def test_unqueued_event_without_handler_is_500(base: str) -> None:
     assert call("POST", f"{base}/events", {"type": "other.x"})[0] == 500
     assert inbox(base) == []
