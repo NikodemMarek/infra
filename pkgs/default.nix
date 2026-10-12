@@ -49,7 +49,7 @@
     notify = pkgs.callPackage ./event-handlers/notify {};
     notify-critical = pkgs.event-handlers.notify.override {urgency = "critical";};
     knowledge = pkgs.callPackage ./event-handlers/knowledge {};
-    # GitLab event -> Claude session in a zellij tab. No gitlab.* routes here (no
+    # GitLab event -> Claude session in a shpool session. No gitlab.* routes here (no
     # GitLab watcher): a layer that has one sets contextTool and adds the routes.
     claude = pkgs.callPackage ./event-handlers/claude {
       notify = pkgs.event-handlers.notify;

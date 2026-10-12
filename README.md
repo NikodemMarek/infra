@@ -19,7 +19,7 @@ host/
     global/            always on: networking, nix, openssh, sops
     optional/          opt-in features: k3s, tailscale, docker, libvirt, maintenance, ...
     disko/             disk layouts, parametrised by device (and swap size)
-modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-notifier.nix, flux-sops-age.nix, event-router.nix (the router user service and the knowledge curator timers)
+modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-notifier.nix, flux-sops-age.nix, event-router.nix (the router user service, the knowledge curator timers and the shpool user service)
 pkgs/                  wrapped packages (package + bundled config) and own tools (pkgs/agent-skills/skills: Agent Skills, shared by claude and agent-skills)
 overlays/              exposes pkgs/ (the wrapped packages, shadowing the nixpkgs ones, and the tools), flake inputs as packages, deploy-rs
 clusters/dijkstra/     Kubernetes manifests, reconciled by Flux
@@ -189,7 +189,7 @@ Own programs that are not wrappers of an upstream package. They are top-level at
 | `agent-inbox` | terminal UI over the router's queue (`claude.*` and `sudo.*` events): list, inspect, dismiss, answer sudo password requests (written to the askpass FIFO, never through the router) and Claude permission prompts and questions (written to the permission hook's FIFO); also `list`, `reply <id>`, `dismiss <id>` |
 | `event-handlers.notify` | router handler: desktop notification with an "Open" action (flake: `event-handler-notify`; `notify-critical` is its critical-urgency variant) |
 | `event-handlers.knowledge` | router handler for `knowledge.submit` and `knowledge.curate[.weekly]` (flake: `event-handler-knowledge`) |
-| `event-handlers.claude` | GitLab event → Claude session: opens a zellij tab with Claude in the project's checkout under `$HOME/<projectsDir>`; `contextTool` (a `gitlab-context prepare` compatible package, default none: plain Claude in the main checkout), `extraPackages`, the `gitlab.*` routes and the watcher are supplied by the work layer (flake: `event-handler-claude`) |
+| `event-handlers.claude` | GitLab event → Claude session: opens a shpool session (`shpool attach <name>`, 1-day TTL; the shpool user service comes from `services.event-router`) with Claude in the project's checkout under `$HOME/<projectsDir>`; `contextTool` (a `gitlab-context prepare` compatible package, default none: plain Claude in the main checkout), `extraPackages`, the `gitlab.*` routes and the watcher are supplied by the work layer (flake: `event-handler-claude`) |
 
 ## Infra
 

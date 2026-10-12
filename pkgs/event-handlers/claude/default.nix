@@ -2,12 +2,15 @@
   lib,
   writeShellApplication,
   writeText,
-  zellij,
+  runtimeShell,
+  shpool,
   jq,
   util-linux,
+  coreutils,
   glab,
   jujutsu,
   claude,
+  claude-hooks,
   # handler run first with the same event, e.g. a notification
   notify,
   name ? "default",
@@ -18,8 +21,9 @@
   # (`context_dir/prompt.md` is the prompt). null: no preparation, claude starts
   # in the main checkout with a prompt built from the event alone
   contextTool ? null,
-  # more tools on the PATH of the launcher and of the zellij server, e.g. CLIs
-  # the prompts or the context tool refer to
+  # more tools on the PATH of the launcher and of the handler (whose environment
+  # goes on into the shpool session), e.g. CLIs the prompts or the context tool
+  # refer to
   extraPackages ? [ ],
   # jq filter over the (gitlab) event producing the task text only: the context
   # tool, if any, appends the GitLab context (description, diff, threads, logs)
@@ -31,7 +35,6 @@
   '',
   # force a contextTool profile instead of letting it choose by event
   profile ? null,
-  session ? "claude-events",
   # relative to $HOME; the checkout is `<projectsDir>/<last segment of the project path>`
   projectsDir ? "projects",
 }:
@@ -94,7 +97,7 @@ let
     fi
   '';
 
-  # runs in the zellij tab: $1 = context dir, $2 = session lock, $3 = gitlab host,
+  # runs in the shpool session: $1 = context dir, $2 = session lock, $3 = gitlab host,
   # $4 = claude permission mode (default: ask for everything),
   # $5 = knowledge origin (`event:<type>`), exported so the knowledge CLI marks
   # what the session submits as untrusted
@@ -105,6 +108,7 @@ let
       claude
       util-linux
       glab
+      jq
     ] ++ extraPackages;
     # --add-dir is variadic and would swallow a following positional: keep an option after it
     text = ''
@@ -117,30 +121,34 @@ let
         *) perm=default ;;
       esac
 
-      # no exec: if another session holds the lock for too long, say so in the tab
+      # no exec: if another session holds the lock for too long, say so (in the
+      # session and as an event; no SHPOOL_SESSION_NAME: this session is gone
+      # right after, there is nothing to attach to)
       status=0
       flock -o -w 30 -E 75 "$2" claude --add-dir "$1" --permission-mode "$perm" "$(cat "$1/prompt.md")" || status=$?
       if [[ "$status" == 75 ]]; then
-        echo "event-claude-launch: another claude session still holds $2 after 30s, not starting." >&2
-        echo "Press Enter to close this tab; the prompt is in $1/prompt.md" >&2
-        read -r
+        msg="another claude session still holds $2 after 30s, not starting; the prompt is in $1/prompt.md"
+        echo "event-claude-launch: $msg" >&2
+        jq -n --arg cwd "$PWD" --arg title "$msg" '{cwd: $cwd, title: $title, timeout: 86400}' |
+          SHPOOL_SESSION_NAME="" ${lib.getExe' claude-hooks "claude-route-event"} claude.not_started >&2 || true
       fi
       exit "$status"
     '';
   };
 in
 # event handler: notify, then (with a contextTool) prepare a workspace and the
-# GitLab context, and open a zellij tab there running Claude with edits
-# auto-approved in the workspace (everything else still asks). Without a
-# contextTool the tab runs a plain claude in the main checkout, asking for
-# everything.
+# GitLab context, and open a shpool session there (`shpool attach <name>`)
+# running Claude with edits auto-approved in the workspace (everything else
+# still asks). Without a contextTool the session runs a plain claude in the
+# main checkout, asking for everything.
 writeShellApplication {
   name = "event-handler-claude-${name}";
-  # glab, extraPackages: a zellij server started from here passes its PATH on to Claude
+  # glab, extraPackages: the environment, PATH included, goes into the shpool session via the job script
   runtimeInputs = [
-    zellij
+    shpool
     jq
     util-linux
+    coreutils
     glab
     claude
   ] ++ extraPackages;
@@ -165,7 +173,7 @@ writeShellApplication {
       echo "empty prompt" >&2
       exit 1
     fi
-    tab=$(jq -r --arg repo "$repo" '"\($repo)\(if .target_iid then "!\(.target_iid)" else "" end) \(.type | split(".") | last)"' <<<"$event")
+    name=$(jq -r --arg repo "$repo" '"\($repo)\(if .target_iid then "-\(.target_iid)" else "" end)-\(.type | split(".") | last)" | gsub("[^A-Za-z0-9_.-]"; "-")' <<<"$event")
     host=$(jq -r '.host // ""' <<<"$event")
     # the router sets ER_TYPE; sessions started here submit knowledge as untrusted
     origin="event:''${ER_TYPE:-unknown}"
@@ -193,7 +201,7 @@ writeShellApplication {
       if [[ "$prepared" == 1 ]]; then
         echo "context: $context_dir"
       fi
-      echo "tab: $tab"
+      echo "session: $name"
       printf 'command:'
       printf ' %q' "''${cmd[@]}"
       printf '\n'
@@ -202,21 +210,33 @@ writeShellApplication {
       exit 0
     fi
 
-    if ! zellij list-sessions --no-formatting 2>/dev/null | grep -v EXITED | grep -q '^${session} '; then
-      zellij attach --create-background ${lib.escapeShellArg session}
+    if [[ -z "''${TERM:-}" || "$TERM" == dumb ]]; then export TERM=xterm-256color; fi
+    export COLORTERM=truecolor
+    rundir=''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+    # concurrent events must not pick the same name; fd 9 is closed for the
+    # shpool calls so nothing they start can hold the lock
+    exec 9>"$rundir/event-claude.lock"
+    flock -w 30 9 || { echo "cannot lock $rundir/event-claude.lock" >&2; exit 1; }
+    # --no-daemonize: an auto-started daemon would lack the service's config
+    existing=$(shpool --no-daemonize list </dev/null 9>&-) || { echo "shpool list failed (is shpool.socket running?)" >&2; exit 1; }
+    taken() { local n _; while read -r n _; do [[ "$n" == "$1" ]] && return 0; done <<<"$existing"; return 1; }
+    base=$name; i=2
+    while taken "$name"; do name="$base-$i"; i=$((i + 1)); done
+    # the prompt and the environment go only into this 0600 file, never through
+    # shpool's shell-words-split -c; the script removes itself when it starts
+    # (shpool starts it without a usable PATH, hence the absolute rm)
+    job=$(mktemp "$rundir/event-claude-XXXXXX")
+    {
+      # shellcheck disable=SC2016
+      printf '%s\n' '${coreutils}/bin/rm -f -- "$0"'
+      export -p
+      printf 'export SHPOOL_SESSION_NAME=%q\n' "$name"
+      printf 'cd -- %q || exit 1\n' "$workdir"
+      printf 'exec'; printf ' %q' "''${cmd[@]}"; printf '\n'
+    } >"$job"
+    if ! shpool --no-daemonize attach -b --ttl 1d -d "$workdir" -c "${runtimeShell} $job" "$name" </dev/null 9>&-; then
+      rm -f -- "$job"; echo "shpool attach failed for session $name" >&2; exit 1
     fi
-
-    # a session with no client attached has no size, so new-tab can't place
-    # the pane ("Not enough room for panes"); attach a headless client in a
-    # pty while opening the tab. It is large so it never shrinks a real client.
-    script -qfec "stty cols 400 rows 120; exec zellij attach ${lib.escapeShellArg session}" /dev/null \
-      </dev/null >/dev/null 2>&1 &
-    client=$!
-    trap 'kill "$client" 2>/dev/null || true' EXIT
-    sleep 1
-
-    zellij --session ${lib.escapeShellArg session} action new-tab --name "$tab" --cwd "$workdir" -- \
-      "''${cmd[@]}" >/dev/null
-    sleep 1
+    echo "started shpool session $name (shpool attach $name)" >&2
   '';
 }
