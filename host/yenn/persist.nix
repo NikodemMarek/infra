@@ -19,7 +19,6 @@
         ".local/share/claude"
         ".local/share/nvim"
         ".local/share/fish"
-        ".local/share/PrismLauncher"
         ".local/share/Steam"
 
         # Hardcoded paths, can't be relocated

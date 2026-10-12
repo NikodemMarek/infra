@@ -62,7 +62,7 @@ in {
       pkgs.libreoffice
       pkgs.lmstudio
 
-      pkgs.prismlauncher
+      (pkgs.prismlauncher.override {dataDir = "${generated}/prismlauncher";})
       (pkgs.heroic.override {dataDir = "${generated}/heroic";})
       pkgs.steam
       pkgs.lutris
