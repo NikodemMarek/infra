@@ -185,7 +185,7 @@ Own programs that are not wrappers of an upstream package. They are top-level at
 | `claude-hooks` | hook commands of claude: write/bash guards, architect memory autocommit, event routing and sudo askpass, jj workspaces for agents |
 | `claude-statusline` | claude's status line |
 | `agent-skills` | `pkgs/agent-skills/skills/` in the Agent Skills format, to link into the skills directory of other tools (OpenCode, ...) |
-| `event-router` | local HTTP inbox (`event-router emit <type>`) that runs a handler per event type; runs as a systemd user service via the `services.event-router` module. Handlers are the `handlers` argument, extend it with `.override` |
+| `event-router` | local HTTP inbox (`event-router emit <type>`) that runs a handler per event type; runs as a systemd user service via the `services.event-router` module. Handlers are the `handlers` argument, extend it with `.override`. Event types listed in the `inbox` argument (prefixes) are also queued in memory: `GET /inbox`, `DELETE /inbox/<id>` |
 | `event-handlers.notify` | router handler: desktop notification with an "Open" action (flake: `event-handler-notify`; `notify-critical` is its critical-urgency variant) |
 | `event-handlers.knowledge` | router handler for `knowledge.submit` and `knowledge.curate[.weekly]` (flake: `event-handler-knowledge`) |
 | `event-handlers.claude` | GitLab event → Claude session: opens a zellij tab with Claude in the project's checkout under `$HOME/<projectsDir>`; `contextTool` (a `gitlab-context prepare` compatible package, default none: plain Claude in the main checkout), `extraPackages`, the `gitlab.*` routes and the watcher are supplied by the work layer (flake: `event-handler-claude`) |

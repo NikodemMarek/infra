@@ -2,7 +2,7 @@
 
 import json
 import sys
-from typing import cast
+from typing import NoReturn, cast
 
 type Json = None | bool | int | float | str | list[Json] | dict[str, Json]
 type Obj = dict[str, Json]
@@ -12,11 +12,19 @@ class ParseError(Exception):
     pass
 
 
+def _reject_constant(name: str) -> NoReturn:
+    raise ParseError(f"invalid json: {name} is not allowed")
+
+
 def loads(data: str | bytes) -> Json:
+    """Strict: NaN/Infinity and text that cannot be encoded as UTF-8 (lone surrogates)
+    are refused, as consumers of `dumps` (the inbox API) could not handle them."""
     try:
-        return cast(Json, json.loads(data))
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        value = cast(Json, json.loads(data, parse_constant=_reject_constant))
+        dumps(value).encode()
+    except (json.JSONDecodeError, UnicodeError) as e:
         raise ParseError(f"invalid json: {e}") from e
+    return value
 
 
 def dumps(value: Json) -> str:

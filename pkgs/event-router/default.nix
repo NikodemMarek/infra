@@ -5,6 +5,9 @@
   # event type -> package whose main program handles it. An event goes to its
   # type, else the nearest prefix ("gitlab.note" -> "gitlab"), else `default`.
   handlers ? { },
+  # event type prefixes ("claude" matches "claude" and "claude.question") whose
+  # events are also queued in the in-memory inbox (GET /inbox, DELETE /inbox/<id>)
+  inbox ? [ ],
   port ? 7531,
 }:
 
@@ -27,6 +30,7 @@ python3Packages.buildPythonApplication {
     fileset = lib.fileset.unions [
       ./pyproject.toml
       ./src
+      ./tests
     ];
   };
 
@@ -38,10 +42,16 @@ python3Packages.buildPythonApplication {
     MYPY_CACHE_DIR="$TMPDIR/mypy" mypy
   '';
 
+  nativeCheckInputs = [ python3Packages.pytestCheckHook ];
+  pythonImportsCheck = [ "event_router" ];
+
   makeWrapperArgs = [
     "--set"
     "EVENT_ROUTER_HANDLERS"
     "${handlersDir}"
+    "--set"
+    "EVENT_ROUTER_INBOX"
+    (lib.escapeShellArg (lib.concatStringsSep " " inbox))
     "--set"
     "EVENT_ROUTER_PORT"
     (toString port)
@@ -50,7 +60,7 @@ python3Packages.buildPythonApplication {
     url
   ];
 
-  passthru = { inherit handlers handlersDir url; };
+  passthru = { inherit handlers handlersDir inbox url; };
 
   meta = {
     description = "Receive events over HTTP and dispatch them to handlers";

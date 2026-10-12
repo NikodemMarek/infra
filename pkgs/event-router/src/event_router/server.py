@@ -1,33 +1,50 @@
-"""HTTP inbox: `POST /events` with a JSON event, `GET /health`."""
+"""HTTP API: `POST /events` with a JSON event (dispatched to a handler and/or
+queued in the inbox), `GET /inbox`, `DELETE /inbox/<id>`, `GET /health`."""
 
 import logging
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .data import ParseError, loads
+from .data import ParseError, dumps, loads
 from .event import Event
 from .handlers import Dispatcher
+from .inbox import Inbox
 
 log = logging.getLogger(__name__)
 
 MAX_BODY = 1 << 20
 REAP_INTERVAL = 5.0
+INBOX_PATH = "/inbox"
 
 
-def _handler(dispatcher: Dispatcher) -> type[BaseHTTPRequestHandler]:
+def _handler(dispatcher: Dispatcher, inbox: Inbox) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
-        def _reply(self, code: int, msg: str) -> None:
-            body = (msg + "\n").encode()
+        def _send(self, code: int, body: bytes, content_type: str) -> None:
             self.send_response(code)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
+        def _reply(self, code: int, msg: str) -> None:
+            self._send(code, (msg + "\n").encode(), "text/plain; charset=utf-8")
+
         def do_GET(self) -> None:
             if self.path == "/health":
                 self._reply(200, "ok")
+            elif self.path == INBOX_PATH:
+                body = dumps([i.to_json() for i in inbox.items(time.time())])
+                self._send(200, body.encode(), "application/json")
+            else:
+                self._reply(404, "not found")
+
+        def do_DELETE(self) -> None:
+            prefix = INBOX_PATH + "/"
+            if self.path.startswith(prefix) and inbox.remove(self.path[len(prefix) :]):
+                # 204 carries no body, Content-Length or Content-Type
+                self.send_response(204)
+                self.end_headers()
             else:
                 self._reply(404, "not found")
 
@@ -47,7 +64,9 @@ def _handler(dispatcher: Dispatcher) -> type[BaseHTTPRequestHandler]:
             except ParseError as e:
                 self._reply(400, str(e))
                 return
-            if dispatcher.dispatch(event):
+            queued = inbox.add(event, time.time()) is not None
+            dispatched = dispatcher.dispatch(event)
+            if queued or dispatched:
                 self._reply(202, "accepted")
             else:
                 self._reply(500, f"no runnable handler for {event.describe()}")
@@ -65,8 +84,12 @@ def _reaper(dispatcher: Dispatcher) -> None:
         dispatcher.reap()
 
 
-def serve(port: int, dispatcher: Dispatcher) -> None:
-    server = ThreadingHTTPServer(("127.0.0.1", port), _handler(dispatcher))
+def make_server(port: int, dispatcher: Dispatcher, inbox: Inbox) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer(("127.0.0.1", port), _handler(dispatcher, inbox))
+
+
+def serve(port: int, dispatcher: Dispatcher, inbox: Inbox) -> None:
+    server = make_server(port, dispatcher, inbox)
     threading.Thread(target=_reaper, args=(dispatcher,), daemon=True).start()
     log.info("listening on 127.0.0.1:%d", port)
     try:

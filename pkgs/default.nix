@@ -58,6 +58,8 @@
   # `handlers` stays explicit so `.override (old: {handlers = old.handlers // ...})`
   # can extend it.
   event-router = pkgs.callPackage ./event-router {
+    # queued as well as handled; agent-inbox reads the queue
+    inbox = ["claude" "sudo"];
     handlers = {
       default = pkgs.event-handlers.notify;
       knowledge = pkgs.event-handlers.knowledge;

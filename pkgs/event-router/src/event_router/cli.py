@@ -11,6 +11,7 @@ from pathlib import Path
 from .data import Obj, ParseError, as_obj, loads, read_stdin
 from .event import Event
 from .handlers import Dispatcher
+from .inbox import Inbox
 from .server import serve
 
 log = logging.getLogger("event-router")
@@ -82,6 +83,7 @@ def main() -> None:
 
     handlers = os.environ.get("EVENT_ROUTER_HANDLERS")
     try:
-        serve(_port(), Dispatcher(Path(handlers) if handlers else None))
+        inbox = Inbox(os.environ.get("EVENT_ROUTER_INBOX", "").split())
+        serve(_port(), Dispatcher(Path(handlers) if handlers else None), inbox)
     except KeyboardInterrupt:
         pass
