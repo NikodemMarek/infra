@@ -140,6 +140,20 @@ let
     ];
   };
 
+  # Stop hook: tells the user an event-started session waits for them (claude.waiting).
+  stopHook = shellHook {
+    name = "claude-stop-hook";
+    src = ./stop-hook.sh;
+    runtimeInputs = [
+      jq
+      routeEvent
+    ];
+    bashOptions = [
+      "nounset"
+      "pipefail"
+    ];
+  };
+
   jjWorkspace = stdenvNoCC.mkDerivation {
     pname = "claude-jj-workspace";
     version = "0.1.0";
@@ -174,11 +188,12 @@ symlinkJoin {
     routeEvent
     askpass
     permissionHook
+    stopHook
     jjWorkspace
   ];
 
   meta = {
-    description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), jj workspaces for isolated agents";
+    description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop hook of event-started sessions, jj workspaces for isolated agents";
     platforms = lib.platforms.unix;
   };
 }

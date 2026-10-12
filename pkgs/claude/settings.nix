@@ -42,6 +42,19 @@
         ];
       }
     ];
+    # Event-started sessions only (the hook checks KNOWLEDGE_ORIGIN): tells the user the session waits.
+    # Permission prompts and questions are already routed by PermissionRequest.
+    Stop = [
+      {
+        hooks = [
+          {
+            type = "command";
+            command = "claude-stop-hook || true";
+            timeout = 10;
+          }
+        ];
+      }
+    ];
     WorktreeCreate = [
       {
         hooks = [
