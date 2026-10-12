@@ -21,7 +21,9 @@ writeShellApplication {
     summary=$(jq -r '"\(.project // .host): \(.type | split(".") | last | gsub("_"; " "))"' <<<"$event")
     # notification bodies are markup, hence @html
     body=$(jq -r '
-      [ .title, (if .author then "by @\(.author)" else empty end), ((.body // "") | .[0:300]) ]
+      [ .title, (if .author then "by @\(.author)" else empty end),
+        (if (.shpool | type) == "string" and .shpool != "" then "shpool attach \(.shpool)" else empty end),
+        ((.body // "") | .[0:300]) ]
       | map(select(. != null and . != "") | @html) | join("\n")
     ' <<<"$event")
     url=$(jq -r '.url // ""' <<<"$event")

@@ -59,6 +59,11 @@ impl Item {
         self.field("session_id")
     }
 
+    /// The shpool session the event comes from (`shpool attach <name>`), "" if there is none.
+    pub fn shpool(&self) -> &str {
+        self.field("shpool")
+    }
+
     pub fn prompt(&self) -> &str {
         self.field("prompt")
     }

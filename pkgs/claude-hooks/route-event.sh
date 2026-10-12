@@ -1,11 +1,12 @@
 # Usage: claude-route-event [type]   (stdin: JSON object)
 # Posts the object as an event to the event router. Without a type, derives one from a
 # PermissionRequest hook payload: AskUserQuestion -> claude.question, else claude.permission_request.
-# Adds `jj` (the output of `jw info` in the cwd) when available.
+# Adds `jj` (the output of `jw info` in the cwd) when available,
+# and `shpool` (the shpool session name) when run inside one.
 # Never writes to stdout (Claude parses hook stdout as a decision) and never exits 2 (blocking code).
 # Deliberately no errexit (the package sets only nounset + pipefail): every failure maps to exit 1.
 url="${EVENT_ROUTER_URL:-http://127.0.0.1:7531}"
-payload="$(jq -c --arg t "${1:-}" '
+payload="$(jq -c --arg t "${1:-}" --arg sh "${SHPOOL_SESSION_NAME:-}" '
   (if $t != "" then $t
    elif .tool_name == "AskUserQuestion" then "claude.question"
    else "claude.permission_request" end) as $type
@@ -14,6 +15,7 @@ payload="$(jq -c --arg t "${1:-}" '
       project: ((.cwd // "") | split("/") | last),
       title: (.title // .tool_input.questions[0].question? // .tool_input.command? // .tool_input.file_path? // .tool_name // $type)
     }
+  + (if $sh != "" then {shpool: $sh} else {} end)
 ')" || {
   echo "claude-route-event: invalid input" >&2
   exit 1

@@ -706,6 +706,7 @@ fn badge(kind: &str) -> (String, Style) {
         "sudo.password_request" => ("SUDO".into(), strong(Color::Red)),
         "claude.permission_request" => ("PERM".into(), strong(Color::Yellow)),
         "claude.question" => ("ASK".into(), strong(Color::Cyan)),
+        "claude.waiting" => ("WAIT".into(), strong(Color::Green)),
         other => (
             truncate(&clean(other.rsplit('.').next().unwrap_or("")), BADGE_WIDTH),
             dim(),
@@ -773,7 +774,11 @@ fn detail_view(app: &App, item: &Item) -> Vec<Line<'static>> {
         Some(line) => ("jj", line.as_str()),
         None => ("cwd", item.cwd()),
     };
-    for (label, value) in [location, ("agent", item.agent_type())] {
+    for (label, value) in [
+        location,
+        ("agent", item.agent_type()),
+        ("shpool", item.shpool()),
+    ] {
         if !value.is_empty() {
             lines.push(Line::styled(format!("{label}: {}", clean(value)), dim()));
         }
@@ -789,7 +794,9 @@ fn detail_view(app: &App, item: &Item) -> Vec<Line<'static>> {
     lines.push(match action(item) {
         Some(_) => Line::from(hint_spans(&action_hints(item), " · ")),
         None => {
-            let why = if item.kind().starts_with("claude.") && item.reply().is_none() {
+            let why = if matches!(item.kind(), "claude.permission_request" | "claude.question")
+                && item.reply().is_none()
+            {
                 "read-only — that session's hook isn't waiting for an answer (CLAUDE_INBOX_WAIT=0, an older session, or it timed out)"
             } else {
                 "read-only"
@@ -1957,6 +1964,17 @@ mod tests {
         a.on_key(code(KeyCode::Enter));
         assert_eq!(a.on_key(key('n')), Effect::None);
         assert!(screen(&a).contains("read-only"));
+    }
+
+    #[test]
+    fn waiting_item_shows_its_shpool_session_and_plain_read_only() {
+        let mut w = claude("w", "claude.waiting", "", None, json!({}));
+        w.event["shpool"] = json!("x");
+        let s = screen(&app(vec![w]));
+        assert!(s.contains("WAIT"), "{s}");
+        assert!(s.contains("shpool: x"), "{s}");
+        assert!(s.contains("read-only"), "{s}");
+        assert!(!s.contains("hook isn't waiting"), "{s}");
     }
 
     #[test]
