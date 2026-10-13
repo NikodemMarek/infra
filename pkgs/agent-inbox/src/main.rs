@@ -8,9 +8,12 @@
 //!                            (sudo: the password; claude.*: a JSON decision such as
 //!                            {"behavior":"allow"}, see ADR-025)
 //!   agent-inbox dismiss <id>
+//!   agent-inbox sessions     live Claude sessions: pid, status, age of the status, shpool session,
+//!                            place, session id (TSV, newest first; read from the session registry)
 
 mod client;
 mod reply;
+mod sessions;
 mod tui;
 
 use std::env;
@@ -22,7 +25,7 @@ use client::{clean, Result};
 use reply::ReplyError;
 use serde_json::Value;
 
-const USAGE: &str = "usage: agent-inbox [list | reply <id> | dismiss <id>]";
+const USAGE: &str = "usage: agent-inbox [list | reply <id> | dismiss <id> | sessions]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -32,6 +35,7 @@ fn main() -> ExitCode {
         ["list"] => list(),
         ["reply", id] => answer(id),
         ["dismiss", id] => dismiss(id),
+        ["sessions"] => sessions(),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -78,6 +82,25 @@ fn list() -> Result<()> {
             clean(item.kind()),
             clean(item.project()),
             clean(item.title())
+        )?;
+    }
+    Ok(())
+}
+
+fn sessions() -> Result<()> {
+    let dir = sessions::config_dir().join("sessions");
+    let now = client::now();
+    let mut out = io::stdout().lock();
+    for s in sessions::load(&dir, Path::new("/proc")) {
+        writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            s.pid,
+            clean(&s.status),
+            client::age(s.status_at, now),
+            clean(&s.shpool),
+            clean(&s.place()),
+            clean(&s.session_id)
         )?;
     }
     Ok(())

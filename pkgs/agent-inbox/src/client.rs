@@ -188,12 +188,17 @@ impl Item {
 
     /// `5s`, `3m`, `2h`
     pub fn age(&self, now: f64) -> String {
-        let secs = (now - self.received).max(0.0) as u64;
-        match secs {
-            0..=59 => format!("{secs}s"),
-            60..=3599 => format!("{}m", secs / 60),
-            _ => format!("{}h", secs / 3600),
-        }
+        age(self.received, now)
+    }
+}
+
+/// How long ago `since` was (seconds since the epoch): `5s`, `3m`, `2h`
+pub fn age(since: f64, now: f64) -> String {
+    let secs = (now - since).max(0.0) as u64;
+    match secs {
+        0..=59 => format!("{secs}s"),
+        60..=3599 => format!("{}m", secs / 60),
+        _ => format!("{}h", secs / 3600),
     }
 }
 
