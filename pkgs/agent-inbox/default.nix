@@ -1,6 +1,8 @@
 {
   lib,
   rustPlatform,
+  makeWrapper,
+  jw,
 }:
 
 rustPlatform.buildRustPackage {
@@ -18,8 +20,16 @@ rustPlatform.buildRustPackage {
 
   cargoLock.lockFile = ./Cargo.lock;
 
+  nativeBuildInputs = [makeWrapper];
+
+  # `N` in the sessions view runs `jw agent -d`; a jw of the user's own PATH wins. zellij and
+  # shpool come from PATH too: they must match the running server and daemon.
+  postInstall = ''
+    wrapProgram $out/bin/agent-inbox --suffix PATH : ${lib.makeBinPath [jw]}
+  '';
+
   meta = {
-    description = "Terminal UI over the event router's queue: inspect agent events, answer sudo password requests and Claude permission prompts and questions";
+    description = "Terminal UI over the event router's queue and Claude's live sessions: inspect agent events, answer sudo password requests and Claude permission prompts and questions, attach to, kill and start agents";
     mainProgram = "agent-inbox";
   };
 }

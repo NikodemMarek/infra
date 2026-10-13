@@ -371,7 +371,7 @@ def cmd_agent(a):
         sys.exit(status)  # attached: shpool exits with the session's status, e.g. claude's
     if status != 0:
         raise Fail(f"shpool attach failed for session {name}")
-    sys.stderr.write(f"shpool attach {name}\n")
+    sys.stderr.write(f"shpool attach {name}\n")  # agent-inbox parses this line (its `N`)
 
 
 def cmd_info(a):

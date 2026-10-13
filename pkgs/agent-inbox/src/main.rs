@@ -1,6 +1,7 @@
 //! agent-inbox: terminal UI over the event router's queue (see ADR-023): inspect events, answer
 //! sudo password requests and, via the permission hook, Claude permission prompts and
-//! questions (ADR-025).
+//! questions (ADR-025); `S` shows the live Claude sessions (attach, kill, start a new one;
+//! `jw` must be on PATH, the Nix package adds it).
 //!
 //!   agent-inbox              interactive UI
 //!   agent-inbox list         id, age, type, project, title (TSV, newest first)

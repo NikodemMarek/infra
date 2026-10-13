@@ -3,7 +3,8 @@
 //!
 //! Layout: a header line, the list of items next to (below, on narrow terminals) a detail pane
 //! for the selected item, and a footer with key hints or the last status message. `S` switches
-//! to the same layout over the live Claude sessions (list and detail of the selected session).
+//! to the same layout over the live Claude sessions (list and detail of the selected session),
+//! where `N` starts a new agent (`jw agent -d`).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -11,6 +12,10 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -64,6 +69,8 @@ enum Effect {
         pid: u32,
         start: u64,
     },
+    /// Start a new agent with `jw agent -d` (needs the terminal: done by `event_loop`).
+    NewAgent,
 }
 
 #[derive(Default)]
@@ -467,6 +474,7 @@ impl App {
                 ),
                 None => {}
             },
+            KeyCode::Char('N') => return Effect::NewAgent,
             _ => {}
         }
         Effect::None
@@ -771,6 +779,7 @@ impl App {
                     h.push(("x", "kill"));
                 }
             }
+            h.push(("N", "new"));
             h.push(("S", "inbox"));
             h.push(("q", "quit"));
             return h;
@@ -1598,6 +1607,11 @@ fn event_loop(
                 if key.kind == KeyEventKind::Press {
                     app.now = client::now(); // not the time of the draw: the guard is timed
                     let effect = app.on_key(key);
+                    if effect == Effect::NewAgent {
+                        new_agent(terminal, &mut app)?;
+                        refreshed = None; // a new session shows up in the registry
+                        continue;
+                    }
                     if perform(&mut app, effect, base, runtime, sessions_dir) {
                         return Ok(());
                     }
@@ -1642,6 +1656,7 @@ fn perform(
             return false;
         }
         Effect::Kill { pid, start } => kill(app, base, pid, start),
+        Effect::NewAgent => return false, // needs the terminal: `event_loop` does it
     }
     refresh(app, base, sessions_dir);
     false
@@ -1731,6 +1746,60 @@ fn attach(app: &mut App, name: &str) {
     if let Err(e) = result {
         app.notify(e, true);
     }
+}
+
+/// The shpool session name from the last `shpool attach <name>` line of the stderr of
+/// `jw agent -d` (which prints it when the session is started).
+fn started_session(stderr: &str) -> Option<String> {
+    stderr
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("shpool attach "))
+        .map(str::trim)
+        .rfind(|name| !name.is_empty())
+        .map(String::from)
+}
+
+/// Starts a new agent: leaves the TUI's screen for `jw agent -d` (it asks for the repo with
+/// fzf, which draws on /dev/tty; the cwd `/` makes it always ask), then goes to the session.
+/// jw's stderr is captured for the name of the session and the reason of a failure.
+fn new_agent(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
+    // what `ratatui::init` and `restore` do, without their panic hook
+    disable_raw_mode()?;
+    execute!(io::stdout(), LeaveAlternateScreen)?;
+    let output = Command::new("jw")
+        .args(["agent", "-d"])
+        .current_dir("/")
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::piped())
+        .output();
+    execute!(io::stdout(), EnterAlternateScreen)?;
+    enable_raw_mode()?;
+    // SAFETY: tcflush only takes integers; it drops what was typed after fzf exited, which
+    // would otherwise reach the TUI as commands.
+    unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH) };
+    terminal.clear()?;
+    app.now = client::now(); // fzf may have taken a while: the status starts now
+    let output = match output {
+        Ok(output) => output,
+        Err(e) => {
+            app.notify(format!("jw: {e}"), true);
+            return Ok(());
+        }
+    };
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    match started_session(&stderr).filter(|_| output.status.success()) {
+        Some(name) if std::env::var_os("ZELLIJ").is_some() => attach(app, &name),
+        Some(name) => app.notify(format!("started {name} (shpool attach {name})"), false),
+        None if output.status.success() => {
+            app.notify("jw agent -d: no session name in its output", true);
+        }
+        None => match stderr.lines().map(str::trim).rfind(|l| !l.is_empty()) {
+            Some(why) => app.notify(why, true),
+            None => app.notify("cancelled", false), // e.g. Esc in fzf: not an error
+        },
+    }
+    Ok(())
 }
 
 fn dismiss(app: &mut App, base: &str, id: &str) {
@@ -3775,6 +3844,55 @@ mod tests {
         for pid in [0, u32::MAX, i32::MAX as u32 + 1] {
             let err = terminate(proc, pid, Some(1)).unwrap_err();
             assert!(err.contains("invalid pid"), "{pid}: {err}");
+        }
+    }
+
+    // --- new agent
+
+    #[test]
+    fn capital_n_starts_a_new_agent_in_the_sessions_view_only() {
+        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        assert!(screen(&a).contains("N new"));
+        assert_eq!(a.on_key(key('N')), Effect::NewAgent);
+        assert!(matches!(a.mode, Mode::List));
+        // without sessions too
+        let mut a = sessions_app(vec![], vec![]);
+        assert!(screen(&a).contains("N new"));
+        assert_eq!(a.on_key(key('N')), Effect::NewAgent);
+        // the inbox view ignores it
+        let mut a = app(vec![question("a", 990.0)]);
+        a.set_sessions(vec![session(1, "s-a", "idle")]);
+        assert!(!screen(&a).contains("N new"));
+        assert_eq!(a.on_key(key('N')), Effect::None);
+    }
+
+    #[test]
+    fn started_session_is_the_name_of_the_last_shpool_attach_line() {
+        assert_eq!(started_session("shpool attach jw-1\n"), Some("jw-1".into()));
+        // noise before and after, trailing whitespace and carriage return
+        assert_eq!(
+            started_session("jw: fetch failed, continuing\n  shpool attach jw-2 \t\r\nbye\n"),
+            Some("jw-2".into())
+        );
+        // the last one wins
+        assert_eq!(
+            started_session("shpool attach jw-1\nshpool attach jw-3\nnoise\n"),
+            Some("jw-3".into())
+        );
+        assert_eq!(
+            started_session("no newline\nshpool attach jw-4"),
+            Some("jw-4".into())
+        );
+        // not the line: other text around it, another command, no name
+        for stderr in [
+            "",
+            "jw: no match\n",
+            "run shpool attach jw-1\n",
+            "shpool attach\n",
+            "shpool attach  \n",
+            "shpool list jw-1\n",
+        ] {
+            assert_eq!(started_session(stderr), None, "{stderr:?}");
         }
     }
 }
