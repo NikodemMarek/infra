@@ -14,14 +14,11 @@ pub struct Session {
     pub pid: u32,
     pub session_id: String,
     pub cwd: String,
-    #[allow(dead_code)] // read by the sessions view
     pub name: String,
     /// `busy`, `idle`, `waiting`, ...; "" if the registry has none.
     pub status: String,
     /// What a `waiting` session waits for (`permission prompt`), "" otherwise.
-    #[allow(dead_code)] // read by the sessions view
     pub waiting_for: String,
-    #[allow(dead_code)] // read by the sessions view
     pub kind: String,
     pub started_at: f64,
     /// When the status last changed.

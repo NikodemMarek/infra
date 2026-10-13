@@ -65,7 +65,8 @@ fn runtime_dir() -> PathBuf {
 
 fn run_tui() -> Result<()> {
     let base = client::base()?;
-    tui::run(&base, Some(runtime_dir().as_path()))?;
+    let sessions_dir = sessions::config_dir().join("sessions");
+    tui::run(&base, Some(runtime_dir().as_path()), &sessions_dir)?;
     Ok(())
 }
 

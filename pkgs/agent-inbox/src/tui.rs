@@ -2,7 +2,8 @@
 //! to carry out), `render` draws it, `run` is the loop around the router client.
 //!
 //! Layout: a header line, the list of items next to (below, on narrow terminals) a detail pane
-//! for the selected item, and a footer with key hints or the last status message.
+//! for the selected item, and a footer with key hints or the last status message. `S` switches
+//! to the same layout over the live Claude sessions (list and detail of the selected session).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ use serde_json::{json, Map, Value};
 
 use crate::client::{self, clean, Item, Question};
 use crate::reply::{self, ReplyError};
+use crate::sessions::{self, Session};
 
 const POLL: Duration = Duration::from_millis(250);
 const REFRESH: Duration = Duration::from_secs(1);
@@ -36,6 +38,8 @@ const LIST_MIN_WIDTH: u16 = 30;
 /// Width of the kind badge column in the list.
 const BADGE_WIDTH: usize = 5;
 const PROJECT_MAX_WIDTH: usize = 24;
+/// The status of a session that waits for the user.
+const WAITING: &str = "waiting";
 /// Longest multi-line value (a command, ...) shown in the detail pane.
 const MAX_LINES: usize = 40;
 
@@ -93,14 +97,30 @@ struct Status {
     at: f64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum View {
+    /// The inbox items.
+    #[default]
+    Inbox,
+    /// The live Claude sessions (the mode is `List`).
+    Sessions,
+}
+
 #[derive(Default)]
 struct App {
+    view: View,
     /// Newest first.
     items: Vec<Item>,
     /// Index into `visible()`.
     selected: usize,
     /// Show only the items of this Claude session.
     session: Option<String>,
+    /// The session view was entered from the sessions list: leaving it returns there.
+    from_sessions: bool,
+    /// Newest first.
+    sessions: Vec<Session>,
+    /// Index into `sessions`.
+    session_sel: usize,
     /// When (`now`) and by which key an item (or the next question) was opened, see `KEY_GUARD`.
     guard: Option<(f64, KeyCode)>,
     mode: Mode,
@@ -178,6 +198,7 @@ impl App {
         // widen to all items; the next refresh ends it).
         if self.visible().is_empty() && !matches!(self.mode, Mode::ConfirmDismissAll) {
             self.session = None;
+            self.session_ended();
         }
         self.select_id(followed);
         // The mode is kept even if the open item is gone: switching to the list would turn the
@@ -216,6 +237,42 @@ impl App {
         let followed = self.selected_item().map(|i| i.id.clone());
         self.session = session;
         self.select_id(followed);
+        if self.session.is_none() {
+            self.session_ended();
+        }
+    }
+
+    /// After the session view ended: back to the sessions list if it was entered from there
+    /// (not while an item is open: the list is not in focus).
+    fn session_ended(&mut self) {
+        if std::mem::take(&mut self.from_sessions) && matches!(self.mode, Mode::List) {
+            self.view = View::Sessions;
+        }
+    }
+
+    /// The live sessions as `sessions::load` returns them. The selection follows its pid.
+    fn set_sessions(&mut self, sessions: Vec<Session>) {
+        let followed = self.selected_session().map(|s| s.pid);
+        self.sessions = sessions;
+        self.session_sel = followed
+            .and_then(|pid| self.sessions.iter().position(|s| s.pid == pid))
+            .unwrap_or(self.session_sel)
+            .min(self.sessions.len().saturating_sub(1));
+    }
+
+    fn selected_session(&self) -> Option<&Session> {
+        self.sessions.get(self.session_sel)
+    }
+
+    /// The pending items of `session` (none while the router is unreachable: they are stale).
+    fn session_items(&self, session: &Session) -> Vec<&Item> {
+        if self.offline.is_some() || session.session_id.is_empty() {
+            return Vec::new();
+        }
+        self.items
+            .iter()
+            .filter(|i| i.session_id() == session.session_id)
+            .collect()
     }
 
     fn without_reply(&self) -> Vec<String> {
@@ -260,6 +317,7 @@ impl App {
         }
         let from_list = matches!(self.mode, Mode::List | Mode::ConfirmDismissAll);
         let effect = match std::mem::take(&mut self.mode) {
+            Mode::List if self.view == View::Sessions => self.sessions_key(code),
             Mode::List => self.list_key(code),
             Mode::Detail { id, scroll } => self.detail_key(id, scroll, code),
             Mode::Password { id, buf } => self.password_key(id, buf, code),
@@ -315,6 +373,7 @@ impl App {
             KeyCode::Char('q') => return Effect::Quit,
             KeyCode::Char('j') | KeyCode::Down => self.selected = (self.selected + 1).min(last),
             KeyCode::Char('k') | KeyCode::Up => self.selected = self.selected.saturating_sub(1),
+            KeyCode::Char('S') => self.view = View::Sessions,
             KeyCode::Esc | KeyCode::Char('s') if self.session.is_some() => self.set_session(None),
             KeyCode::Char('s') => {
                 let session = self.selected_item().map(|i| i.session_id().to_string());
@@ -342,6 +401,50 @@ impl App {
                     if let Some(effect) = self.item_key(id, code) {
                         return effect;
                     }
+                }
+            }
+            _ => {}
+        }
+        Effect::None
+    }
+
+    fn sessions_key(&mut self, code: KeyCode) -> Effect {
+        let last = self.sessions.len().saturating_sub(1);
+        match code {
+            KeyCode::Char('q') => return Effect::Quit,
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.session_sel = (self.session_sel + 1).min(last)
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.session_sel = self.session_sel.saturating_sub(1)
+            }
+            KeyCode::Esc | KeyCode::Char('S') => self.view = View::Inbox,
+            KeyCode::Enter => {
+                let Some(session) = self.selected_session() else {
+                    return Effect::None;
+                };
+                let id = session.session_id.clone();
+                let attachable = !session.shpool.is_empty();
+                if self.session_items(session).is_empty() {
+                    let text = if attachable {
+                        "no pending items — a to attach"
+                    } else {
+                        "no pending items"
+                    };
+                    self.notify(text, false);
+                } else {
+                    self.guard = Some((self.now, code)); // a held Enter must not open an item too
+                    self.view = View::Inbox;
+                    self.set_session(Some(id));
+                    self.selected = 0;
+                    self.from_sessions = true;
+                }
+            }
+            KeyCode::Char('a') => {
+                let name = self.selected_session().map(|s| s.shpool.clone());
+                match name.filter(|n| !n.is_empty()) {
+                    Some(name) => return Effect::Attach(name),
+                    None => self.notify("not in a shpool session", true),
                 }
             }
             _ => {}
@@ -609,6 +712,20 @@ impl App {
 
     /// Key hints for the footer (key, label).
     fn hints(&self) -> Vec<(&'static str, &'static str)> {
+        if self.view == View::Sessions {
+            let mut h = vec![("j/k", "move")];
+            if let Some(session) = self.selected_session() {
+                if !self.session_items(session).is_empty() {
+                    h.push(("enter", "items"));
+                }
+                if !session.shpool.is_empty() {
+                    h.push(("a", "attach"));
+                }
+            }
+            h.push(("S", "inbox"));
+            h.push(("q", "quit"));
+            return h;
+        }
         match &self.mode {
             Mode::List | Mode::ConfirmDismissAll => {
                 let mut h = Vec::new();
@@ -627,8 +744,14 @@ impl App {
                     }
                 }
                 if self.session.is_some() {
-                    h.push(("esc", "all items"));
+                    let back = if self.from_sessions {
+                        "sessions"
+                    } else {
+                        "all items"
+                    };
+                    h.push(("esc", back));
                 }
+                h.push(("S", "sessions"));
                 h.push(("q", "quit"));
                 h
             }
@@ -1045,15 +1168,16 @@ fn border_style(focused: bool) -> Style {
 fn render(f: &mut Frame, app: &App) {
     let p = panes(f.area());
     render_header(f, app, p.header);
-    if app.visible().is_empty() && matches!(app.mode, Mode::List | Mode::ConfirmDismissAll) {
-        let body = p.list.union(p.detail);
-        let row = Rect::new(body.x, body.y + body.height / 2, body.width, 1).intersection(body);
-        f.render_widget(
-            Paragraph::new("No pending requests")
-                .style(dim())
-                .alignment(Alignment::Center),
-            row,
-        );
+    let list_focused = matches!(app.mode, Mode::List | Mode::ConfirmDismissAll);
+    if app.view == View::Sessions {
+        if app.sessions.is_empty() {
+            render_empty(f, &p, "No Claude sessions");
+        } else {
+            render_sessions(f, app, p.list);
+            render_session_detail(f, app, p.detail);
+        }
+    } else if app.visible().is_empty() && list_focused {
+        render_empty(f, &p, "No pending requests");
     } else {
         render_list(f, app, p.list);
         render_detail(f, app, p.detail);
@@ -1061,26 +1185,50 @@ fn render(f: &mut Frame, app: &App) {
     render_footer(f, app, p.footer);
 }
 
+/// `text` in the middle of the body.
+fn render_empty(f: &mut Frame, p: &Panes, text: &str) {
+    let body = p.list.union(p.detail);
+    let row = Rect::new(body.x, body.y + body.height / 2, body.width, 1).intersection(body);
+    f.render_widget(
+        Paragraph::new(text)
+            .style(dim())
+            .alignment(Alignment::Center),
+        row,
+    );
+}
+
 fn render_header(f: &mut Frame, app: &App, area: Rect) {
     let answerable = app.items.iter().filter(|i| action(i).is_some()).count();
+    let waiting = match app.sessions.iter().filter(|s| s.status == WAITING).count() {
+        0 => String::new(),
+        n => format!(" ({n} waiting)"),
+    };
     let left = Line::from(vec![
         Span::styled(" agent-inbox", bold()),
         Span::styled(
-            format!("  {} pending · {answerable} answerable", app.items.len()),
+            format!(
+                "  {} pending · {answerable} answerable · {} sessions{waiting}",
+                app.items.len(),
+                app.sessions.len()
+            ),
             dim(),
         ),
     ]);
-    let left_width = u16::try_from(left.width()).unwrap_or(area.width);
-    let [left_area, right_area] =
-        Layout::horizontal([Constraint::Length(left_width), Constraint::Min(0)]).areas(area);
-    let room = usize::from(right_area.width).saturating_sub(2);
-    let right = match &app.offline {
-        Some(e) => Span::styled(
-            truncate(&clean(&format!("router offline: {e}")), room),
+    // The router status comes first (at most half of the line), the counts give way to it.
+    let (text, style) = match &app.offline {
+        Some(e) => (
+            clean(&format!("router offline: {e}")),
             Style::new().fg(Color::Red),
         ),
-        None => Span::styled("connected", dim()),
+        None => ("connected".to_string(), dim()),
     };
+    let len = text.chars().count() + 2;
+    let wanted = u16::try_from(len).unwrap_or(u16::MAX);
+    let width = wanted.min(area.width / 2);
+    let [left_area, right_area] =
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(area);
+    let room = usize::from(width).saturating_sub(2);
+    let right = Span::styled(truncate(&text, room), style);
     f.render_widget(Paragraph::new(left), left_area);
     f.render_widget(
         Paragraph::new(Line::from(right)).alignment(Alignment::Right),
@@ -1149,6 +1297,135 @@ fn row(app: &App, item: &Item, width: usize, project_width: usize) -> Line<'stat
         Span::raw(" ".repeat(pad)),
         Span::styled(age, dim()),
     ])
+}
+
+/// Text and style of the badge for the status of a session.
+fn status_badge(status: &str) -> (String, Style) {
+    match status {
+        WAITING => (
+            "WAIT".into(),
+            Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        "idle" => ("IDLE".into(), Style::new().fg(Color::Green)),
+        "busy" => ("BUSY".into(), dim()),
+        other => (truncate(&clean(other), BADGE_WIDTH), dim()),
+    }
+}
+
+fn render_sessions(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::bordered()
+        .title(" Sessions ")
+        .border_style(border_style(true));
+    let width = usize::from(block.inner(area).width);
+    let place_width = app
+        .sessions
+        .iter()
+        .map(|s| clean(&s.place()).chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(PROJECT_MAX_WIDTH);
+    let rows: Vec<ListItem> = app
+        .sessions
+        .iter()
+        .map(|s| ListItem::new(session_row(app, s, width, place_width)))
+        .collect();
+    let list = List::new(rows)
+        .block(block)
+        .highlight_style(Style::new().add_modifier(Modifier::REVERSED));
+    let mut state = ListState::default().with_selected(Some(app.session_sel));
+    f.render_stateful_widget(list, area, &mut state);
+}
+
+/// pending items, badge, place, what it waits for, status age right-aligned; exactly `width`
+/// chars if it fits.
+fn session_row(app: &App, session: &Session, width: usize, place_width: usize) -> Line<'static> {
+    let (badge_text, badge_style) = status_badge(&session.status);
+    let pending = app.session_items(session).len();
+    let count = if pending == 0 {
+        "  ".to_string()
+    } else {
+        format!("{:>2}", pending.min(99))
+    };
+    let place = truncate(&clean(&session.place()), place_width);
+    let age = client::age(session.status_at, app.now);
+    let head = 2 + 1 + BADGE_WIDTH + 1 + place_width + 1;
+    let age_width = age.chars().count();
+    let waiting_for = truncate(
+        &clean(&session.waiting_for),
+        width.saturating_sub(head + age_width + 1),
+    );
+    let pad = width.saturating_sub(head + waiting_for.chars().count() + age_width);
+    Line::from(vec![
+        Span::styled(count, bold()),
+        Span::raw(" "),
+        Span::styled(format!("{:<w$}", badge_text, w = BADGE_WIDTH), badge_style),
+        Span::raw(" "),
+        Span::raw(format!("{:<w$}", place, w = place_width)),
+        Span::raw(" "),
+        Span::raw(waiting_for),
+        Span::raw(" ".repeat(pad)),
+        Span::styled(age, dim()),
+    ])
+}
+
+/// The detail of `session`: its fields and its pending items.
+fn session_lines(app: &App, session: &Session) -> Vec<Line<'static>> {
+    let (badge_text, badge_style) = status_badge(&session.status);
+    let mut head = vec![Span::styled(badge_text, badge_style)];
+    if !session.waiting_for.is_empty() {
+        head.push(Span::raw(format!("  {}", clean(&session.waiting_for))));
+    }
+    let since = client::age(session.status_at, app.now);
+    head.push(Span::styled(format!("  ·  {since}"), dim()));
+    let mut lines = vec![Line::from(head)];
+    let shpool = if session.shpool.is_empty() {
+        "none: not attachable"
+    } else {
+        session.shpool.as_str()
+    };
+    let pid = session.pid.to_string();
+    let started = format!("{} ago", client::age(session.started_at, app.now));
+    for (label, value) in [
+        ("name", session.name.as_str()),
+        ("cwd", session.cwd.as_str()),
+        ("shpool", shpool),
+        ("pid", pid.as_str()),
+        ("started", started.as_str()),
+        ("kind", session.kind.as_str()),
+        ("session", session.session_id.as_str()),
+    ] {
+        if !value.is_empty() {
+            lines.push(Line::styled(format!("{label}: {}", clean(value)), dim()));
+        }
+    }
+    lines.push(Line::default());
+    let items = app.session_items(session);
+    if items.is_empty() {
+        lines.push(Line::styled("no pending items", dim()));
+    }
+    for item in items {
+        let (badge_text, badge_style) = badge(item.kind());
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<w$}", badge_text, w = BADGE_WIDTH), badge_style),
+            Span::raw(" "),
+            Span::raw(clean(item.title())),
+        ]));
+    }
+    lines
+}
+
+/// The detail pane of the sessions list (never focused).
+fn render_session_detail(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::bordered()
+        .title(" Detail ")
+        .border_style(border_style(false));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let lines = app
+        .selected_session()
+        .map(|s| session_lines(app, s))
+        .unwrap_or_default();
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn render_detail(f: &mut Frame, app: &App, area: Rect) {
@@ -1221,9 +1498,10 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(line), area);
 }
 
-pub fn run(base: &str, runtime: Option<&Path>) -> io::Result<()> {
+/// `sessions_dir` is the session registry (`<config dir>/sessions`).
+pub fn run(base: &str, runtime: Option<&Path>, sessions_dir: &Path) -> io::Result<()> {
     let mut terminal = ratatui::init();
-    let result = event_loop(&mut terminal, base, runtime);
+    let result = event_loop(&mut terminal, base, runtime, sessions_dir);
     ratatui::restore();
     result
 }
@@ -1232,12 +1510,13 @@ fn event_loop(
     terminal: &mut DefaultTerminal,
     base: &str,
     runtime: Option<&Path>,
+    sessions_dir: &Path,
 ) -> io::Result<()> {
     let mut app = App::default();
     let mut refreshed: Option<Instant> = None;
     loop {
         if refreshed.is_none_or(|t| t.elapsed() >= REFRESH) {
-            refresh(&mut app, base);
+            refresh(&mut app, base, sessions_dir);
             refreshed = Some(Instant::now());
         }
         app.now = client::now();
@@ -1249,7 +1528,7 @@ fn event_loop(
                 if key.kind == KeyEventKind::Press {
                     app.now = client::now(); // not the time of the draw: the guard is timed
                     let effect = app.on_key(key);
-                    if perform(&mut app, effect, base, runtime) {
+                    if perform(&mut app, effect, base, runtime, sessions_dir) {
                         return Ok(());
                     }
                 }
@@ -1258,7 +1537,9 @@ fn event_loop(
     }
 }
 
-fn refresh(app: &mut App, base: &str) {
+/// Reloads the sessions (they need no router) and the inbox items.
+fn refresh(app: &mut App, base: &str, sessions_dir: &Path) {
+    app.set_sessions(sessions::load(sessions_dir, Path::new("/proc")));
     match client::list(base) {
         Ok(items) => {
             app.offline = None;
@@ -1269,7 +1550,13 @@ fn refresh(app: &mut App, base: &str) {
 }
 
 /// Carries out an effect, then refreshes; true = quit.
-fn perform(app: &mut App, effect: Effect, base: &str, runtime: Option<&Path>) -> bool {
+fn perform(
+    app: &mut App,
+    effect: Effect,
+    base: &str,
+    runtime: Option<&Path>,
+    sessions_dir: &Path,
+) -> bool {
     match effect {
         Effect::None => return false,
         Effect::Quit => return true,
@@ -1285,7 +1572,7 @@ fn perform(app: &mut App, effect: Effect, base: &str, runtime: Option<&Path>) ->
             return false;
         }
     }
-    refresh(app, base);
+    refresh(app, base, sessions_dir);
     false
 }
 
@@ -1546,6 +1833,12 @@ mod tests {
         let s = screen(&a);
         assert!(s.contains("router offline: connection refused"));
         assert!(!s.contains("connected"));
+        // on a narrow terminal the counts give way, the router status stays
+        let s = screen_at(&a, 60, 30);
+        assert!(
+            s.contains("agent-inbox") && s.contains("router offline: conn"),
+            "{s}"
+        );
     }
 
     #[test]
@@ -1749,10 +2042,12 @@ mod tests {
                 ],
             ),
             (vec![question("a", 990.0)], vec![key('D')]),
+            (vec![sudo("s")], vec![key('S')]),
         ];
         for (w, h) in [(20, 5), (1, 1), (2, 2)] {
             for (items, keys) in &key_sets {
                 let mut a = app(items.clone());
+                a.set_sessions(vec![session(1, "s-a", WAITING)]);
                 a.area = Rect::new(0, 0, w, h);
                 a.notify("status", true);
                 a.offline = Some("down".into());
@@ -2863,5 +3158,332 @@ mod tests {
         let mut ids = a.without_reply();
         ids.sort();
         assert_eq!(ids, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    // --- sessions view
+
+    fn session(pid: u32, id: &str, status: &str) -> Session {
+        Session {
+            pid,
+            session_id: id.into(),
+            cwd: "/home/u/projects/r.agents/w1".into(),
+            name: String::new(),
+            status: status.into(),
+            waiting_for: if status == WAITING {
+                "permission prompt".into()
+            } else {
+                String::new()
+            },
+            kind: "interactive".into(),
+            started_at: 900.0,
+            status_at: 990.0,
+            start: None,
+            shpool: String::new(),
+        }
+    }
+
+    fn shpooled(mut s: Session, name: &str) -> Session {
+        s.shpool = name.into();
+        s
+    }
+
+    /// The app on the sessions view.
+    fn sessions_app(items: Vec<Item>, sessions: Vec<Session>) -> App {
+        let mut a = app(items);
+        a.set_sessions(sessions);
+        assert_eq!(a.on_key(key('S')), Effect::None);
+        a
+    }
+
+    fn selected_pid(a: &App) -> Option<u32> {
+        a.selected_session().map(|s| s.pid)
+    }
+
+    #[test]
+    fn capital_s_toggles_the_sessions_view_both_ways() {
+        let mut a = app(vec![question("a", 990.0)]);
+        a.set_sessions(vec![session(1, "s-a", "idle")]);
+        assert!(screen(&a).contains(" Inbox "));
+        assert!(screen(&a).contains("S sessions"));
+        a.on_key(key('S'));
+        let s = screen(&a);
+        assert!(s.contains(" Sessions ") && !s.contains(" Inbox "), "{s}");
+        assert!(s.contains("S inbox"), "{s}");
+        a.on_key(key('S'));
+        assert!(screen(&a).contains(" Inbox "));
+        a.on_key(key('S'));
+        a.on_key(code(KeyCode::Esc));
+        assert!(screen(&a).contains(" Inbox "));
+        // the inbox keys do nothing in the sessions view, q quits from both
+        a.on_key(key('S'));
+        assert_eq!(a.on_key(key('d')), Effect::None);
+        assert_eq!(a.on_key(key('q')), Effect::Quit);
+    }
+
+    #[test]
+    fn sessions_rows_and_detail() {
+        let mut a = sessions_app(
+            vec![
+                in_session(question("a", 950.0), "s-a"),
+                in_session(question("b", 960.0), "s-a"),
+                in_session(question("c", 970.0), "s-b"),
+            ],
+            vec![
+                shpooled(session(1, "s-a", WAITING), "jw-1"),
+                session(2, "s-b", "idle"),
+                session(3, "s-c", "busy"),
+                session(4, "s-d", "starting"),
+            ],
+        );
+        let s = screen(&a);
+        let row = |s: &str, badge: &str| {
+            s.lines()
+                .find(|l| l.contains(badge))
+                .unwrap_or_else(|| panic!("no {badge} row:\n{s}"))
+                .to_string()
+        };
+        let wait = row(&s, "WAIT");
+        assert!(wait.contains("2 WAIT") && wait.contains("r:w1"), "{wait}");
+        assert!(
+            wait.contains("permission prompt") && wait.contains("10s"),
+            "{wait}"
+        );
+        let idle = row(&s, "IDLE");
+        assert!(
+            idle.contains("1 IDLE") && !idle.contains("permission"),
+            "{idle}"
+        );
+        // no pending items: no count
+        assert!(row(&s, "BUSY").contains("│   BUSY"), "{s}");
+        // an unknown status is shown as text
+        assert!(row(&s, "star…").contains("│   star…"), "{s}");
+        // the header counts sessions in both views
+        assert!(
+            s.contains("3 pending · 0 answerable · 4 sessions (1 waiting)"),
+            "{s}"
+        );
+        // detail of the selected (first) session
+        for want in [
+            "WAIT  permission prompt  ·  10s",
+            "cwd: /home/u/projects/r.agents/w1",
+            "shpool: jw-1",
+            "pid: 1",
+            "started: 1m ago",
+            "kind: interactive",
+            "session: s-a",
+            "title-a",
+            "title-b",
+        ] {
+            assert!(s.contains(want), "{want}:\n{s}");
+        }
+        assert!(!s.contains("title-c"));
+        a.on_key(key('j'));
+        let s = screen(&a);
+        assert!(
+            s.contains("none: not attachable") && s.contains("title-c"),
+            "{s}"
+        );
+        assert!(!s.contains("title-a"));
+        a.on_key(key('S'));
+        assert!(screen(&a).contains("4 sessions (1 waiting)"));
+    }
+
+    #[test]
+    fn no_sessions_is_an_empty_state() {
+        let a = sessions_app(vec![], vec![]);
+        let s = screen(&a);
+        assert!(s.contains("No Claude sessions"), "{s}");
+        assert!(s.contains("0 sessions") && !s.contains("waiting"), "{s}");
+    }
+
+    #[test]
+    fn enter_shows_the_items_of_the_session_and_esc_returns() {
+        let mut a = sessions_app(
+            vec![
+                in_session(question("a", 960.0), "s-a"),
+                in_session(question("b", 970.0), "s-b"),
+            ],
+            vec![session(1, "s-a", "idle"), session(2, "s-b", "idle")],
+        );
+        a.on_key(key('j'));
+        a.on_key(code(KeyCode::Enter));
+        assert_eq!(a.view, View::Inbox);
+        assert_eq!(a.session.as_deref(), Some("s-b"));
+        assert_eq!(selected_id(&a), Some("b"));
+        let s = screen(&a);
+        assert!(s.contains("title-b") && !s.contains("title-a"), "{s}");
+        assert!(s.contains("esc sessions"), "{s}");
+        a.on_key(code(KeyCode::Esc));
+        assert_eq!(a.view, View::Sessions);
+        assert!(a.session.is_none() && !a.from_sessions);
+        assert_eq!(selected_pid(&a), Some(2));
+        // `s` leaves the filter the same way
+        a.on_key(code(KeyCode::Enter));
+        a.on_key(key('s'));
+        assert_eq!(a.view, View::Sessions);
+        // a filter entered from the inbox does not
+        a.on_key(key('S'));
+        a.on_key(key('s'));
+        assert!(screen(&a).contains("esc all items"));
+        a.on_key(code(KeyCode::Esc));
+        assert_eq!(a.view, View::Inbox);
+        // Esc in the sessions view goes to the inbox
+        a.on_key(key('S'));
+        a.on_key(code(KeyCode::Esc));
+        assert_eq!(a.view, View::Inbox);
+    }
+
+    #[test]
+    fn the_last_item_answered_returns_to_the_sessions() {
+        let mut a = sessions_app(
+            vec![in_session(permission("p", Some(HOOK_REPLY)), "s-a")],
+            vec![session(1, "s-a", WAITING)],
+        );
+        a.on_key(code(KeyCode::Enter));
+        a.now += 1.0;
+        a.on_key(code(KeyCode::Enter));
+        assert_eq!(a.on_key(key('y')), allow("p"));
+        assert_eq!(a.view, View::Inbox);
+        // the router has dismissed it
+        a.set_items(vec![]);
+        assert_eq!(a.view, View::Sessions);
+        assert!(a.session.is_none() && !a.from_sessions);
+        assert!(screen(&a).contains(" Sessions "));
+    }
+
+    #[test]
+    fn a_session_ending_under_an_open_item_stays_in_the_inbox() {
+        let mut a = sessions_app(
+            vec![in_session(permission("p", Some(HOOK_REPLY)), "s-a")],
+            vec![session(1, "s-a", WAITING)],
+        );
+        a.on_key(code(KeyCode::Enter));
+        a.now += 1.0;
+        a.on_key(code(KeyCode::Enter));
+        a.set_items(vec![]);
+        assert!(a.session.is_none() && !a.from_sessions);
+        assert_eq!(a.view, View::Inbox);
+        assert!(matches!(a.mode, Mode::Detail { .. }));
+    }
+
+    #[test]
+    fn enter_without_items_says_so() {
+        let mut a = sessions_app(
+            vec![in_session(question("a", 960.0), "s-other")],
+            vec![session(1, "s-a", "idle")],
+        );
+        assert_eq!(a.on_key(code(KeyCode::Enter)), Effect::None);
+        assert_eq!(a.view, View::Sessions);
+        assert!(a.session.is_none());
+        let s = screen(&a);
+        assert!(
+            s.contains("no pending items") && !s.contains("a to attach"),
+            "{s}"
+        );
+        // nothing to open: no hint either
+        a.now += STATUS_TTL;
+        assert!(!screen(&a).contains("enter items"));
+        // attachable: the way on is named
+        let mut a = sessions_app(vec![], vec![shpooled(session(1, "s-a", "idle"), "jw-1")]);
+        a.on_key(code(KeyCode::Enter));
+        assert!(screen(&a).contains("no pending items — a to attach"));
+        // the items of an unreachable router are stale
+        let mut a = sessions_app(
+            vec![in_session(question("a", 960.0), "s-a")],
+            vec![shpooled(session(1, "s-a", "idle"), "jw-1")],
+        );
+        assert!(screen(&a).contains("enter items"));
+        a.offline = Some("down".into());
+        a.on_key(code(KeyCode::Enter));
+        assert_eq!(a.view, View::Sessions);
+        assert!(screen(&a).contains("no pending items — a to attach"));
+    }
+
+    #[test]
+    fn a_held_enter_opens_the_session_but_not_its_first_item() {
+        let mut a = sessions_app(
+            vec![in_session(question("a", 960.0), "s-a")],
+            vec![session(1, "s-a", "idle")],
+        );
+        a.on_key(code(KeyCode::Enter));
+        assert_eq!(a.view, View::Inbox);
+        // the repeats are swallowed
+        a.now += 0.6;
+        assert_eq!(a.on_key(code(KeyCode::Enter)), Effect::None);
+        assert!(matches!(a.mode, Mode::List));
+        // released: the next Enter opens the item
+        a.now += 1.1;
+        a.on_key(code(KeyCode::Enter));
+        assert!(matches!(a.mode, Mode::Detail { .. }));
+    }
+
+    #[test]
+    fn a_attaches_the_shpool_session_or_says_why_not() {
+        let mut a = sessions_app(
+            vec![],
+            vec![
+                shpooled(session(1, "s-a", "idle"), "jw-1"),
+                session(2, "s-b", "idle"),
+            ],
+        );
+        assert_eq!(a.on_key(key('a')), Effect::Attach("jw-1".into()));
+        assert!(screen(&a).contains("a attach"));
+        a.on_key(key('j'));
+        assert_eq!(a.on_key(key('a')), Effect::None);
+        let s = screen(&a);
+        assert!(s.contains("not in a shpool session"), "{s}");
+        // no sessions: nothing to attach, nothing to open
+        let mut a = sessions_app(vec![], vec![]);
+        assert_eq!(a.on_key(key('a')), Effect::None);
+        assert_eq!(a.on_key(code(KeyCode::Enter)), Effect::None);
+    }
+
+    #[test]
+    fn session_selection_follows_its_pid_across_refreshes() {
+        let mut a = sessions_app(
+            vec![],
+            vec![
+                session(1, "s-1", "idle"),
+                session(2, "s-2", "idle"),
+                session(3, "s-3", "idle"),
+            ],
+        );
+        a.on_key(key('j'));
+        a.on_key(code(KeyCode::Down));
+        a.on_key(code(KeyCode::Down));
+        assert_eq!(selected_pid(&a), Some(3));
+        a.on_key(key('k'));
+        assert_eq!(selected_pid(&a), Some(2));
+        a.set_sessions(vec![
+            session(4, "s-4", "idle"),
+            session(1, "s-1", "idle"),
+            session(2, "s-2", "idle"),
+            session(3, "s-3", "idle"),
+        ]);
+        assert_eq!(selected_pid(&a), Some(2));
+        // gone: the position stays (within the list)
+        a.set_sessions(vec![session(4, "s-4", "idle"), session(1, "s-1", "idle")]);
+        assert_eq!(selected_pid(&a), Some(1));
+        a.set_sessions(vec![]);
+        assert_eq!(selected_pid(&a), None);
+    }
+
+    #[test]
+    fn sessions_load_while_the_router_is_offline() {
+        // this very process, without a start time: alive
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("agent-inbox-test-tui-{pid}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{pid}.json")),
+            format!(r#"{{"pid":{pid},"sessionId":"s-1","cwd":"/x","startedAt":1000}}"#),
+        )
+        .unwrap();
+        let mut a = app(vec![]);
+        refresh(&mut a, "127.0.0.1:1", &dir);
+        assert!(a.offline.is_some());
+        assert_eq!(a.sessions.len(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
