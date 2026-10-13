@@ -9,13 +9,17 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = os.path.expanduser("~/projects")
-FZF = "fzf"  # the nix package pins the store path
+FZF = "fzf"  # the nix package pins the store paths
+SHPOOL = "shpool"
+BASH = "bash"
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 AGENT = re.compile(r"^(agent-[0-9a-f]+|s-[0-9]+-[0-9]+-[0-9]+)$")  # the workspaces of Claude subagents and sessions
 
@@ -309,6 +313,68 @@ def cmd_prune(a):
         rmdir_agents(home)
 
 
+def session_name(base):
+    """base, or base-2, base-3, ...: the first not taken by a shpool session."""
+    try:
+        p = subprocess.run([SHPOOL, "--no-daemonize", "list"], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, text=True)
+    except OSError as e:
+        raise Fail(f"shpool: {e}")
+    if p.returncode != 0:
+        raise Fail("shpool list failed (is shpool.socket running?)")
+    taken = {line.split()[0] for line in p.stdout.splitlines() if line.strip()}
+    name, i = base, 2
+    while name in taken:
+        name, i = f"{base}-{i}", i + 1
+    return name
+
+
+def cmd_agent(a):
+    repo = a.args[0] if a.args and os.path.isdir(f"{ROOT}/{a.args[0]}/.jj") else None
+    prompt = a.args[1:] if repo else a.args
+    if repo:
+        workdir = f"{ROOT}/{repo}"
+    else:
+        try:  # the claude wrapper gives a session of its own to the main checkout and the w-* workspaces
+            root, home = locate()
+            workdir = root if root == home or layout(root)[1].startswith("w-") else home
+        except Fail:
+            workdir = repo_home(None)
+    name = session_name(layout(workdir)[0])
+    # the environment and the prompt go only into this 0600 file: shpool does not pass on the client's
+    # environment, and its -c is split like shell words
+    rundir = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    fd, job = tempfile.mkstemp(prefix="jw-agent-", dir=rundir)
+    with os.fdopen(fd, "w", errors="surrogateescape") as f:
+        for k, v in os.environ.items():
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k):
+                f.write(f"export {k}={shlex.quote(v)}\n")
+        f.write(f"export SHPOOL_SESSION_NAME={shlex.quote(name)}\n")
+        f.write('rm -f -- "$0"\n')  # after the exports: PATH is set now
+        f.write(f"cd -- {shlex.quote(workdir)} || exit 1\n")
+        # one argument: claude takes a single prompt, and a first word like `update` is no subcommand then
+        f.write(f"exec {shlex.join(['claude', ' '.join(prompt)] if prompt else ['claude'])}\n")
+    cmd = [SHPOOL, "--no-daemonize", "attach", "--ttl", "1d", "-d", workdir,
+           "-c", shlex.join([BASH, job]), name]
+    if a.detach:
+        cmd.insert(3, "-b")
+    try:
+        status = subprocess.run(cmd).returncode
+    except OSError as e:
+        status = None
+        sys.stderr.write(f"jw: shpool: {e}\n")
+    # the script removes it when it starts; a detached one may not have started yet
+    if (status != 0 or not a.detach) and os.path.exists(job):
+        os.unlink(job)
+    if status is None:
+        raise Fail("")
+    if not a.detach:
+        sys.exit(status)  # attached: shpool exits with the session's status, e.g. claude's
+    if status != 0:
+        raise Fail(f"shpool attach failed for session {name}")
+    sys.stderr.write(f"shpool attach {name}\n")
+
+
 def cmd_info(a):
     """Print the workspace and stack of the current directory as JSON (the prompt runs this, so keep it fast)."""
     root = os.getcwd()
@@ -363,6 +429,10 @@ def parse_args():
     s.set_defaults(func=cmd_prune)
     s = sub.add_parser("info", help="print the jj workspace and stack of the current directory as JSON")
     s.set_defaults(func=cmd_info)
+    s = sub.add_parser("agent", aliases=["a"], help="run Claude in a shpool session in a repo (default: this one, else pick one)")
+    s.add_argument("-d", "--detach", action="store_true", help="start the session in the background")
+    s.add_argument("args", nargs=argparse.REMAINDER, help=f"[repo under {ROOT}] [prompt...]")
+    s.set_defaults(func=cmd_agent)
     sub.add_parser("ls", help="list the workspaces")
     return p.parse_args()
 

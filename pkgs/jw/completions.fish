@@ -11,7 +11,9 @@ function __jw_workspaces  # directory names of this repo's workspaces, from the 
 end
 
 complete -c jw -f
-complete -c jw -n __fish_use_subcommand -a 'new n cd c rm clone prune info ls'
+complete -c jw -n __fish_use_subcommand -a 'new n cd c rm clone prune info ls agent a'
 complete -c jw -n '__fish_seen_subcommand_from new n' -s r -l revision -r -d 'revision to start from (default: trunk())'
 complete -c jw -n '__fish_seen_subcommand_from new n' -a '(__jw_repos)'
+complete -c jw -n '__fish_seen_subcommand_from agent a' -s d -l detach -d 'start the session in the background'
+complete -c jw -n '__fish_seen_subcommand_from agent a' -a '(__jw_repos)'
 complete -c jw -n '__fish_seen_subcommand_from cd c rm' -a '(__jw_workspaces)'
