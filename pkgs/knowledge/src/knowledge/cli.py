@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import config, curate, data, decisions, emit, hooks, importer, index, locks, records, retention
+from . import ask, config, curate, data, decisions, emit, hooks, importer, index, llm, locks, records, retention
 from .config import UsageError
 from .data import Json, Obj, ParseError, dumps
 from .entry import KINDS
@@ -47,6 +47,7 @@ class Args(argparse.Namespace):
     reason: str | None
     taken: bool
     hook_name: str
+    question: list[str]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -64,6 +65,8 @@ def _parser() -> argparse.ArgumentParser:
     submit.add_argument("--evidence", help="where it was observed")
     submit.add_argument("--file", help="read the body from this file instead of stdin (not inside Claude Code: pipe the body there)")
     submit.add_argument("--user", action="store_true", help="a submission of the user, stored directly with user trust; needs a terminal")
+    asker = sub.add_parser("ask", help="ask the memory (curated knowledge and project memory) a question; prints the answer")
+    asker.add_argument("question", nargs="*", metavar="QUESTION", help="the question; read from stdin if omitted")
     sub.add_parser("receive", help="store a knowledge.submit event read from stdin (run by the event router)")
     imp = sub.add_parser("import", help="submit notes (e.g. Claude Code auto-memory files) to the curator, stored directly")
     imp.add_argument("paths", nargs="+", metavar="PATH", help="markdown files, or directories of them (MEMORY.md is skipped)")
@@ -288,6 +291,15 @@ def _status(args: Args) -> Obj:
     return decisions.status(args.sid, decisions.Decisions(), Inbox().state(args.sid))
 
 
+def _ask(args: Args) -> str:
+    """The librarian's answer to the question from the arguments, else from stdin."""
+    question = " ".join(args.question).strip() or data.read_stdin().strip()
+    if not question:
+        raise UsageError("pass the question as arguments or on stdin")
+    _memory()
+    return ask.answer(question, Path(os.getcwd()))
+
+
 def _curate(args: Args) -> tuple[Obj | str, int]:
     """Run the curator; the summary, or the prompt/preview a flag asks for. Exit 1 if the model call failed."""
     weekly = args.weekly or args.mode == "weekly"
@@ -333,6 +345,8 @@ def main() -> None:
             result, code = _lint()
         elif args.command == "submit":
             result = _submit(args)  # the id alone, for scripts and agents
+        elif args.command == "ask":
+            result = _ask(args)
         elif args.command == "receive":
             result = _receive()
         elif args.command == "import":
@@ -359,7 +373,7 @@ def main() -> None:
             sys.exit(2)
         log.error("knowledge: router unreachable (%s); knowledge NOT stored", e)
         sys.exit(1)
-    except (OSError, ValueError, GitError, locks.LockTimeout) as e:  # ValueError: text that cannot be written out
+    except (OSError, ValueError, GitError, locks.LockTimeout, llm.LlmError) as e:  # ValueError: text that cannot be written out
         log.error("%s", e)
         sys.exit(1)
     if code:

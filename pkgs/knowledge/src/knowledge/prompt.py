@@ -40,17 +40,26 @@ class StaleLine:
 # the system prompt
 
 
-def system_prompt(memory: Path, skills_dir: Path) -> str:
-    """The text of `prompts/curator.md` with its placeholders filled in."""
-    text = resources.files("knowledge").joinpath("prompts", "curator.md").read_text(encoding="utf-8")
-    values = {"@@MEMORY@@": str(memory), "@@SKILLS_DIR@@": str(skills_dir)}
+def _fill(name: str, values: dict[str, str]) -> str:
+    """The text of `prompts/<name>` with its placeholders filled in; an unknown placeholder is an error."""
+    text = resources.files("knowledge").joinpath("prompts", name).read_text(encoding="utf-8")
     found = {data.group(m) for m in _PLACEHOLDER.finditer(text)}  # findall() is typed list[Any]
     unknown = sorted(p for p in found if p is not None and p not in values)
     if unknown:
-        raise ValueError(f"curator.md: unknown placeholders {', '.join(unknown)}")
+        raise ValueError(f"{name}: unknown placeholders {', '.join(unknown)}")
     for placeholder, value in values.items():
         text = text.replace(placeholder, value)
     return text
+
+
+def system_prompt(memory: Path, skills_dir: Path) -> str:
+    """The text of `prompts/curator.md` with its placeholders filled in."""
+    return _fill("curator.md", {"@@MEMORY@@": str(memory), "@@SKILLS_DIR@@": str(skills_dir)})
+
+
+def librarian_prompt(memory: Path) -> str:
+    """The text of `prompts/librarian.md` (`knowledge ask`) with its placeholder filled in."""
+    return _fill("librarian.md", {"@@MEMORY@@": str(memory)})
 
 
 # builders for the lines of the user message

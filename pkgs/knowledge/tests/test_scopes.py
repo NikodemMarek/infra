@@ -135,6 +135,22 @@ def test_longest_project_path_wins(cfg, tmp_path):
     assert scopes.scopes_for_cwd(tmp_path / "work/outer-two", cfg, projects, ["outer", "inner"]) == ["global"]
 
 
+def test_project_for_cwd_picks_the_longest_prefix(tmp_path):
+    outer = mkrepo(tmp_path / "work/outer")
+    inner = mkrepo(outer / "inner")
+    rows = [ProjectRow("outer", "active", str(outer)), ProjectRow("inner", "active", str(inner))]
+    assert scopes.project_for_cwd(inner / "x", rows) == rows[1]
+    assert scopes.project_for_cwd(outer / "src", rows) == rows[0]
+    assert scopes.project_for_cwd(tmp_path / "work/outer-two", rows) is None  # not inside the project
+    assert scopes.project_for_cwd(outer, []) is None
+
+
+def test_project_for_cwd_handles_agent_workspaces(tmp_path):
+    rows = [ProjectRow("repo", "active", str(tmp_path / "p/repo"))]
+    assert scopes.project_for_cwd(tmp_path / "p/repo.agents/gl-review-7/src", rows) == rows[0]
+    assert scopes.project_for_cwd(tmp_path / "p/repo.agents", rows) is None  # no workspace named
+
+
 def test_project_path_with_a_tilde(cfg, tmp_path):
     repo = mkrepo(tmp_path / "home/projects/ai", "flake.nix", ".jj")
     projects = [ProjectRow("ai", "active", "~/projects/ai")]

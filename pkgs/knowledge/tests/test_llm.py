@@ -16,7 +16,14 @@ mode = os.environ.get("FAKE_CLAUDE_MODE", "ok")
 stdin = sys.stdin.read()
 with open(os.environ["FAKE_CLAUDE_LOG"], "w") as f:
     json.dump(
-        {"argv": sys.argv[1:], "stdin": stdin, "curator": os.environ.get("KNOWLEDGE_CURATOR"), "cwd": os.getcwd()}, f
+        {
+            "argv": sys.argv[1:],
+            "stdin": stdin,
+            "curator": os.environ.get("KNOWLEDGE_CURATOR"),
+            "claudecode": os.environ.get("CLAUDECODE"),
+            "cwd": os.getcwd(),
+        },
+        f,
     )
 if mode == "sleep":
     time.sleep(30)
@@ -136,6 +143,15 @@ def test_run_returns_the_result(fake_claude: Path, memory_repo: Path):
     assert args[args.index("--add-dir") + 1] == str(memory_repo)
     assert args[args.index("--model") + 1] == "sonnet"
     assert args[args.index("--effort") + 1] == "medium"
+
+
+def test_the_child_does_not_see_claudecode(fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch):
+    ClaudeCli().run("s", "m", [])
+    assert call(fake_claude)["claudecode"] is None
+    monkeypatch.setenv("CLAUDECODE", "1")  # a nested launch from inside Claude Code
+    ClaudeCli().run("s", "m", [])
+    assert call(fake_claude)["claudecode"] is None
+    assert call(fake_claude)["curator"] == "1"
 
 
 def test_model_and_effort_come_from_the_environment(

@@ -85,7 +85,8 @@ class ClaudeCli:
 
     def run(self, system: str, message: str, add_dirs: Sequence[Path]) -> str:
         argv = build_argv(self.binary, system, add_dirs, self.model, self.effort)
-        env = {**os.environ, "KNOWLEDGE_CURATOR": "1"}
+        # CLAUDECODE is dropped: a nested launch from inside Claude Code
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"} | {"KNOWLEDGE_CURATOR": "1"}
         try:
             proc = subprocess.run(
                 argv,

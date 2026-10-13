@@ -229,19 +229,26 @@ def _order(scope: str) -> tuple[int, str]:
     return 2, scope
 
 
-def scopes_for_cwd(
-    cwd: Path, cfg: ScopesConfig, projects: Sequence[ProjectRow], slugs: Collection[str]
-) -> list[str]:
-    """The scopes whose knowledge applies in `cwd`: project, org, lang/topic (sorted), global. No duplicates."""
+def project_for_cwd(cwd: Path, projects: Sequence[ProjectRow]) -> ProjectRow | None:
+    """The project whose repo is the longest prefix of `cwd` (normalised: an agents' workspace is its repo)."""
     cwd = normalise_cwd(cwd)
-    root = repo_root(cwd)
-    found: set[str] = {"global"}
     best: ProjectRow | None = None
     best_depth = -1
     for row in projects:
         repo = Path(row.repo).expanduser()
         if _under(cwd, repo) and len(repo.parts) > best_depth:
             best, best_depth = row, len(repo.parts)
+    return best
+
+
+def scopes_for_cwd(
+    cwd: Path, cfg: ScopesConfig, projects: Sequence[ProjectRow], slugs: Collection[str]
+) -> list[str]:
+    """The scopes whose knowledge applies in `cwd`: project, org, lang/topic (sorted), global. No duplicates."""
+    best = project_for_cwd(cwd, projects)
+    cwd = normalise_cwd(cwd)
+    root = repo_root(cwd)
+    found: set[str] = {"global"}
     project = f"projects/{best.slug}/facts" if best is not None and best.slug in slugs else None
     for rule in cfg.paths:
         if _under(cwd, Path(rule.prefix).expanduser()):

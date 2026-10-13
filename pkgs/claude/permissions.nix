@@ -39,9 +39,10 @@
     "Bash(glab label list:*)"
     "Bash(glab label get:*)"
 
-    # Queueing and read-only status of the knowledge curator.
+    # Queueing, recall and read-only status of the knowledge curator.
     "Bash(knowledge submit:*)"
     "Bash(knowledge status:*)"
+    "Bash(knowledge ask:*)"
 
     "Bash(mvn test:*)"
     "Bash(mvn compile:*)"

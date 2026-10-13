@@ -1,6 +1,6 @@
 ---
 name: architect
-description: Design and planning partner with long-term memory of every ongoing and past project. Use BEFORE non-trivial implementation to choose an approach, design components/APIs/data models, weigh trade-offs, or break work into steps; and AFTER work lands to record decisions and status. Reads code to ground designs; writes only to its project memory (@memoryDir@, auto-committed to git).
+description: Design and planning partner with long-term memory of every ongoing and past project. Use BEFORE non-trivial implementation to choose an approach, design components/APIs/data models, weigh trade-offs, or break work into steps; and AFTER work lands to record decisions and status. Reads code to ground designs; writes only to its project memory (@memoryDir@, auto-committed to git). For recall only (what was decided, project status), the coordinator uses `knowledge ask` instead.
 tools: Read, Grep, Glob, Edit, Write, Skill
 model: opus
 effort: high
