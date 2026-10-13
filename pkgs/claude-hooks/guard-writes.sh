@@ -40,12 +40,6 @@ under "$cwd" || deny "Writes outside the working directory ($cwd) are not allowe
 for p in "$HOME/.claude" "$CFG" "$HOME/.ssh" "$HOME/.gnupg" "$HOME/.config" "$HOME/.local" "$HOME/.aws" "$HOME/.kube" "$HOME/.m2/settings.xml" "$MEM"; do
   under "$p" && deny "Path $abs is protected (config/secrets/architect memory)."
 done
-# Config repos (list injected by Nix, may be empty) are editable only by agents working inside them
-PROTECTED_REPOS=(@protectedRepos@)
-for repo in "${PROTECTED_REPOS[@]}"; do
-  case "$(realpath -m -- "$cwd")/" in "$(realpath -m -- "$repo")"/*) continue ;; esac
-  under "$repo" && deny "Path $abs is protected (config repo $repo)."
-done
 # Top-level dotfiles in $HOME (.bashrc, .profile, ...)
 [ "$(dirname -- "$abs")" = "$HOME" ] && case "$(basename -- "$abs")" in .*) deny "Home dotfiles are protected." ;; esac
 case "$(basename -- "$abs")" in .env|.env.*|*.pem|*.key|id_rsa*|id_ed25519*) deny "Secret-like files are protected." ;; esac
