@@ -6,6 +6,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -51,6 +52,8 @@ enum Effect {
     DismissAll,
     /// Answer item `.0` with the line `.1`.
     Send(String, String),
+    /// Switch to (or open) the zellij tab of shpool session `.0`.
+    Attach(String),
 }
 
 #[derive(Default)]
@@ -332,9 +335,9 @@ impl App {
                     self.mode = Mode::ConfirmDismissAll;
                 }
             }
-            // Dismiss and raw view only: decisions and input modes are for the detail pane (a
-            // held key must not decide the items that move up under the selection).
-            KeyCode::Char('d' | '?') => {
+            // Dismiss, attach and raw view only: decisions and input modes are for the detail
+            // pane (a held key must not decide the items that move up under the selection).
+            KeyCode::Char('d' | 'a' | '?') => {
                 if let Some(id) = self.selected_item().map(|i| i.id.clone()) {
                     if let Some(effect) = self.item_key(id, code) {
                         return effect;
@@ -361,15 +364,23 @@ impl App {
         }
     }
 
-    /// Keys that act on the item `id` (from the detail pane and the answer choice, `d` and `?`
-    /// also from the list); None = not one of them. Decisions need a plain key (no Enter) and an
-    /// item that can be answered.
+    /// Keys that act on the item `id` (from the detail pane and the answer choice, `d`, `a` and
+    /// `?` also from the list); None = not one of them. Decisions need a plain key (no Enter)
+    /// and an item that can be answered.
     fn item_key(&mut self, id: String, code: KeyCode) -> Option<Effect> {
         let act = self.find(&id).and_then(action);
         match code {
             KeyCode::Char('d') => {
                 self.mode = Mode::List;
                 Some(Effect::Dismiss(id))
+            }
+            KeyCode::Char('a') => {
+                let name = self.find(&id).map_or("", Item::shpool).to_string();
+                if name.is_empty() {
+                    self.notify("no shpool session for this item", true);
+                    return Some(Effect::None);
+                }
+                Some(Effect::Attach(name))
             }
             KeyCode::Char('?') => {
                 self.raw = !self.raw;
@@ -513,6 +524,11 @@ impl App {
                     Some(effect) if effect != Effect::None => return effect,
                     _ => {}
                 },
+                // attach keeps the choice open (item_key leaves the mode alone)
+                KeyCode::Char('a') => {
+                    self.mode = Mode::Answer { id: id.clone(), st };
+                    return self.item_key(id, code).unwrap_or(Effect::None);
+                }
                 // the raw view hides the choice: nothing is picked blind
                 _ if self.raw => {}
                 KeyCode::Char('k') | KeyCode::Up => st.cursor = st.cursor.saturating_sub(1),
@@ -599,6 +615,9 @@ impl App {
                 if let Some(item) = self.selected_item() {
                     h.push(("enter", "open"));
                     h.push(("d", "dismiss"));
+                    if !item.shpool().is_empty() {
+                        h.push(("a", "attach"));
+                    }
                     if item.reply().is_none() {
                         h.push(("D", "dismiss read-only"));
                     }
@@ -618,6 +637,9 @@ impl App {
                 if let Some(item) = self.find(id) {
                     h.extend(action_hints(item));
                     h.push(("d", "dismiss"));
+                    if !item.shpool().is_empty() {
+                        h.push(("a", "attach"));
+                    }
                     h.push(("?", "raw"));
                 }
                 h.push(("esc", "back"));
@@ -629,9 +651,9 @@ impl App {
                     .find(id)
                     .map(Item::questions)
                     .and_then(|qs| qs.get(st.idx).map(|q| q.multi));
-                match (multi, &st.input) {
-                    (None, _) => vec![("esc", "back")],
-                    (Some(_), Some(_)) => vec![("enter", "accept"), ("esc", "back")],
+                let mut h = match (multi, &st.input) {
+                    (None, _) => return vec![("esc", "back")],
+                    (Some(_), Some(_)) => return vec![("enter", "accept"), ("esc", "back")],
                     (Some(true), None) => vec![
                         ("1-9/space", "toggle"),
                         ("j/k", "move"),
@@ -648,7 +670,11 @@ impl App {
                         ("n", "deny"),
                         ("d", "dismiss"),
                     ],
+                };
+                if self.find(id).is_some_and(|item| !item.shpool().is_empty()) {
+                    h.push(("a", "attach"));
                 }
+                h
             }
         }
     }
@@ -1254,9 +1280,57 @@ fn perform(app: &mut App, effect: Effect, base: &str, runtime: Option<&Path>) ->
             }
         }
         Effect::Send(id, line) => send(app, base, runtime, &id, &line),
+        Effect::Attach(name) => {
+            attach(app, &name);
+            return false;
+        }
     }
     refresh(app, base);
     false
+}
+
+/// Runs `zellij action <args>` without touching the TUI's terminal; Ok = its stdout.
+fn zellij(args: &[&str]) -> Result<String, String> {
+    let out = Command::new("zellij")
+        .arg("action")
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("zellij {}: {e}", args[0]))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        let err = String::from_utf8_lossy(&out.stderr);
+        Err(format!("zellij {} failed: {}", args[0], err.trim()))
+    }
+}
+
+/// Goes to the zellij tab named `name`, or opens one attached to the shpool session `name`.
+fn attach(app: &mut App, name: &str) {
+    if std::env::var_os("ZELLIJ").is_none() {
+        app.notify("not inside zellij ($ZELLIJ is unset)", true);
+        return;
+    }
+    let result = zellij(&["query-tab-names"]).and_then(|tabs| {
+        if tabs.lines().any(|tab| tab == name) {
+            zellij(&["go-to-tab-name", name])
+        } else {
+            zellij(&[
+                "new-tab",
+                "--name",
+                name,
+                "--close-on-exit",
+                "--",
+                "shpool",
+                "attach",
+                "-f",
+                name,
+            ])
+        }
+    });
+    if let Err(e) = result {
+        app.notify(e, true);
+    }
 }
 
 fn dismiss(app: &mut App, base: &str, id: &str) {
@@ -1776,6 +1850,51 @@ mod tests {
     }
 
     #[test]
+    fn attach_key_returns_the_shpool_session_from_list_detail_and_answer() {
+        let with_shpool = |mut item: Item| {
+            item.event["shpool"] = json!("s-1");
+            item
+        };
+        let attach = Effect::Attach("s-1".into());
+        let mut a = app(vec![with_shpool(question("a", 990.0))]);
+        assert_eq!(a.on_key(key('a')), attach);
+        assert!(matches!(a.mode, Mode::List));
+        assert!(a.status().is_none());
+        a.on_key(code(KeyCode::Enter));
+        assert_eq!(a.on_key(key('a')), attach);
+        assert!(matches!(a.mode, Mode::Detail { .. }));
+        // the choice stays open
+        let mut a = app(vec![with_shpool(ask("q", Some(HOOK_REPLY)))]);
+        a.on_key(code(KeyCode::Enter));
+        assert_eq!(a.on_key(key('a')), attach);
+        assert!(matches!(a.mode, Mode::Answer { .. }));
+    }
+
+    #[test]
+    fn attach_key_without_shpool_session_is_an_error() {
+        let mut a = app(vec![question("a", 990.0)]);
+        assert_eq!(a.on_key(key('a')), Effect::None);
+        let status = a.status().expect("a status message");
+        assert!(status.error && status.text.contains("no shpool session"));
+        assert!(matches!(a.mode, Mode::List));
+    }
+
+    #[test]
+    fn attach_hint_is_in_the_footer() {
+        let mut item = question("a", 990.0);
+        item.event["shpool"] = json!("s-1");
+        let mut a = app(vec![item]);
+        assert!(screen(&a).contains("a attach"));
+        a.on_key(code(KeyCode::Enter));
+        assert!(screen(&a).contains("a attach"));
+        // nothing to attach to
+        let mut a = app(vec![question("a", 990.0)]);
+        assert!(!screen(&a).contains("attach"));
+        a.on_key(code(KeyCode::Enter));
+        assert!(!screen(&a).contains("attach"));
+    }
+
+    #[test]
     fn tab_moves_focus_between_list_and_detail() {
         let mut a = app(vec![question("a", 990.0)]);
         a.on_key(code(KeyCode::Tab));
@@ -2011,7 +2130,7 @@ mod tests {
         a.on_key(code(KeyCode::Enter));
         assert_eq!(a.on_key(key('n')), deny("p"));
         assert_eq!(a.on_key(key('n')), Effect::None);
-        // there is no `a` in the detail pane
+        // `a` does nothing without a shpool session
         a.on_key(code(KeyCode::Enter));
         assert_eq!(a.on_key(key('a')), Effect::None);
         assert!(matches!(a.mode, Mode::Detail { .. }));
@@ -2277,7 +2396,7 @@ mod tests {
         let mut a = app(vec![ask("q", Some(HOOK_REPLY))]);
         a.on_key(code(KeyCode::Enter));
         a.now += 1.0;
-        for c in "qDypa0".chars() {
+        for c in "qDyp0".chars() {
             assert_eq!(a.on_key(key(c)), Effect::None);
         }
         for modifier in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
@@ -2632,8 +2751,8 @@ mod tests {
         a.now += 1.0;
         a.on_key(key('G'));
         a.on_key(code(KeyCode::Enter));
-        type_text(&mut a, "gGhn1d?");
-        assert!(screen(&a).contains("Other: gGhn1d?"));
+        type_text(&mut a, "gGhn1d?a");
+        assert!(screen(&a).contains("Other: gGhn1d?a"));
     }
 
     #[test]
