@@ -42,7 +42,9 @@
         ];
       }
     ];
-    # Event-started sessions only (the hook checks KNOWLEDGE_ORIGIN): tells the user the session waits.
+    # Event-started sessions only: with CLAUDE_EVENT_SESSION_DIR set it delivers queued event prompts (paths)
+    # by blocking the stop; for KNOWLEDGE_ORIGIN sessions it otherwise posts claude.waiting (tells the user
+    # the session waits).
     # Permission prompts and questions are already routed by PermissionRequest.
     Stop = [
       {
@@ -50,6 +52,18 @@
           {
             type = "command";
             command = "claude-stop-hook || true";
+            timeout = 10;
+          }
+        ];
+      }
+    ];
+    # Event-started sessions only (the hook checks CLAUDE_EVENT_SESSION_DIR): hands over queued follow-up prompts.
+    UserPromptSubmit = [
+      {
+        hooks = [
+          {
+            type = "command";
+            command = "claude-prompt-hook || true";
             timeout = 10;
           }
         ];

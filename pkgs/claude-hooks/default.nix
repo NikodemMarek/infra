@@ -140,13 +140,41 @@ let
     ];
   };
 
-  # Stop hook: tells the user an event-started session waits for them (claude.waiting).
+  # Moves queued follow-up prompt files of an event session to read/ and prints their paths.
+  eventQueue = shellHook {
+    name = "claude-event-queue";
+    src = ./event-queue.sh;
+    runtimeInputs = [ coreutils ];
+    bashOptions = [
+      "nounset"
+      "pipefail"
+    ];
+  };
+
+  # Stop hook: points an event-started session at queued follow-up prompts (blocks the stop), else tells
+  # the user it waits for them (claude.waiting).
   stopHook = shellHook {
     name = "claude-stop-hook";
     src = ./stop-hook.sh;
     runtimeInputs = [
       jq
       routeEvent
+      eventQueue
+    ];
+    bashOptions = [
+      "nounset"
+      "pipefail"
+    ];
+  };
+
+  # UserPromptSubmit hook: adds the paths of queued follow-up prompts of an event session as context.
+  promptHook = shellHook {
+    name = "claude-prompt-hook";
+    src = ./prompt-hook.sh;
+    runtimeInputs = [
+      jq
+      coreutils
+      eventQueue
     ];
     bashOptions = [
       "nounset"
@@ -188,12 +216,14 @@ symlinkJoin {
     routeEvent
     askpass
     permissionHook
+    eventQueue
     stopHook
+    promptHook
     jjWorkspace
   ];
 
   meta = {
-    description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop hook of event-started sessions, jj workspaces for isolated agents";
+    description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop and UserPromptSubmit hooks of event-started sessions (queued follow-up prompts, waiting notification), jj workspaces for isolated agents";
     platforms = lib.platforms.unix;
   };
 }
