@@ -21,7 +21,7 @@ FZF = "fzf"  # the nix package pins the store paths
 SHPOOL = "shpool"
 BASH = "bash"
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-AGENT = re.compile(r"^(agent-[0-9a-f]+|s-[0-9]+-[0-9]+-[0-9]+)$")  # the workspaces of Claude subagents and sessions
+GITLAB = re.compile(r"^gl-[a-z]+-[0-9]+(-[0-9]+)?$")  # gitlab-context's workspaces: it reuses and cleans them
 
 
 class Fail(Exception):
@@ -261,9 +261,9 @@ def cmd_rm(a):
 
 
 def cmd_prune(a):
-    """Remove the session (w-*) and Claude (agent-*, s-*) workspaces that hold nothing: empty, undescribed, a visible
-    head, not in use. Claude workspaces modified within the last hour stay. Directories jj cannot read
-    (failing to load) are deleted only after asking once for all of them."""
+    """Remove the workspaces that hold nothing: empty, undescribed, a visible head, not in use, not modified within
+    the last hour. gitlab-context's (gl-*) are left to `gitlab-context gc`, which knows when they are reused.
+    Directories jj cannot read (failing to load) are deleted only after asking once for all of them."""
     broken_ones = []
     for r in repos():
         home = f"{ROOT}/{r}"
@@ -277,13 +277,10 @@ def cmd_prune(a):
             continue  # jj already said why
         for name in names:
             d = f"{home}.agents/{name}"
-            agent = AGENT.match(name)
-            if not (name.startswith("w-") or agent) or not os.path.isdir(f"{d}/.jj") or in_use(d):
+            if GITLAB.match(name) or not os.path.isdir(f"{d}/.jj") or in_use(d) or recent(d):
                 continue
             try:
                 broken = not loads(d)
-                if (broken or agent) and recent(d):
-                    continue
                 if broken:
                     broken_ones.append((r, home, name, known))
                     continue
@@ -296,6 +293,8 @@ def cmd_prune(a):
                 sys.stderr.write(f"jw: removed {r}.agents/{name}\n")
             except Fail as e:
                 sys.stderr.write(f"jw: kept {r}.agents/{name}" + (f": {e}" if str(e) else "") + "\n")
+    if shutil.which("gitlab-context"):
+        subprocess.run(["gitlab-context", "gc", "--all"], stdout=subprocess.DEVNULL)  # it logs what it removes
     if not broken_ones:
         return
     sys.stderr.write("jw: broken workspaces (jj cannot read them, so it cannot tell what is in them):\n")
