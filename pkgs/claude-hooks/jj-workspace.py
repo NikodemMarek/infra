@@ -18,7 +18,9 @@ names (`claude --worktree foo`) get a jj workspace too, but are never squashed a
 The registry lives in $CLAUDE_CONFIG_DIR/jj-agents/<repo-hash>/<name>.json (default
 ~/.claude/jj-agents), written only by `create` (which runs with the caller's cwd), so an agent
 can't redirect the hook (`title` only adds `ws`). Claude never calls WorktreeRemove for agent
-worktrees, so idle ones are deleted after GC_AGE. A failed or conflicted squash keeps the
+worktrees, so `create` and `stop` garbage-collect all repos' registries: idle agent workspaces
+are deleted after GC_AGE unless they hold changes (`stop` reports those once), entries whose
+directory is gone are forgotten. A failed or conflicted squash keeps the
 workspace and is reported. `ws` holds the current jj workspace name when it differs from the
 registry key (the directory name).
 """
@@ -261,21 +263,49 @@ def last_activity(st):
     return max(times)
 
 
-def gc(reg):
-    """Delete agent workspaces idle for GC_AGE with nothing left to integrate."""
-    now = time.time()
-    for st in list(all_states(reg)):
+def has_work(st):
+    """Whether an agent workspace still holds changes that aren't integrated into its base."""
+    d = st["dir"]
+    if not os.path.isdir(d):
+        return False
+    if st["name"] not in jj(d, "--ignore-working-copy", "workspace", "list", "-T", 'name ++ "\\n"').split():
+        return False  # already forgotten: jj tracks nothing there any more
+    refresh(d)
+    if len(jj(d, "log", "--no-graph", "-r", f"change_id({st['base']})", "-T", 'change_id ++ "\\n"',
+              check=False).split()) != 1:
+        # base gone or divergent: the agent's own change is all that can be left
+        return jj(d, "log", "--no-graph", "-r", "@", "-T", 'if(empty, "", "x")').strip() != ""
+    return bool(changed_files(st))
+
+
+def gc(report=False):
+    """In every repo: forget entries whose directory is gone, delete agent workspaces idle for
+    GC_AGE with nothing left to integrate. With report, returns a warning (once per workspace)
+    for each idle one kept because it holds changes."""
+    now, kept = time.time(), []
+    for reg in glob.glob(os.path.join(REGISTRY, "*/")):
         try:
-            if st["kind"] != "agent" or now - last_activity(st) < GC_AGE:
-                continue
-            if os.path.isdir(st["dir"]):
-                refresh(st["dir"])
-                if changed_files(st):
-                    continue
-            delete_workspace(reg, st)
-            log(f"cleaned up idle workspace {st['name']}")
-        except Exception as e:
-            log(f"gc {st['name']}: {e}")
+            with Lock(reg, timeout=0):  # busy: a later run gets it
+                for st in list(all_states(reg)):
+                    try:
+                        if not os.path.isdir(st["dir"]):
+                            delete_workspace(reg, st)
+                            log(f"forgot workspace {st['name']}: its directory is gone")
+                        elif st["kind"] != "agent" or now - last_activity(st) < GC_AGE:
+                            continue
+                        elif not has_work(st):
+                            delete_workspace(reg, st)
+                            log(f"cleaned up idle workspace {st['name']}")
+                        elif report and not st.get("warned"):
+                            kept.append(f"jj: idle agent workspace {st['dir']} holds changes that aren't "
+                                        "integrated; integrate them or delete it")
+                            st["warned"] = True
+                            save(reg, st)
+                    except Exception as e:
+                        log(f"gc {st['name']}: {e}")
+        except Fail:
+            pass
+    return kept
 
 
 # ------------------------------------------------------------------ hooks
@@ -330,8 +360,7 @@ def create(inp):
             shutil.rmtree(d, ignore_errors=True)
             raise
         log(f"created jj workspace {name} at {d} on top of {base[:8]}")
-    with Lock(reg):
-        gc(reg)
+    gc()
     return d
 
 
@@ -389,7 +418,8 @@ def stop(inp):
                 "additionalContext": f"{problem} Reply with this sentence verbatim, followed by "
                                      "your complete previous final report unchanged."}
         return out
-    return {"systemMessage": msg} if msg else None
+    notes = ([msg] if msg else []) + gc(report=True)
+    return {"systemMessage": "\n".join(notes)} if notes else None
 
 
 def remove(inp):
