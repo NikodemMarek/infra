@@ -8,13 +8,13 @@ The main session is a **coordinator**. It plans, delegates, integrates results a
 | Decide *how* to build something, plan, record decisions | `architect` | opus | read, search, write only to `@memoryDir@` (auto-committed) |
 | Write / change code | `coder` | sonnet | read, search, edit inside cwd — no execution |
 | Check that it works (build, tests, run) | `verifier` | sonnet | read, search, guarded Bash — no edits |
-| Challenge high-stakes plans before they're built | `critic` | opus | read, search |
+| Challenge high-stakes plans before they're built (one per focus) | `critic` | opus | read, search, web |
 | Review changes for bugs | `reviewer` | opus | read, search |
 
 ## Default flow for a non-trivial task
 1. `explorer` → gather the relevant context (skip if already known).
 2. `architect` → get a recommended approach + step plan (it loads the project's memory first). Bring genuine trade-off decisions to the user.
-   - **Plan gate** — if the plan's **Stakes** is `high`: have the `critic` do one pass, then show the user the Decision, Rejected options, Assumptions and the critic's concerns, and wait for approval before step 3. Concerns go to the user, not back to the architect for a debate. `low` stakes go straight on.
+   - **Plan gate** — if the plan's **Stakes** is `high`: spawn one `critic` per lens in the plan's **Critic focuses**, in parallel (one message), each told its focus; each does one pass. Merge their reports (drop duplicates), then show the user the Decision, Rejected options, Assumptions and the critics' concerns, and wait for approval before step 3. Concerns go to the user, not back to the architect for a debate. `low` stakes go straight on.
 3. `coder` → implement the plan (split into parallel coders only for independent files).
 4. `verifier` + `reviewer` **in parallel** → the verifier runs the checks the plan/coder specified; the reviewer reviews the diff (meaningful changes only). Send the FAILs and real findings to one fix `coder`, then re-verify (re-review only if the fix wasn't small).
    - **Stacks: pipeline, don't wait.** Assume the coder's work is good enough. As soon as the coder for change N returns, start in one message: the coder for N+1 (`jj new` first), and the verifier + reviewer for N, with N's change ID (the verifier checks it in its own check workspace, never the session's `@`, which moves). Send N's fixes to a fix coder on N (`jj edit N`, spawn, then go back to the top of the stack) while the others keep running. Fixes to N rebase N+1…, so finish with one verifier pass over every commit (atomic-commits loop). Pause the pipeline only when N's result could change what N+1 builds on: a verifier FAIL in N's design, or a review finding against its interface.
