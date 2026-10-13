@@ -19,7 +19,15 @@
   # and prints one JSON line: `{"action": "skip", "reason": ...}` or
   # `{"action": "spawn", "cwd", "context_dir", "session_lock", "workspace"}`
   # (`context_dir/prompt.md` is the prompt). null: no preparation, claude starts
-  # in the main checkout with a prompt built from the event alone
+  # in the main checkout with a prompt built from the event alone.
+  # A spawn may also carry `"session": {"id": "<uuid>", "dir": "<abs path>",
+  # "resume": <bool>}`: one claude conversation per workspace. `dir/queue/*.md`
+  # holds follow-up prompts not yet delivered (with `resume` the tool has put
+  # this event's there, besides `context_dir/prompt.md`), `dir/read/` the
+  # delivered ones. The launcher writes `dir/started` (the conversation `id`
+  # exists, so resume it) and `dir/shpool` (the shpool session name). If the
+  # session is live (`session_lock` held), the handler only notifies and the
+  # session's hooks deliver the queue
   contextTool ? null,
   # more tools on the PATH of the launcher and of the handler (whose environment
   # goes on into the shpool session), e.g. CLIs the prompts or the context tool
@@ -79,6 +87,15 @@ let
               context_dir=$(jq -er '.context_dir | strings' <<<"$out") &&
               session_lock=$(jq -er '.session_lock | strings' <<<"$out"); then
               prepared=1
+              # optional; `?` keeps a malformed session from failing the handler
+              sid=$(jq -r '.session.id? | strings // empty' <<<"$out")
+              sdir=$(jq -r '.session.dir? | strings // empty' <<<"$out")
+              resume=$(jq -r '.session.resume? // false' <<<"$out")
+              if [[ -z "$sid" || -z "$sdir" ]]; then
+                sid=""
+                sdir=""
+                resume=""
+              fi
               # edits are auto-approved only in a workspace of its own, never in the main checkout
               if jq -e '.workspace | type == "object"' <<<"$out" >/dev/null; then
                 perm=acceptEdits
@@ -100,13 +117,17 @@ let
   # runs in the shpool session: $1 = context dir, $2 = session lock, $3 = gitlab host,
   # $4 = claude permission mode (default: ask for everything),
   # $5 = knowledge origin (`event:<type>`), exported so the knowledge CLI marks
-  # what the session submits as untrusted
+  # what the session submits as untrusted, optionally $6 = claude session id,
+  # $7 = session dir (see contextTool): then the lock is held on fd 8 while
+  # claude runs, and a started conversation is resumed with the queued prompts
   launcher = writeShellApplication {
     name = "event-claude-launch";
     # the user's own jj, if any, comes first on PATH: ours is appended below
     runtimeInputs = [
       claude
+      claude-hooks
       util-linux
+      coreutils
       glab
       jq
     ] ++ extraPackages;
@@ -121,16 +142,65 @@ let
         *) perm=default ;;
       esac
 
-      # no exec: if another session holds the lock for too long, say so (in the
-      # session and as an event; no SHPOOL_SESSION_NAME: this session is gone
-      # right after, there is nothing to attach to)
+      # say it in the session and as an event; no SHPOOL_SESSION_NAME: this
+      # session is gone right after, there is nothing to attach to
+      not_started() {
+        echo "event-claude-launch: $1" >&2
+        jq -n --arg cwd "$PWD" --arg title "$1" '{cwd: $cwd, title: $title, timeout: 86400}' |
+          SHPOOL_SESSION_NAME="" ${lib.getExe' claude-hooks "claude-route-event"} claude.not_started >&2 || true
+      }
+
       status=0
+      if [[ -n "''${6:-}" && -n "''${7:-}" ]]; then
+        # one conversation per workspace: the lock stays on fd 8 until claude is
+        # gone (claude gets it closed, so its children cannot hold it); the hooks
+        # of a live session take the queue in $7/queue
+        export CLAUDE_EVENT_SESSION_DIR="$7"
+        exec 8>"$2"
+        if ! flock -w 30 8; then
+          # the live session's hooks deliver what the handler queued
+          if [[ -e "$7/started" ]]; then
+            exit 0
+          fi
+          not_started "another claude session still holds $2 after 30s, not starting; the prompt is in $1/prompt.md"
+          exit 75
+        fi
+        # the context tool may not have created the dir on a new conversation
+        mkdir -p "$7/queue"
+        printf '%s\n' "''${SHPOOL_SESSION_NAME:-}" >"$7/shpool"
+        if [[ -e "$7/started" ]]; then
+          mapfile -t paths < <(claude-event-queue take "$7")
+          if [[ ''${#paths[@]} == 0 ]]; then
+            exit 0
+          fi
+          claude --resume "$6" --add-dir "$1" "$7" --permission-mode "$perm" "New GitLab activity on this MR, read: ''${paths[*]}" 8>&- || status=$?
+          if [[ "$status" != 0 ]]; then
+            # the taken files are not queued any more: say so; start afresh next time
+            not_started "claude --resume exited with $status; undelivered: ''${paths[*]}"
+            rm -f "$7/started"
+          fi
+        else
+          prompt=$(cat "$1/prompt.md")
+          touch "$7/started"
+          claude --session-id "$6" --add-dir "$1" "$7" --permission-mode "$perm" "$prompt" 8>&- || status=$?
+          if [[ "$status" != 0 ]]; then
+            not_started "claude exited with $status; the prompt is in $1/prompt.md"
+            rm -f "$7/started"
+          fi
+        fi
+        exec 8>&-
+        shopt -s nullglob
+        left=("$7"/queue/*.md)
+        if [[ ''${#left[@]} -gt 0 ]]; then
+          not_started "''${#left[@]} GitLab update(s) were queued after Claude ended; the next event for this MR delivers them"
+        fi
+        exit "$status"
+      fi
+
+      # no exec: if another session holds the lock for too long, say so
       flock -o -w 30 -E 75 "$2" claude --add-dir "$1" --permission-mode "$perm" "$(cat "$1/prompt.md")" || status=$?
       if [[ "$status" == 75 ]]; then
-        msg="another claude session still holds $2 after 30s, not starting; the prompt is in $1/prompt.md"
-        echo "event-claude-launch: $msg" >&2
-        jq -n --arg cwd "$PWD" --arg title "$msg" '{cwd: $cwd, title: $title, timeout: 86400}' |
-          SHPOOL_SESSION_NAME="" ${lib.getExe' claude-hooks "claude-route-event"} claude.not_started >&2 || true
+        not_started "another claude session still holds $2 after 30s, not starting; the prompt is in $1/prompt.md"
       fi
       exit "$status"
     '';
@@ -183,10 +253,21 @@ writeShellApplication {
     cwd=""
     context_dir=""
     session_lock=""
+    sid=""
+    sdir=""
+    resume=""
     ${prepareBlock}
+    # queued: a claude session of this MR is live, its hooks deliver the queue
+    mode=start
+    if [[ "$resume" == true ]] && ! flock -n -s "$session_lock" true; then
+      mode=queued
+    fi
     if [[ "$prepared" == 1 ]]; then
       workdir=$cwd
       cmd=(${lib.getExe launcher} "$context_dir" "$session_lock" "$host" "$perm" "$origin")
+      if [[ -n "$sid" ]]; then
+        cmd+=("$sid" "$sdir")
+      fi
       shown_prompt=$(cat "$context_dir/prompt.md")
     else
       # the user's own checkout, with no workspace and no edits without asking
@@ -202,11 +283,25 @@ writeShellApplication {
         echo "context: $context_dir"
       fi
       echo "session: $name"
+      if [[ -n "$sid" ]]; then
+        echo "session: $sid $sdir resume=$resume"
+        echo "action: $mode"
+      fi
       printf 'command:'
       printf ' %q' "''${cmd[@]}"
       printf '\n'
       echo "prompt:"
       echo "$shown_prompt"
+      exit 0
+    fi
+
+    if [[ "$mode" == queued ]]; then
+      shopt -s nullglob
+      queued=("$sdir"/queue/*.md)
+      ws=$(cat "$sdir/shpool" 2>/dev/null || true)
+      # notify shows `.shpool` as "shpool attach <name>", if set
+      jq --arg title "''${#queued[@]} update(s) queued for the running Claude session" --arg ws "$ws" \
+        '.title = $title | .shpool = $ws' <<<"$event" | ${lib.getExe notify}
       exit 0
     fi
 
