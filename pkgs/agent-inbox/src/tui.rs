@@ -58,6 +58,12 @@ enum Effect {
     Send(String, String),
     /// Switch to (or open) the zellij tab of shpool session `.0`.
     Attach(String),
+    /// SIGTERM to the Claude process `pid` (started at `start`), then dismiss the items of its
+    /// session.
+    Kill {
+        pid: u32,
+        start: u64,
+    },
 }
 
 #[derive(Default)]
@@ -73,6 +79,9 @@ enum Mode {
     Answer { id: String, st: Answering },
     /// One key (`y`) confirms dismissing every item without a reply target, any other cancels.
     ConfirmDismissAll,
+    /// One key (`y`) confirms killing the session of process `pid`, which started at `start` when
+    /// asked (sessions view), any other cancels.
+    ConfirmKill { pid: u32, start: u64 },
 }
 
 /// Progress through the questions of one item.
@@ -324,6 +333,8 @@ impl App {
             Mode::Answer { id, st } => self.answer_key(id, st, code),
             Mode::ConfirmDismissAll if code == KeyCode::Char('y') => Effect::DismissAll,
             Mode::ConfirmDismissAll => Effect::None,
+            Mode::ConfirmKill { pid, start } if code == KeyCode::Char('y') => self.kill(pid, start),
+            Mode::ConfirmKill { .. } => Effect::None,
         };
         // An item decided in the detail pane of a session: on to the next item of the session.
         // (From the list the focus stays there, a held key must not decide the next item.)
@@ -447,9 +458,44 @@ impl App {
                     None => self.notify("not in a shpool session", true),
                 }
             }
+            // Without a start time the pid cannot be told from a reused one: not worth asking.
+            KeyCode::Char('x') => match self.selected_session().map(|s| (s.pid, s.start)) {
+                Some((pid, Some(start))) => self.mode = Mode::ConfirmKill { pid, start },
+                Some((pid, None)) => self.notify(
+                    format!("pid {pid} not killed: the registry has no start time"),
+                    true,
+                ),
+                None => {}
+            },
             _ => {}
         }
         Effect::None
+    }
+
+    /// The effect that kills the session of process `pid` (confirmed); it may have ended since
+    /// `start`, or the pid been reused.
+    fn kill(&mut self, pid: u32, start: u64) -> Effect {
+        let same = self
+            .sessions
+            .iter()
+            .any(|s| s.pid == pid && s.start == Some(start));
+        if same {
+            Effect::Kill { pid, start }
+        } else {
+            self.notify("session is gone", true);
+            Effect::None
+        }
+    }
+
+    /// The ids of the pending items of the session of process `pid`.
+    fn session_item_ids(&self, pid: u32) -> Vec<String> {
+        let Some(session) = self.sessions.iter().find(|s| s.pid == pid) else {
+            return Vec::new();
+        };
+        self.session_items(session)
+            .into_iter()
+            .map(|i| i.id.clone())
+            .collect()
     }
 
     /// Whether `code` is swallowed because it is the key that just opened an item (see
@@ -721,13 +767,16 @@ impl App {
                 if !session.shpool.is_empty() {
                     h.push(("a", "attach"));
                 }
+                if session.start.is_some() {
+                    h.push(("x", "kill"));
+                }
             }
             h.push(("S", "inbox"));
             h.push(("q", "quit"));
             return h;
         }
         match &self.mode {
-            Mode::List | Mode::ConfirmDismissAll => {
+            Mode::List | Mode::ConfirmDismissAll | Mode::ConfirmKill { .. } => {
                 let mut h = Vec::new();
                 if let Some(item) = self.selected_item() {
                     h.push(("enter", "open"));
@@ -1430,7 +1479,7 @@ fn render_session_detail(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_detail(f: &mut Frame, app: &App, area: Rect) {
     let (item, scroll) = match &app.mode {
-        Mode::List | Mode::ConfirmDismissAll => (app.selected_item(), 0),
+        Mode::List | Mode::ConfirmDismissAll | Mode::ConfirmKill { .. } => (app.selected_item(), 0),
         Mode::Detail { id, scroll } => (app.find(id), *scroll),
         Mode::Password { id, .. } | Mode::Answer { id, .. } => (app.find(id), 0),
     };
@@ -1468,12 +1517,33 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// The confirmation prompt for killing the session of process `pid`.
+fn kill_question(app: &App, pid: u32) -> String {
+    let Some(s) = app.sessions.iter().find(|s| s.pid == pid) else {
+        return format!("Kill pid {pid}?");
+    };
+    let status = if s.status.is_empty() {
+        "unknown"
+    } else {
+        &s.status
+    };
+    format!(
+        "Kill claude {} ({}, pid {pid})?",
+        clean(&s.place()),
+        clean(status)
+    )
+}
+
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {
-    let line = if matches!(app.mode, Mode::ConfirmDismissAll) {
-        let ask = format!(
+    let ask = match &app.mode {
+        Mode::ConfirmDismissAll => Some(format!(
             "Dismiss {} items without a reply?",
             app.without_reply().len()
-        );
+        )),
+        Mode::ConfirmKill { pid, .. } => Some(kill_question(app, *pid)),
+        _ => None,
+    };
+    let line = if let Some(ask) = ask {
         let mut spans = vec![
             Span::styled(
                 ask,
@@ -1571,9 +1641,52 @@ fn perform(
             attach(app, &name);
             return false;
         }
+        Effect::Kill { pid, start } => kill(app, base, pid, start),
     }
     refresh(app, base, sessions_dir);
     false
+}
+
+/// SIGTERM to the Claude process `pid` if it is still the one that started at `start` (field 22
+/// of `/proc/<pid>/stat`, see `sessions::alive`). Without a start time the pid cannot be told
+/// from a reused one, so nothing is sent.
+fn terminate(proc: &Path, pid: u32, start: Option<u64>) -> Result<(), String> {
+    if start.is_none() {
+        return Err(format!(
+            "pid {pid} not killed: the registry has no start time, it could be another process"
+        ));
+    }
+    // never kill(0 | -1 | -pgid): a pid above i32::MAX would be a negative one
+    let raw = i32::try_from(pid)
+        .ok()
+        .filter(|&p| p > 0)
+        .ok_or_else(|| format!("invalid pid {pid}"))?;
+    if !sessions::alive(proc, pid, start) {
+        return Err(format!("pid {pid} is already gone"));
+    }
+    // SAFETY: kill only takes integers; the process was just checked to be the session's.
+    if unsafe { libc::kill(raw, libc::SIGTERM) } != 0 {
+        return Err(format!("kill {pid}: {}", io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+/// Kills the session of process `pid`, then dismisses its inbox items.
+fn kill(app: &mut App, base: &str, pid: u32, start: u64) {
+    let place = app
+        .sessions
+        .iter()
+        .find(|s| s.pid == pid)
+        .map_or_else(|| format!("pid {pid}"), Session::place);
+    let ids = app.session_item_ids(pid);
+    if let Err(e) = terminate(Path::new("/proc"), pid, Some(start)) {
+        app.notify(e, true);
+        return;
+    }
+    app.notify(format!("killed {place}"), false);
+    for id in ids {
+        dismiss_replied(app, base, &id);
+    }
 }
 
 /// Runs `zellij action <args>` without touching the TUI's terminal; Ok = its stdout.
@@ -3485,5 +3598,183 @@ mod tests {
         assert!(a.offline.is_some());
         assert_eq!(a.sessions.len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // --- kill
+
+    fn started(mut s: Session, start: u64) -> Session {
+        s.start = Some(start);
+        s
+    }
+
+    #[test]
+    fn x_asks_and_y_kills_the_selected_session() {
+        let sessions = vec![
+            started(session(7, "s-a", WAITING), 42),
+            started(session(8, "s-b", "idle"), 43),
+        ];
+        let mut a = sessions_app(vec![], sessions);
+        assert!(screen(&a).contains("x kill"));
+        assert_eq!(a.on_key(key('x')), Effect::None);
+        let s = screen(&a);
+        assert!(
+            s.contains("Kill claude r:w1 (waiting, pid 7)?  y yes  n no"),
+            "{s}"
+        );
+        assert_eq!(a.on_key(key('y')), Effect::Kill { pid: 7, start: 42 });
+        assert!(matches!(a.mode, Mode::List));
+        assert!(!screen(&a).contains("Kill claude"));
+        // the second session
+        a.on_key(key('j'));
+        a.on_key(key('x'));
+        assert!(screen(&a).contains("Kill claude r:w1 (idle, pid 8)?"));
+        assert_eq!(a.on_key(key('y')), Effect::Kill { pid: 8, start: 43 });
+    }
+
+    #[test]
+    fn a_session_without_a_start_time_is_refused_at_once() {
+        let mut a = sessions_app(vec![], vec![session(7, "s-a", "idle")]);
+        assert!(!screen(&a).contains("x kill"));
+        assert_eq!(a.on_key(key('x')), Effect::None);
+        assert!(matches!(a.mode, Mode::List));
+        let s = screen(&a);
+        assert!(
+            s.contains("pid 7 not killed: the registry has no start time"),
+            "{s}"
+        );
+        assert!(!s.contains("Kill claude"), "{s}");
+    }
+
+    #[test]
+    fn any_other_key_cancels_the_kill() {
+        for cancel in [key('n'), key('x'), key('j'), key('q'), code(KeyCode::Esc)] {
+            let sessions = vec![
+                started(session(7, "s-a", "idle"), 42),
+                started(session(8, "s-b", "idle"), 43),
+            ];
+            let mut a = sessions_app(vec![], sessions);
+            a.on_key(key('x'));
+            assert_eq!(a.on_key(cancel), Effect::None);
+            assert!(matches!(a.mode, Mode::List), "{cancel:?}");
+            assert_eq!(selected_pid(&a), Some(7), "{cancel:?}");
+            assert!(!screen(&a).contains("Kill claude"));
+        }
+    }
+
+    #[test]
+    fn x_needs_a_selected_session_in_the_sessions_view() {
+        let mut a = sessions_app(vec![], vec![]);
+        assert!(!screen(&a).contains("x kill"));
+        assert_eq!(a.on_key(key('x')), Effect::None);
+        assert!(matches!(a.mode, Mode::List));
+        // the inbox view ignores it
+        let mut a = app(vec![question("a", 990.0)]);
+        a.set_sessions(vec![session(7, "s-a", "idle")]);
+        assert_eq!(a.on_key(key('x')), Effect::None);
+        assert!(matches!(a.mode, Mode::List));
+        assert!(!screen(&a).contains("Kill"));
+    }
+
+    #[test]
+    fn a_session_that_ended_under_the_prompt_is_not_killed() {
+        let mut a = sessions_app(vec![], vec![started(session(7, "s-a", "idle"), 42)]);
+        a.on_key(key('x'));
+        a.set_sessions(vec![]);
+        assert!(screen(&a).contains("Kill pid 7?"));
+        assert_eq!(a.on_key(key('y')), Effect::None);
+        assert!(screen(&a).contains("session is gone"));
+    }
+
+    #[test]
+    fn a_pid_reused_under_the_prompt_is_not_killed() {
+        let mut a = sessions_app(vec![], vec![started(session(7, "s-a", "idle"), 42)]);
+        a.on_key(key('x'));
+        a.set_sessions(vec![started(session(7, "s-new", "idle"), 99)]);
+        assert_eq!(a.on_key(key('y')), Effect::None);
+        assert!(screen(&a).contains("session is gone"));
+    }
+
+    #[test]
+    fn killing_dismisses_only_the_items_of_that_session() {
+        let items = vec![
+            in_session(question("a", 990.0), "s-a"),
+            in_session(question("b", 990.0), "s-b"),
+            in_session(question("c", 990.0), "s-a"),
+            question("d", 990.0),
+        ];
+        let sessions = vec![
+            session(7, "s-a", "idle"),
+            session(8, "s-b", "idle"),
+            session(9, "", "idle"),
+        ];
+        let mut a = sessions_app(items, sessions);
+        let mut ids = a.session_item_ids(7);
+        ids.sort();
+        assert_eq!(ids, ["a", "c"]);
+        assert_eq!(a.session_item_ids(8), ["b"]);
+        // no session id: the items without one are not its
+        assert!(a.session_item_ids(9).is_empty());
+        assert!(a.session_item_ids(10).is_empty());
+        // the items are stale while the router is unreachable
+        a.offline = Some("down".into());
+        assert!(a.session_item_ids(7).is_empty());
+    }
+
+    /// Start time of process `pid`: field 22 of `/proc/<pid>/stat`.
+    fn start_of(pid: u32) -> u64 {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let rest = stat.rsplit_once(')').unwrap().1;
+        rest.split_whitespace().nth(19).unwrap().parse().unwrap()
+    }
+
+    /// A `sleep 30` that does not outlive the test, whatever the assertions do.
+    struct Sleeper(std::process::Child);
+
+    impl Sleeper {
+        fn spawn() -> Self {
+            Self(Command::new("sleep").arg("30").spawn().unwrap())
+        }
+    }
+
+    impl Drop for Sleeper {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[test]
+    fn terminate_sends_sigterm_to_the_process_with_that_start_time() {
+        use std::os::unix::process::ExitStatusExt;
+        let proc = Path::new("/proc");
+        let mut sleeper = Sleeper::spawn();
+        let pid = sleeper.0.id();
+        assert_eq!(terminate(proc, pid, Some(start_of(pid))), Ok(()));
+        assert_eq!(sleeper.0.wait().unwrap().signal(), Some(libc::SIGTERM));
+        // gone now
+        let err = terminate(proc, pid, Some(1)).unwrap_err();
+        assert!(err.contains("already gone"), "{err}");
+    }
+
+    #[test]
+    fn terminate_leaves_a_process_with_another_start_time_or_none() {
+        let proc = Path::new("/proc");
+        let mut sleeper = Sleeper::spawn();
+        let pid = sleeper.0.id();
+        let start = start_of(pid);
+        let err = terminate(proc, pid, Some(start + 1)).unwrap_err();
+        assert!(err.contains("already gone"), "{err}");
+        let err = terminate(proc, pid, None).unwrap_err();
+        assert!(err.contains("no start time"), "{err}");
+        assert_eq!(sleeper.0.try_wait().unwrap(), None);
+    }
+
+    #[test]
+    fn terminate_refuses_pids_that_are_not_a_single_process() {
+        let proc = Path::new("/proc");
+        for pid in [0, u32::MAX, i32::MAX as u32 + 1] {
+            let err = terminate(proc, pid, Some(1)).unwrap_err();
+            assert!(err.contains("invalid pid"), "{pid}: {err}");
+        }
     }
 }
