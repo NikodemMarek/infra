@@ -119,6 +119,8 @@ spec:
             - --copy-links
             - --exclude
             - .git/
+            - --exclude
+            - /dav/
             - --addr
             - :80
             - --user
