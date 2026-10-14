@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: omniverse-gitignore
+  namespace: omniverse
+data:
+  gitignore: |
+    .trash
+    .stfolder*
+    .obsidian
+    *.sync-conflict-*
+    .devenv*
+    devenv.local.nix
+    devenv.local.yaml
+    .direnv
+    .devenv
+    .pre-commit-config.yaml
+    target
+    __pycache__
+    *.cache

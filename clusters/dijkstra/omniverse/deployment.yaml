@@ -19,12 +19,18 @@ spec:
         - name: omniverse-volume
           persistentVolumeClaim:
             claimName: omniverse-pvc
+        - name: gitignore
+          configMap:
+            name: omniverse-gitignore
       containers:
         - name: git-sync
           image: alpine/git:latest
           volumeMounts:
             - name: omniverse-volume
               mountPath: /omniverse
+            - name: gitignore
+              mountPath: /etc/omniverse
+              readOnly: true
           env:
             - name: GIT_USER
               valueFrom:
@@ -52,6 +58,7 @@ spec:
               git config --global advice.addEmptyPathspec false
               git config --global user.email "git-sync@omniverse.local"
               git config --global user.name "Git Sync"
+              git config --global core.excludesFile /etc/omniverse/gitignore
 
               if [ ! -d ".git" ]; then
                 echo "Cloning the repository..."
@@ -59,10 +66,14 @@ spec:
               fi
 
               # Prevent the Megabyte rounding error (90 MiB = 94371840 bytes)
-              SIZE_LIMIT="94371840c"
+              export SIZE_LIMIT="94371840c"
 
               while true; do
-                find . \( -path ./.git -prune \) -o \( -type f -size -${SIZE_LIMIT} -print0 \) | xargs -0 -r git add -f
+                # Ignore rules live in the omniverse-gitignore ConfigMap; files >= 90 MiB are skipped.
+                # Only untracked, non-ignored paths are passed to git add (it errors on ignored ones).
+                git ls-files -z --others --exclude-standard \
+                  | xargs -0 -r sh -c 'find "$@" -maxdepth 0 -type f -size -"$SIZE_LIMIT" -print0' sh \
+                  | xargs -0 -r git add --
 
                 git add -u
 
