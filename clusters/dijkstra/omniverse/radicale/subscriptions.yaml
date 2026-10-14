@@ -7,20 +7,18 @@ data:
   refresh.sh: |
     #!/bin/sh
     # Replaces the Radicale collection nikodem/sub-<name> with the iCal feed at <url>
-    # for every line "<name> <url>" of /omniverse/calendar-subscriptions.md
-    # (<name> matches [a-z0-9][a-z0-9-]*, <url> is http(s) or webcal); all other
-    # lines are ignored.
+    # for every line "<name> <url>" of $CALENDAR_SUBSCRIPTIONS (secret
+    # CALENDAR_SUBSCRIPTIONS; <name> matches [a-z0-9][a-z0-9-]*, <url> is http(s)
+    # or webcal); all other lines are ignored.
     # Feed URLs may contain secret tokens: never print them.
     # A failed fetch leaves the previous collection untouched.
     # To remove a feed, delete its line, then run:
     # kubectl -n omniverse exec deploy/radicale -- rm -r /data/collection-root/nikodem/sub-<name>
     set -u
-    list=/omniverse/calendar-subscriptions.md
     feeds=/tmp/feeds
-    [ -f "$list" ] || { echo "no $list, nothing to do"; exit 0; }
-    [ -r "$list" ] || { echo "cannot read $list" >&2; exit 1; }
     # no pipe into the loop: it would run in a subshell and lose $status
-    grep -E '^[a-z0-9][a-z0-9-]* (https?|webcal)://[^[:space:]]+[[:space:]]*$' "$list" | tr -d '\r' > "$feeds"
+    printf '%s\n' "$CALENDAR_SUBSCRIPTIONS" | tr -d '\r' \
+      | grep -E '^[a-z0-9][a-z0-9-]* (https?|webcal)://[^[:space:]]+[[:space:]]*$' > "$feeds"
     status=0
     while read -r name url; do
       case "$url" in webcal://*) url="https://${url#webcal://}" ;; esac
@@ -57,10 +55,6 @@ spec:
             kubernetes.io/hostname: triss
           restartPolicy: Never
           volumes:
-            - name: omniverse-volume
-              persistentVolumeClaim:
-                claimName: omniverse-pvc
-                readOnly: true
             - name: scripts
               configMap:
                 name: calendar-subscriptions
@@ -75,10 +69,12 @@ spec:
                     secretKeyRef:
                       name: secrets
                       key: radicale_subscriber_password
+                - name: CALENDAR_SUBSCRIPTIONS
+                  valueFrom:
+                    secretKeyRef:
+                      name: secrets
+                      key: calendar_subscriptions
               volumeMounts:
-                - name: omniverse-volume
-                  mountPath: /omniverse
-                  readOnly: true
                 - name: scripts
                   mountPath: /scripts
               resources:
