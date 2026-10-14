@@ -214,6 +214,18 @@ Each app is a directory: `arrstack` (sonarr, radarr, lidarr, prowlarr, bazarr, q
 
 Radicale (`omniverse/radicale`) serves CalDAV at `http://radicale.tail5874bc.ts.net/`, user `nikodem`. Its data is the omniverse `dav/` directory, versioned by git-sync except what the `omniverse-gitignore` ConfigMap excludes (the `sub-*` subscription calendars and Radicale runtime files). `dav/` is not served over the omniverse WebDAV because Radicale is its only writer: use CalDAV (DAVx⁵ on Android).
 
+Calendar subscriptions are listed in the omniverse file `calendar-subscriptions.md`, one `<name> <url>` per line: `<name>` is lowercase letters, digits and dashes, starting with a letter or digit; `<url>` is `http(s)://` or `webcal://`. All other lines are ignored. The CronJob `calendar-subscriptions` refreshes them daily at 04:00 Europe/Warsaw into read-only `sub-<name>` calendars. Run it now with:
+
+```bash
+kubectl -n omniverse create job --from=cronjob/calendar-subscriptions refresh-now
+```
+
+To remove a subscription, delete its line, then delete the calendar (read-only over CalDAV):
+
+```bash
+kubectl -n omniverse exec deploy/radicale -- rm -r /data/collection-root/nikodem/sub-<name>
+```
+
 ### Kubernetes secrets
 
 Encrypted with SOPS using the cluster's age key (`.sops.yaml`); Flux decrypts them when applying (`sops-age` secret). Files must match `*.enc.*`. Only `data` and `stringData` are encrypted.
