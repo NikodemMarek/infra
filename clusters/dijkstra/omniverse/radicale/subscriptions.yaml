@@ -7,9 +7,10 @@ data:
   refresh.sh: |
     #!/bin/sh
     # Replaces the Radicale collection nikodem/sub-<name> with the iCal feed at <url>
-    # for every line "<name> <url>" of $CALENDAR_SUBSCRIPTIONS (secret
-    # CALENDAR_SUBSCRIPTIONS; <name> matches [a-z0-9][a-z0-9-]*, <url> is http(s)
-    # or webcal); all other lines are ignored.
+    # for every line "<name> <url> [<display name>]" of $CALENDAR_SUBSCRIPTIONS
+    # (secret CALENDAR_SUBSCRIPTIONS; <name> matches [a-z0-9][a-z0-9-]*, <url> is
+    # http(s) or webcal, <display name> defaults to <name>); all other lines are
+    # ignored.
     # Feed URLs may contain secret tokens: never print them.
     # A failed fetch leaves the previous collection untouched.
     # To remove a feed, delete its line, then run:
@@ -18,15 +19,22 @@ data:
     feeds=/tmp/feeds
     # no pipe into the loop: it would run in a subshell and lose $status
     printf '%s\n' "$CALENDAR_SUBSCRIPTIONS" | tr -d '\r' \
-      | grep -E '^[a-z0-9][a-z0-9-]* (https?|webcal)://[^[:space:]]+[[:space:]]*$' > "$feeds"
+      | grep -E '^[a-z0-9][a-z0-9-]* (https?|webcal)://[^[:space:]]+([[:space:]].*)?$' > "$feeds"
     status=0
-    while read -r name url; do
+    while read -r name url label; do
       case "$url" in webcal://*) url="https://${url#webcal://}" ;; esac
+      # the PUT takes the feed's own name, so set the display name afterwards
+      printf '<?xml version="1.0" encoding="utf-8"?><D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><D:displayname>%s</D:displayname></D:prop></D:set></D:propertyupdate>' \
+        "$(printf '%s' "${label:-$name}" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')" > /tmp/props.xml
+      collection="${RADICALE_URL:-http://radicale}/nikodem/sub-$name/"
       if curl -fsSL --max-time 60 -o /tmp/feed.ics "$url" \
         && grep -q '^BEGIN:VCALENDAR' /tmp/feed.ics \
         && curl -fsS --max-time 120 -o /dev/null -u "subscriber:$RADICALE_SUBSCRIBER_PASSWORD" \
           -X PUT -H 'Content-Type: text/calendar; charset=utf-8' --data-binary @/tmp/feed.ics \
-          "${RADICALE_URL:-http://radicale}/nikodem/sub-$name/"; then
+          "$collection" \
+        && curl -fsS --max-time 30 -o /dev/null -u "subscriber:$RADICALE_SUBSCRIBER_PASSWORD" \
+          -X PROPPATCH -H 'Content-Type: application/xml; charset=utf-8' --data-binary @/tmp/props.xml \
+          "$collection"; then
         echo "updated $name"
       else
         echo "failed $name" >&2
