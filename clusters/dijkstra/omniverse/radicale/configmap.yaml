@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: radicale-config
+  namespace: omniverse
+data:
+  config: |
+    [server]
+    hosts = 0.0.0.0:5232
+
+    [auth]
+    type = htpasswd
+    htpasswd_filename = /users/users
+    htpasswd_encryption = plain
+
+    [rights]
+    type = from_file
+    file = /config/rights
+    # the daily subscription job replaces whole collections with PUT
+    permit_overwrite_collection = True
+
+    [storage]
+    filesystem_folder = /data
+
+    [web]
+    type = none
+  rights: |
+    # First matching section wins.
+    [root]
+    user: .+
+    collection:
+    permissions: R
+
+    [principal]
+    user: nikodem
+    collection: {user}
+    permissions: RW
+
+    [subscriptions-read]
+    user: nikodem
+    collection: nikodem/sub-[^/]+
+    permissions: r
+
+    [subscriptions-write]
+    user: subscriber
+    collection: nikodem/sub-[^/]+
+    permissions: rw
+
+    [calendars]
+    user: nikodem
+    collection: nikodem/[^/]+
+    permissions: rw

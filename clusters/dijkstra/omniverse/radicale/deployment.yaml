@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: radicale
+  namespace: omniverse
+  labels:
+    app: radicale
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: radicale
+  template:
+    metadata:
+      labels:
+        app: radicale
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: triss
+      volumes:
+        - name: omniverse-volume
+          persistentVolumeClaim:
+            claimName: omniverse-pvc
+        - name: config
+          configMap:
+            name: radicale-config
+        - name: users
+          emptyDir:
+            medium: Memory
+      initContainers:
+        - name: init
+          image: busybox:1.37
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              printf 'nikodem:%s\nsubscriber:%s\n' "$RADICALE_PASSWORD" "$RADICALE_SUBSCRIBER_PASSWORD" > /users/users
+              chmod 644 /users/users
+              d=/data/collection-root/nikodem/personal
+              mkdir -p "$d"
+              [ -e "$d/.Radicale.props" ] || printf '%s' '{"tag": "VCALENDAR", "D:displayname": "Personal"}' > "$d/.Radicale.props"
+              # the radicale container runs as 2999 (see securityContext)
+              chown -R 2999:2999 /data
+          env:
+            - name: RADICALE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: secrets
+                  key: radicale_password
+            - name: RADICALE_SUBSCRIBER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: secrets
+                  key: radicale_subscriber_password
+          volumeMounts:
+            - name: omniverse-volume
+              mountPath: /data
+              subPath: dav
+            - name: users
+              mountPath: /users
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "5m"
+            limits:
+              memory: "64Mi"
+              cpu: "200m"
+      containers:
+        - name: radicale
+          image: tomsquest/docker-radicale:3.5.4.0
+          ports:
+            - containerPort: 5232
+          securityContext:
+            runAsUser: 2999
+            runAsGroup: 2999
+          volumeMounts:
+            - name: omniverse-volume
+              mountPath: /data
+              subPath: dav
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: users
+              mountPath: /users
+              readOnly: true
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "10m"
+            limits:
+              memory: "512Mi"
+              cpu: "300m"
