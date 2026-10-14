@@ -200,10 +200,10 @@ in {
           fi
         }
 
-        # [json] passwords are stored in plain text, hashedPasswordFile needs a hash
+        # [json] login passwords (USERS_*_PASSWORD) are stored in plain text, hashedPasswordFile needs a hash
         hash_passwords() {
           local json=$1 key hash
-          for key in $(printf '%s' "$json" | jq -r 'keys[] | select(endswith("_password"))'); do
+          for key in $(printf '%s' "$json" | jq -r 'keys[] | select(test("^users_.+_password$"))'); do
             hash=$(secret "$json" "$key" | mkpasswd -s)
             json=$(printf '%s' "$json" | HASH=$hash jq --arg k "$key" '.[$k] = env.HASH')
           done
