@@ -14,6 +14,7 @@
     "Bash(jj describe:*)"
     "Bash(jj commit:*)"
     "Bash(jj rebase:*)"
+    "Bash(jj upload:*)"
 
     # Read-only glab. Not `glab api` (can POST/PUT), `glab ci view` or
     # `glab issue board view` (interactive TUIs that can run/retry jobs).
