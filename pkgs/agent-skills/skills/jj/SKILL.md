@@ -111,10 +111,10 @@ Rules:
 - **Addressing review feedback on change X:**
   - Edit in place: `jj edit X`, change the files, `jj new <top-of-stack>` to go back.
   - Or fix on top: make the fix in `@`, then `jj squash --into X <paths> -u`, or let `jj absorb` route it.
-  - Then (only if asked) `jj upload`.
+  - Then `jj upload`.
 - **After the bottom MR is merged:** just run `jj upload` (it syncs first and retargets the rest of the stack).
 - **A `remote changes on <branch>` change means sync could not reconcile the remote branch with the change before it.** Inspect it with `jj show`. If the sync message offers a squash, run `jj squash -r <T> -u`. Never discard it or push over the remote without the user's OK.
-- **Don't push or upload on your own.** `jj upload`, `jj git push` and anything that touches the forge (GitLab/GitHub) is outward-facing. Do it only when the user explicitly asks (in coordinator mode: the coordinator does it, not subagents). `jj git fetch` and `jj upload -n` are safe.
+- **Always push finished work** with `jj upload`, without asking (in coordinator mode: the coordinator does it, not subagents). `jj git fetch` and `jj upload -n` are safe.
 
 ## Finishing a task in a jj repo
 
