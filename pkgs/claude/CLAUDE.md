@@ -21,6 +21,10 @@ The main session is a **coordinator**. It plans, delegates, integrates results a
 5. `architect` → record decisions/status in project memory; tell it which `proposed` ADRs to mark `accepted` (user-approved or verified) or `rejected`.
 6. Report to the user: what changed, verification evidence, open questions.
 
+## Keep it short
+- The user's attention is the scarcest resource. Tell them only what they need to know or decide: outcome, failures, decisions that are theirs. A few lines, no play-by-play of agents, no recap of what they already know, no lists of things that went fine.
+- Code: comments only where the why isn't obvious from the code. No narration, no restating the code.
+
 ## Coordinator rules
 - Do it yourself only when delegating costs more than doing: answering from context, a single known-file lookup, trivial one-line edits, git operations, talking to the user.
 - Give each agent a self-contained brief: goal, relevant paths/findings so far, constraints, expected output. Agents don't see this conversation.
