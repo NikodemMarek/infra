@@ -52,7 +52,6 @@
   event-handlers = {
     notify = pkgs.callPackage ./event-handlers/notify {};
     notify-critical = pkgs.event-handlers.notify.override {urgency = "critical";};
-    knowledge = pkgs.callPackage ./event-handlers/knowledge {};
     # GitLab event -> Claude session in a shpool session. No gitlab.* routes here (no
     # GitLab watcher): a layer that has one sets contextTool and adds the routes.
     claude = pkgs.callPackage ./event-handlers/claude {
@@ -67,9 +66,6 @@
     inbox = ["claude" "sudo"];
     handlers = {
       default = pkgs.event-handlers.notify;
-      knowledge = pkgs.event-handlers.knowledge;
-      # exact type wins over the `knowledge` prefix
-      "knowledge.review_needed" = pkgs.event-handlers.notify;
     };
   };
 }

@@ -7,7 +7,7 @@ name = "knowledge"
 version = "0.1.0"
 description = "Knowledge curator: collects what agents learn and keeps a curated store in the memory repo"
 requires-python = ">=3.12"
-dependencies = ["pyyaml"]
+dependencies = []
 
 [project.scripts]
 knowledge = "knowledge.cli:main"
@@ -31,12 +31,7 @@ disallow_any_expr = true
 disallow_any_decorated = true
 extra_checks = true
 
-# the only place untyped data (json, yaml, toml) enters; everything leaving it is Json
+# the only place untyped data (json, toml) enters; everything leaving it is Json
 [[tool.mypy.overrides]]
 module = "knowledge.data"
 disallow_any_expr = false
-
-# no stubs in nixpkgs; only knowledge.data imports it
-[[tool.mypy.overrides]]
-module = "yaml"
-ignore_missing_imports = true

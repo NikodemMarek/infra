@@ -19,7 +19,7 @@ host/
     global/            always on: networking, nix, openssh, sops
     optional/          opt-in features: k3s, tailscale, docker, libvirt, maintenance, ...
     disko/             disk layouts, parametrised by device (and swap size)
-modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-notifier.nix, flux-sops-age.nix, event-router.nix (the router user service, the knowledge curator timers and the shpool user service)
+modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-notifier.nix, flux-sops-age.nix, event-router.nix (the router user service, the knowledge curator timer and the shpool user service)
 pkgs/                  wrapped packages (package + bundled config) and own tools (pkgs/agent-skills/skills: Agent Skills, shared by claude and agent-skills)
 overlays/              exposes pkgs/ (the wrapped packages, shadowing the nixpkgs ones, and the tools), flake inputs as packages, deploy-rs
 clusters/dijkstra/     Kubernetes manifests, reconciled by Flux
@@ -178,7 +178,7 @@ Own programs that are not wrappers of an upstream package. They are top-level at
 
 | Package | What it is |
 |---------|------------|
-| `knowledge` | knowledge curator CLI (`knowledge submit`, `curate`, ...), keeps the memory repo of claude; `knowledge route` picks the repo a task belongs in |
+| `knowledge` | knowledge CLI of claude's memory repo: `knowledge submit` queues a note, `curate` (the user timer, every 6 h) merges the notes into the scope files, `skills` drafts skill ideas on demand, `hook` is the session-start/subagent-stop hook; `knowledge route` picks the repo a task belongs in |
 | `jj-upload` | pushes a stack of jj changes as stacked merge/pull requests (GitLab, GitHub) |
 | `jw` | jj workspaces at `<repo>.agents/<name>` for the repos under `projectsRoot` (default `~/projects`, set with `.override {projectsRoot = ...;}`; `yenn` uses `/persist/data/home/nikodem/projects`), with a fish function and completions; `jw agent` runs Claude in a shpool session; outside a repo, `jw agent "<task>"` picks the repo the task fits (one `claude -p` call; the picker if unsure) |
 | `wallpaper` | the wallpaper image (the store path is the file), used by stylix, hyprpaper and hyprlock |
@@ -188,7 +188,6 @@ Own programs that are not wrappers of an upstream package. They are top-level at
 | `event-router` | local HTTP inbox (`event-router emit <type>`) that runs a handler per event type; runs as a systemd user service via the `services.event-router` module. Handlers are the `handlers` argument, extend it with `.override`. Event types listed in the `inbox` argument (prefixes) are also queued in memory: `GET /inbox`, `DELETE /inbox/<id>`; an event with a non-empty string `key` replaces the queued item of the same type and key |
 | `agent-inbox` | terminal UI over the router's queue (`claude.*` and `sudo.*` events): list, inspect, dismiss, answer sudo password requests (written to the askpass FIFO, never through the router) and Claude permission prompts and questions (written to the permission hook's FIFO), attach to an item's shpool session in a zellij tab (`a`); also `list`, `reply <id>`, `dismiss <id>` |
 | `event-handlers.notify` | router handler: desktop notification with an "Open" action (flake: `event-handler-notify`; `notify-critical` is its critical-urgency variant) |
-| `event-handlers.knowledge` | router handler for `knowledge.submit` and `knowledge.curate[.weekly]` (flake: `event-handler-knowledge`) |
 | `event-handlers.claude` | GitLab event → Claude session: opens a shpool session (`shpool attach <name>`, 1-day TTL; the shpool user service comes from `services.event-router`) with Claude in the project's checkout under `$HOME/<projectsDir>`; if the context tool returns the optional `session` field, it continues the MR's one conversation (resume), and a live session only gets a "queued" notification and picks the update up through its hooks; `contextTool` (a `gitlab-context prepare` compatible package, default none: plain Claude in the main checkout), `extraPackages`, the `gitlab.*` routes and the watcher are supplied by the work layer (flake: `event-handler-claude`) |
 
 ## Infra

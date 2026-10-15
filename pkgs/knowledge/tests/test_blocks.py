@@ -1,4 +1,4 @@
-from knowledge.blocks import Block, parse_blocks
+from knowledge.blocks import Block, count_fences, parse_blocks
 
 FULL = """\
 ```knowledge
@@ -101,3 +101,10 @@ def test_crlf_text():
 def test_no_blocks():
     assert parse_blocks("") == []
     assert parse_blocks("nothing to learn here") == []
+
+
+def test_count_fences_counts_the_invalid_blocks_too():
+    text = "```knowledge\ntitle: t\n---\nbody\n```\n```knowledge\nno title\n```\n```bash\nls\n```"
+    assert count_fences(text) == 2
+    assert len(parse_blocks(text)) == 1
+    assert count_fences("") == 0

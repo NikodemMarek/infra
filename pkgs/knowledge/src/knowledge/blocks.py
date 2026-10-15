@@ -27,7 +27,7 @@ KEYS = ("title", "kind", "scope", "evidence")
 
 @dataclass(frozen=True)
 class Block:
-    """The raw words of a block; the submission validates them (an unknown kind, a title that is too long)."""
+    """The words of a block: the title and the body are not empty; the other fields are None when absent."""
 
     title: str
     body: str
@@ -82,8 +82,13 @@ def _dedent(inner: str, indent: str) -> str:
     return "\n".join(lines)
 
 
+def count_fences(text: str) -> int:
+    """How many knowledge fences `text` has, valid blocks or not: `parse_blocks` skips the invalid ones."""
+    return sum(1 for _ in _BLOCK.finditer(text.replace("\r\n", "\n")))
+
+
 def parse_blocks(text: str) -> list[Block]:
-    """Every knowledge block in `text`, in order; the ones that have no title or no body are skipped."""
+    """Every knowledge block in `text`, in order; the ones that have no title, no `---` or no body are skipped."""
     found: list[Block] = []
     for m in _BLOCK.finditer(text.replace("\r\n", "\n")):
         indent, inner = data.group(m, 1), data.group(m, 3)

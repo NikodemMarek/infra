@@ -3,15 +3,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from knowledge.llm import LlmError
-from knowledge.records import ID_RE
-
-
-def submission_ids(message: str) -> list[str]:
-    """The submission ids in a curator user message, in order, without repeats."""
-    seen: dict[str, None] = {}
-    for m in ID_RE.finditer(message):
-        seen[m.group(0)] = None
-    return list(seen)
 
 
 @dataclass(frozen=True)
@@ -22,7 +13,7 @@ class LlmCall:
 
 
 class FakeLlm:
-    """The `Llm` of the tests: `responder(message)` is the text the curator answers, or `error` is raised."""
+    """The `Llm` of the tests: `responder(message)` is the text the model answers, or `error` is raised."""
 
     def __init__(self, responder: Callable[[str], str] | None = None, error: LlmError | None = None) -> None:
         self.responder = responder or _empty_answer
@@ -37,4 +28,4 @@ class FakeLlm:
 
 
 def _empty_answer(message: str) -> str:
-    return '```json\n{"decisions": []}\n```'
+    return ""

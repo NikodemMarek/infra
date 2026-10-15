@@ -17,11 +17,6 @@ def memory_lock() -> Path:
     return runtime_dir() / "memory.lock"
 
 
-def curator_lock() -> Path:
-    """One curator run at a time."""
-    return runtime_dir() / "curator.lock"
-
-
 class FileLock:
     """An exclusive flock on a file, polled until `timeout` seconds have passed."""
 

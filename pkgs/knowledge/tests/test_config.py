@@ -45,32 +45,19 @@ def test_paths_are_not_created_until_asked(tmp_path: Path):
     assert d.is_dir() and d.stat().st_mode & 0o077 == 0
 
 
-def test_skills_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    assert config.skills_dir() == tmp_path / "skills"
-    monkeypatch.delenv("KNOWLEDGE_SKILLS_DIR")
-    assert config.skills_dir() == tmp_path / "claude" / "skills"
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
-    assert config.skills_dir() == tmp_path / "home" / ".local" / "share" / "claude" / "skills"
-
-
-def test_router_url_and_claude_bin(monkeypatch: pytest.MonkeyPatch):
-    assert config.router_url() == "http://127.0.0.1:9"
+def test_claude_bin(monkeypatch: pytest.MonkeyPatch):
     assert config.claude_bin() == "claude-bare"
-    monkeypatch.delenv("EVENT_ROUTER_URL")
     monkeypatch.setenv("KNOWLEDGE_CLAUDE", "/bin/fake-claude")
-    assert config.router_url() == "http://127.0.0.1:7531"
     assert config.claude_bin() == "/bin/fake-claude"
 
 
 def test_flags(monkeypatch: pytest.MonkeyPatch):
-    assert config.origin() is None and config.agent_name() is None
-    assert not config.curator_active() and not config.debug()
+    assert config.origin() is None
+    assert not config.curator_active()
     monkeypatch.setenv("KNOWLEDGE_ORIGIN", "event:gitlab.note")
-    monkeypatch.setenv("KNOWLEDGE_AGENT", "coder")
     monkeypatch.setenv("KNOWLEDGE_CURATOR", "1")
-    monkeypatch.setenv("KNOWLEDGE_DEBUG", "1")
-    assert config.origin() == "event:gitlab.note" and config.agent_name() == "coder"
-    assert config.curator_active() and config.debug()
+    assert config.origin() == "event:gitlab.note"
+    assert config.curator_active()
     monkeypatch.setenv("KNOWLEDGE_CURATOR", "0")
     assert not config.curator_active()
 
@@ -86,8 +73,7 @@ def test_in_claude_code(monkeypatch: pytest.MonkeyPatch):
 def test_tunable_defaults():
     t = config.tunables()
     assert t == Tunables()
-    assert (t.max_batch_bytes, t.timeout) == (400000, 900)
-    assert (t.context_bytes, t.model, t.effort) == (3072, "sonnet", "medium")
+    assert (t.timeout, t.model, t.effort) == (900, "sonnet", "medium")
 
 
 def test_tunable_overrides(monkeypatch: pytest.MonkeyPatch):
@@ -98,16 +84,8 @@ def test_tunable_overrides(monkeypatch: pytest.MonkeyPatch):
     assert (t.model, t.effort, t.timeout) == ("opus", "high", 60)
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "KNOWLEDGE_MAX_BATCH_BYTES",
-        "KNOWLEDGE_TIMEOUT",
-        "KNOWLEDGE_CONTEXT_BYTES",
-    ],
-)
 @pytest.mark.parametrize("value", ["abc", "1.5", "0", "-3"])
-def test_invalid_integer_tunables_are_usage_errors(monkeypatch: pytest.MonkeyPatch, name: str, value: str):
-    monkeypatch.setenv(name, value)
-    with pytest.raises(UsageError, match=name):
+def test_an_invalid_timeout_is_a_usage_error(monkeypatch: pytest.MonkeyPatch, value: str):
+    monkeypatch.setenv("KNOWLEDGE_TIMEOUT", value)
+    with pytest.raises(UsageError, match="KNOWLEDGE_TIMEOUT"):
         config.tunables()

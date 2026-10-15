@@ -6,11 +6,10 @@ from pathlib import Path
 
 from . import data
 from .config import memory_dir
+from .context import ProjectRow, project_for_cwd, projects_index
 from .data import ParseError
 from .llm import ClaudeCli, Llm, LlmError
-from .prompt import router_prompt
-from .scopes import project_for_cwd
-from .store import ProjectRow, Store
+from .prompts import router_prompt
 
 MODEL = "haiku"
 EFFORT = "low"
@@ -87,7 +86,7 @@ def describe(repo: Path, memory: Path, rows: Sequence[ProjectRow]) -> str:
 
 def message(task: str, candidates: Sequence[Path], memory: Path) -> str:
     """What is sent on stdin: the task, verbatim, and one line per candidate."""
-    rows = Store(memory).projects_index()
+    rows = projects_index(memory)
     lines: list[str] = []
     for repo in candidates:
         description = describe(repo, memory, rows)

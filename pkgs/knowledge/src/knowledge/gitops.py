@@ -1,9 +1,8 @@
 """Git operations on the memory repo: no hooks, and a commit takes only the paths it is given."""
 
 import os
-import re
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -12,8 +11,6 @@ from .locks import FileLock
 TIMEOUT = 120
 LOCK_WAIT = 30.0  # seconds to wait for memory.lock
 
-_TRAILER_KEY = re.compile(r"[A-Za-z][A-Za-z0-9-]*\Z")
-_REV = re.compile(r"[0-9a-fA-F]{4,64}\Z")
 # variables that point git at another repo, index or object store than the one `-C` names
 _FOREIGN_ENV = (
     "GIT_DIR",
@@ -38,27 +35,13 @@ class _Result(NamedTuple):
     err: str
 
 
-def _check_key(key: str) -> str:
-    if not _TRAILER_KEY.match(key):
-        raise ValueError(f"not a trailer key: {key!r}")
-    return key
-
-
-def _check_rev(rev: str) -> str:
-    if not rev or rev.startswith("-"):
-        raise ValueError(f"not a revision: {rev!r}")
-    return rev
-
-
-def _message(subject: str, body: str, trailers: Mapping[str, str]) -> str:
+def _message(subject: str, body: str) -> str:
     subject = " ".join(subject.split())
     if not subject:
         raise ValueError("empty commit subject")
     parts = [subject]
     if body.strip():
         parts.append(body.strip())
-    if trailers:
-        parts.append("\n".join(f"{_check_key(k)}: {' '.join(v.split())}" for k, v in trailers.items()))
     return "\n\n".join(parts) + "\n"
 
 
@@ -125,48 +108,11 @@ class Git:
     def head(self) -> str:
         return self.run("rev-parse", "HEAD").strip()
 
-    def _has_head(self) -> bool:
-        return self._proc("rev-parse", "--verify", "-q", "HEAD").code == 0
-
-    def trailer_values(self, key: str, since_days: int = 30) -> set[str]:
-        """The values of the trailer in the commits of the last `since_days` days; empty if there is no HEAD yet."""
-        if not self._has_head():
-            return set()
-        out = self.run(
-            "log", f"--since={since_days}.days.ago", f"--format=%(trailers:key={_check_key(key)},valueonly,unfold)"
-        )
-        return {line.strip() for line in out.splitlines() if line.strip()}
-
-    def commits_with_trailer(self, key: str, value: str) -> list[str]:
-        """Commits that carry the trailer `key: value`, newest first; none if there is no HEAD yet."""
-        if not self._has_head():
-            return []
-        out = self.run(
-            "log",
-            f"--format=%H%x1f%(trailers:key={_check_key(key)},valueonly,unfold,separator=%x1f)%x1e",
-        )
-        found: list[str] = []
-        for record in out.split("\x1e"):
-            sha, _, values = record.strip("\n").partition("\x1f")
-            if sha and value in (v.strip() for v in values.split("\x1f")):
-                found.append(sha)
-        return found
-
-    def last_deleting_commit(self, path: str) -> str | None:
-        [path] = self._paths([path])
-        out = self.run("log", "--diff-filter=D", "-n1", "--format=%H", "--", path).strip()
-        return out or None
-
-    def show(self, rev: str, path: str) -> str:
-        """The content of `path` at `rev`."""
-        [path] = self._paths([path])
-        return self.run("show", f"{_check_rev(rev)}:{path}")
-
     # changes
 
-    def _commit(self, paths: list[str], subject: str, body: str, trailers: Mapping[str, str]) -> str | None:
+    def _commit(self, paths: list[str], subject: str, body: str) -> str | None:
         """Commit `paths` (the caller holds the lock). Paths that are neither on disk nor known to git are dropped."""
-        message = _message(subject, body, trailers)
+        message = _message(subject, body)
         if not paths:
             return None
         in_index = self._listed("ls-files", "-z", "--", *paths)
@@ -186,13 +132,11 @@ class Git:
         self.run("commit", "-q", "--no-verify", "-m", message, "--", *known)
         return self.head()
 
-    def commit(
-        self, paths: Sequence[str], subject: str, body: str = "", trailers: Mapping[str, str] | None = None
-    ) -> str | None:
+    def commit(self, paths: Sequence[str], subject: str, body: str = "") -> str | None:
         """Commit only `paths`; the sha, or None if they have no changes. Waits for memory.lock."""
         checked = self._paths(paths)
         with FileLock(self.lock_path, self.lock_timeout):
-            return self._commit(checked, subject, body, trailers or {})
+            return self._commit(checked, subject, body)
 
     def _restore(self, paths: list[str], created: set[str]) -> None:
         """Back to HEAD (the caller holds the lock); only a path of `created` is ever deleted from the disk."""
@@ -220,39 +164,3 @@ class Git:
         made = set(self._paths(created))
         with FileLock(self.lock_path, self.lock_timeout):
             self._restore(checked, made)
-
-    def revert(self, shas: Sequence[str], subject: str, trailers: Mapping[str, str] | None = None) -> str:
-        """One commit that undoes `shas` (newest first).
-
-        The paths the commits touched must be clean. On any failure nothing is left behind (those paths are put back
-        to HEAD, which is safe because they were clean) and the error is raised.
-        """
-        if not shas:
-            raise ValueError("nothing to revert")
-        revs = [_check_rev(s) for s in shas]
-        for rev in revs:
-            if not _REV.match(rev):
-                raise ValueError(f"not a commit id: {rev!r}")
-        with FileLock(self.lock_path, self.lock_timeout):
-            touched: dict[str, None] = {}
-            for rev in revs:
-                names = self.run("diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "--root", rev)
-                touched.update((n, None) for n in names.split("\0") if n)
-            paths = list(touched)
-            if paths and self.run("status", "--porcelain", "--", *paths).strip():
-                raise GitError("revert", "the paths to revert have uncommitted changes")
-            try:
-                res = self._proc("revert", "--no-commit", *revs)
-                if res.code != 0:
-                    raise GitError("revert", " ".join((res.err or res.out).split()) or f"exit status {res.code}")
-                sha = self._commit(paths, subject, "", trailers or {})
-                if sha is None:
-                    raise GitError("revert", "the revert changed nothing (already undone?)")
-                return sha
-            except BaseException:
-                try:
-                    self._proc("revert", "--abort")  # fails if there is no sequencer state; the restore cleans up
-                except GitError:
-                    pass
-                self._restore(paths, set(paths))  # whatever is not in HEAD was made by the revert: the paths were clean
-                raise

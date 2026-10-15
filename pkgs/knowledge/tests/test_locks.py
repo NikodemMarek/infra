@@ -6,10 +6,8 @@ from knowledge import locks
 from knowledge.locks import FileLock, LockTimeout
 
 
-def test_lock_paths(tmp_path: Path):
-    run = tmp_path / "run" / "knowledge"
-    assert locks.memory_lock() == run / "memory.lock"
-    assert locks.curator_lock() == run / "curator.lock"
+def test_lock_path(tmp_path: Path):
+    assert locks.memory_lock() == tmp_path / "run" / "knowledge" / "memory.lock"
 
 
 def test_a_lock_excludes_others_until_released(tmp_path: Path):

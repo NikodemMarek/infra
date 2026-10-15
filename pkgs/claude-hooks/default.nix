@@ -75,7 +75,7 @@ let
   };
 
   # Posts to the event router with curl: depending on pkgs.event-router would be a dependency cycle
-  # (event-handlers.knowledge -> claude -> claude-hooks). Never fails with exit 2 (blocking code).
+  # (event-router -> handlers -> claude -> claude-hooks). Never fails with exit 2 (blocking code).
   routeEvent = shellHook {
     name = "claude-route-event";
     src = ./route-event.sh;

@@ -5,8 +5,8 @@ import pytest
 from fakes import FakeLlm
 from knowledge import route
 from knowledge.llm import LlmError
-from knowledge.prompt import router_prompt
-from test_import import Runner
+from knowledge.prompts import router_prompt
+from runner import Runner
 
 
 def make_repo(root: Path, name: str, readme: str | None = None, readme_name: str = "README.md") -> Path:

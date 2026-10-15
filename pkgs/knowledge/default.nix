@@ -19,7 +19,6 @@ python3Packages.buildPythonApplication {
   };
 
   build-system = [ python3Packages.setuptools ];
-  dependencies = [ python3Packages.pyyaml ];
   nativeBuildInputs = [ python3Packages.mypy ];
 
   # types are part of the build: a mypy --strict error fails it

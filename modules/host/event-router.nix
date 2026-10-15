@@ -14,7 +14,7 @@
     prompt_prefix = ""
   '';
 in {
-  options.services.event-router.enable = lib.mkEnableOption "the event router and the knowledge curator timers";
+  options.services.event-router.enable = lib.mkEnableOption "the event router and the knowledge curator timer";
 
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [pkgs.shpool];
@@ -55,34 +55,19 @@ in {
       };
 
       knowledge-curate = {
-        description = "Ask the knowledge curator to process pending submissions";
-        wants = ["event-router.service"];
-        after = ["event-router.service"];
+        description = "Merge the pending knowledge notes into the knowledge store";
+        environment.KNOWLEDGE_CLAUDE = "${pkgs.claude}/bin/claude-bare";
         serviceConfig = {
           Type = "oneshot";
-          ExecStart = "${eventRouter} emit knowledge.curate";
+          ExecStart = "${lib.getExe pkgs.knowledge} curate";
         };
         startAt = "*-*-* 00/6:15:00";
       };
-
-      knowledge-curate-weekly = {
-        description = "Ask the knowledge curator for its weekly pass";
-        wants = ["event-router.service"];
-        after = ["event-router.service"];
-        serviceConfig = {
-          Type = "oneshot";
-          ExecStart = "${eventRouter} emit knowledge.curate.weekly";
-        };
-        startAt = "Sun *-*-* 04:00:00";
-      };
     };
 
-    systemd.user.timers = {
-      knowledge-curate.timerConfig = {
-        Persistent = true;
-        RandomizedDelaySec = "10min";
-      };
-      knowledge-curate-weekly.timerConfig.Persistent = true;
+    systemd.user.timers.knowledge-curate.timerConfig = {
+      Persistent = true;
+      RandomizedDelaySec = "10min";
     };
   };
 }

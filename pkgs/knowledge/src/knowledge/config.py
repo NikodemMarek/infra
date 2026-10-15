@@ -45,17 +45,6 @@ def runtime_dir() -> Path:
     return (Path(base) if base else Path("/tmp") / f"user-{os.getuid()}") / "knowledge"
 
 
-def skills_dir() -> Path:
-    """The skills of the deployed Claude config."""
-    if (v := _env("KNOWLEDGE_SKILLS_DIR")) is not None:
-        return Path(v)
-    return claude_config_dir() / "skills"
-
-
-def router_url() -> str:
-    return _env("EVENT_ROUTER_URL") or "http://127.0.0.1:7531"
-
-
 def claude_bin() -> str:
     return _env("KNOWLEDGE_CLAUDE") or "claude-bare"
 
@@ -79,17 +68,9 @@ def in_claude_code() -> bool:
     return _env("CLAUDECODE") is not None
 
 
-def agent_name() -> str | None:
-    return _env("KNOWLEDGE_AGENT")
-
-
 def curator_active() -> bool:
     """Inside a curator run: hooks do nothing."""
     return os.environ.get("KNOWLEDGE_CURATOR") == "1"
-
-
-def debug() -> bool:
-    return os.environ.get("KNOWLEDGE_DEBUG") == "1"
 
 
 # tunables
@@ -110,9 +91,7 @@ def _int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Tunables:
-    max_batch_bytes: int = 400_000  # size of the submissions in one run
     timeout: int = 900  # seconds, per claude call
-    context_bytes: int = 3072  # size of the knowledge block of a session
     model: str = "sonnet"
     effort: str = "medium"
 
@@ -120,9 +99,7 @@ class Tunables:
 def tunables() -> Tunables:
     d = Tunables()
     return Tunables(
-        max_batch_bytes=_int("KNOWLEDGE_MAX_BATCH_BYTES", d.max_batch_bytes),
         timeout=_int("KNOWLEDGE_TIMEOUT", d.timeout),
-        context_bytes=_int("KNOWLEDGE_CONTEXT_BYTES", d.context_bytes),
         model=_env("KNOWLEDGE_MODEL") or d.model,
         effort=_env("KNOWLEDGE_EFFORT") or d.effort,
     )

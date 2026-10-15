@@ -94,17 +94,10 @@ def test_commit_without_changes_is_none(git: Git, memory_repo: Path):
     assert commit_count(memory_repo) == before
 
 
-def test_commit_writes_body_and_trailers(git: Git, memory_repo: Path):
+def test_commit_writes_the_body(git: Git, memory_repo: Path):
     put(memory_repo, "global/a.md", "a\n")
-    git.commit(
-        ["global/a.md"],
-        "knowledge: create global/a.md",
-        body="why it was kept",
-        trailers={"Submission": "s-1", "Run": "r-1"},
-    )
-    message = sh(memory_repo, "log", "-n1", "--format=%B")
-    assert message == "knowledge: create global/a.md\n\nwhy it was kept\n\nSubmission: s-1\nRun: r-1"
-    assert sh(memory_repo, "log", "-n1", "--format=%(trailers:key=Run,valueonly)") == "r-1"
+    git.commit(["global/a.md"], "knowledge: create global/a.md", body="why it was kept")
+    assert sh(memory_repo, "log", "-n1", "--format=%B") == "knowledge: create global/a.md\n\nwhy it was kept"
 
 
 def test_commit_ignores_a_failing_hook(git: Git, memory_repo: Path):
@@ -123,12 +116,6 @@ def test_commit_rejects_paths_outside_the_repo(git: Git):
         git.commit(["/etc/passwd"], "x")
 
 
-def test_commit_rejects_a_bad_trailer_key(git: Git, memory_repo: Path):
-    put(memory_repo, "global/a.md", "a\n")
-    with pytest.raises(ValueError):
-        git.commit(["global/a.md"], "a", trailers={"Bad Key": "v"})
-
-
 def test_commit_times_out_when_the_lock_is_held(git: Git, memory_repo: Path):
     put(memory_repo, "global/a.md", "a\n")
     before = commit_count(memory_repo)
@@ -139,31 +126,6 @@ def test_commit_times_out_when_the_lock_is_held(git: Git, memory_repo: Path):
     assert git.commit(["global/a.md"], "a") is not None
 
 
-def test_trailer_values_and_commits_with_trailer(git: Git, memory_repo: Path):
-    shas: list[str] = []
-    for n in (1, 2, 3):
-        put(memory_repo, f"global/{n}.md", f"{n}\n")
-        sha = git.commit([f"global/{n}.md"], f"add {n}", trailers={"Run": f"r-{n % 2}", "Submission": "s-9"})
-        assert sha is not None
-        shas.append(sha)
-    assert git.trailer_values("Run") == {"r-0", "r-1"}
-    assert git.trailer_values("Submission") == {"s-9"}
-    assert git.trailer_values("Nothing") == set()
-    assert git.commits_with_trailer("Run", "r-1") == [shas[2], shas[0]]  # newest first
-    assert git.commits_with_trailer("Run", "r-0") == [shas[1]]
-    assert git.commits_with_trailer("Run", "r-7") == []
-    assert git.commits_with_trailer("Nothing", "x") == []
-
-
-def test_trailer_queries_of_a_repo_without_a_commit_are_empty(tmp_path: Path):
-    repo = tmp_path / "fresh"
-    repo.mkdir()
-    sh(repo, "init", "-q", "-b", "main")
-    git = Git(repo, locks.memory_lock())
-    assert git.trailer_values("Submission") == set()
-    assert git.commits_with_trailer("Submission", "s-1") == []
-
-
 def test_an_argument_git_cannot_take_is_a_git_error(git: Git, memory_repo: Path):
     put(memory_repo, "global/a.md", "a\n")
     before = commit_count(memory_repo)
@@ -172,31 +134,6 @@ def test_an_argument_git_cannot_take_is_a_git_error(git: Git, memory_repo: Path)
     with pytest.raises(GitError, match="null byte"):
         git.run("log", "--format=%H\0")
     assert commit_count(memory_repo) == before
-
-
-def test_last_deleting_commit(git: Git, memory_repo: Path):
-    put(memory_repo, "global/a.md", "a\n")
-    git.commit(["global/a.md"], "add")
-    assert git.last_deleting_commit("global/a.md") is None
-    (memory_repo / "global" / "a.md").unlink()
-    deleted = git.commit(["global/a.md"], "delete")
-    assert deleted is not None
-    assert git.last_deleting_commit("global/a.md") == deleted
-    assert git.last_deleting_commit("global/other.md") is None
-
-
-def test_show_reads_a_file_at_a_revision(git: Git, memory_repo: Path):
-    put(memory_repo, "global/a.md", "old\n")
-    first = git.commit(["global/a.md"], "add")
-    assert first is not None
-    put(memory_repo, "global/a.md", "new\n")
-    git.commit(["global/a.md"], "change")
-    assert git.show(first, "global/a.md") == "old\n"
-    assert git.show("HEAD", "global/a.md") == "new\n"
-    with pytest.raises(GitError):
-        git.show(first, "global/missing.md")
-    with pytest.raises(ValueError):
-        git.show("--help", "global/a.md")
 
 
 def test_restore_resets_modified_and_removes_untracked(git: Git, memory_repo: Path):
@@ -284,110 +221,3 @@ def test_restore_brings_back_a_deleted_file(git: Git, memory_repo: Path):
     (memory_repo / "global" / "a.md").unlink()
     git.restore(["global/a.md"])
     assert (memory_repo / "global" / "a.md").read_text() == "a\n"
-
-
-def test_revert_undoes_commits_in_one_commit(git: Git, memory_repo: Path):
-    put(memory_repo, "global/a.md", "one\n")
-    git.commit(["global/a.md"], "add a")
-    put(memory_repo, "global/a.md", "two\n")
-    second = git.commit(["global/a.md"], "change a")
-    put(memory_repo, "global/b.md", "b\n")
-    third = git.commit(["global/b.md"], "add b")
-    assert second is not None and third is not None
-    before = commit_count(memory_repo)
-    sha = git.revert([third, second], "knowledge: revert", {"Reverted": "run r-1"})
-    assert sha == git.head()
-    assert commit_count(memory_repo) == before + 1
-    assert (memory_repo / "global" / "a.md").read_text() == "one\n"
-    assert not (memory_repo / "global" / "b.md").exists()
-    assert sh(memory_repo, "log", "-n1", "--format=%s") == "knowledge: revert"
-    assert git.trailer_values("Reverted") == {"run r-1"}
-    assert sh(memory_repo, "status", "--porcelain") == ""
-
-
-def test_revert_of_a_deletion_brings_the_file_back(git: Git, memory_repo: Path):
-    put(memory_repo, "global/a.md", "a\n")
-    git.commit(["global/a.md"], "add")
-    (memory_repo / "global" / "a.md").unlink()
-    deleted = git.commit(["global/a.md"], "delete")
-    assert deleted is not None
-    git.revert([deleted], "undo")
-    assert (memory_repo / "global" / "a.md").read_text() == "a\n"
-
-
-def test_revert_conflict_leaves_nothing_behind(git: Git, memory_repo: Path):
-    put(memory_repo, "global/a.md", "one\n")
-    git.commit(["global/a.md"], "add")
-    put(memory_repo, "global/a.md", "two\n")
-    second = git.commit(["global/a.md"], "two")
-    put(memory_repo, "global/a.md", "three\n")
-    git.commit(["global/a.md"], "three")
-    assert second is not None
-    head = git.head()
-    with pytest.raises(GitError):
-        git.revert([second], "undo")
-    assert git.head() == head
-    assert sh(memory_repo, "status", "--porcelain") == ""
-    assert (memory_repo / "global" / "a.md").read_text() == "three\n"
-
-
-def test_revert_refuses_paths_with_uncommitted_changes(git: Git, memory_repo: Path):
-    put(memory_repo, "global/a.md", "one\n")
-    git.commit(["global/a.md"], "add a")
-    put(memory_repo, "global/a.md", "two\n")
-    second = git.commit(["global/a.md"], "change a")
-    assert second is not None
-    head = git.head()
-    for dirty in ("edited\n", None):
-        if dirty is None:
-            (memory_repo / "global" / "a.md").unlink()
-        else:
-            put(memory_repo, "global/a.md", dirty)
-        with pytest.raises(GitError, match="uncommitted"):
-            git.revert([second], "undo")
-        assert git.head() == head
-    (memory_repo / "global" / "a.md").write_text("two\n")  # clean again
-    git.revert([second], "undo")
-    assert (memory_repo / "global" / "a.md").read_text() == "one\n"
-
-
-def test_revert_ignores_changes_to_other_paths(git: Git, memory_repo: Path):
-    put(memory_repo, "global/a.md", "one\n")
-    git.commit(["global/a.md"], "add a")
-    put(memory_repo, "global/other.md", "mine\n")
-    put(memory_repo, "README.md", "edited\n")
-    assert git.revert([git.head()], "undo") is not None
-    assert (memory_repo / "global" / "other.md").read_text() == "mine\n"
-    assert (memory_repo / "README.md").read_text() == "edited\n"
-
-
-def test_revert_failing_after_it_started_puts_the_paths_back(git: Git, memory_repo: Path, monkeypatch: pytest.MonkeyPatch):
-    put(memory_repo, "global/a.md", "a\n")
-    put(memory_repo, "global/b.md", "b\n")
-    git.commit(["global/a.md", "global/b.md"], "add both")
-    (memory_repo / "global" / "a.md").unlink()
-    deleted = git.commit(["global/a.md"], "delete a")  # reverting it brings a.md back
-    put(memory_repo, "global/b.md", "b2\n")
-    changed = git.commit(["global/b.md"], "change b")
-    assert deleted is not None and changed is not None
-    head = git.head()
-
-    def fail(*args: object, **kwargs: object) -> str:
-        raise GitError("commit", "boom")
-
-    monkeypatch.setattr(git, "_commit", fail)
-    with pytest.raises(GitError, match="boom"):
-        git.revert([changed, deleted], "undo")
-    assert git.head() == head
-    assert sh(memory_repo, "status", "--porcelain", "-uall") == ""
-    assert not (memory_repo / "global" / "a.md").exists()  # not in HEAD: what the revert made is removed
-    assert (memory_repo / "global" / "b.md").read_text() == "b2\n"
-
-
-def test_revert_needs_commits_and_valid_ids(git: Git):
-    with pytest.raises(ValueError):
-        git.revert([], "undo")
-    with pytest.raises(ValueError):
-        git.revert(["--abort"], "undo")
-    with pytest.raises(ValueError):
-        git.revert(["HEAD"], "undo")
