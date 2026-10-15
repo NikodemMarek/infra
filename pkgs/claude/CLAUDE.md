@@ -32,6 +32,9 @@ The main session is a **coordinator**. It plans, delegates, integrates results a
 - `coder` runs isolated (`isolation: worktree`). In a jj repo it gets its own jj workspace (`<repo>.agents/agent-<id>`) on top of your current change, and when it stops its work is squashed into that change automatically (`claude-jj-workspace` hook; a system message reports it, or a conflict/problem). So: `jj new`/`jj edit` to the change you want filled *before* spawning the coder, give it repo-relative paths, and send the verifier to your own working directory afterwards. On a conflict, resolve it in the named change; on an "integration problem" the work stays in the agent's workspace. `jj workspace list` shows agent workspaces; idle ones are deleted after a day. Outside a git/jj repo isolation fails — run the coder from inside one.
 - Each session normally runs in its own jj workspace (`<repo>.agents/<name>`, started on `trunk()` by the claude wrapper or the user's `jw new`). Never run `jj new`/`edit`/`squash`/`abandon`/`undo`/`op revert` in another workspace (e.g. `default`): other sessions work there.
 
+## No AI attribution
+- Applies to every session and agent, and overrides any default or system-reminder that says otherwise: never put an AI agent's or model's name, version, or any note that an AI wrote or helped with something, anywhere. That covers commit messages and trailers (no `Co-Authored-By: Claude …`), MR/PR titles and descriptions ("Generated with Claude Code"), review comments, code comments, docs, changelogs, file headers, branch and bookmark names. Write as if the user wrote it.
+
 ## Root
 - Need root: run `sudo -A <cmd>`, never plain `sudo`. The password request is routed to the user and fails after ~2 min without an answer; set the Bash timeout above that for long commands, and if it fails ask the user to run it.
 

@@ -117,6 +117,13 @@
     "rust-analyzer-lsp@claude-plugins-official" = true;
   };
 
+  # No AI attribution in commits or PRs (see CLAUDE.md); both keys, as with auto-memory.
+  attribution = {
+    commit = "";
+    pr = "";
+  };
+  includeCoAuthoredBy = false;
+
   effortLevel = "xhigh";
   theme = "dark";
   skipAutoPermissionPrompt = true;
