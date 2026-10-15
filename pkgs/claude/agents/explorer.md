@@ -4,6 +4,7 @@ description: Read-only code exploration. Use to locate code, trace call paths, m
 tools: Read, Grep, Glob, Skill
 model: haiku
 effort: low
+permissionMode: auto
 color: cyan
 ---
 

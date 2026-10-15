@@ -5,6 +5,7 @@ tools: Read, Grep, Glob, Bash, Skill
 disallowedTools: mcp__*
 model: sonnet
 effort: medium
+permissionMode: auto
 color: yellow
 hooks:
   PreToolUse:
