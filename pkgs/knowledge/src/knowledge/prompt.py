@@ -62,6 +62,11 @@ def librarian_prompt(memory: Path) -> str:
     return _fill("librarian.md", {"@@MEMORY@@": str(memory)})
 
 
+def router_prompt() -> str:
+    """The text of `prompts/router.md` (`knowledge route`); it has no placeholders."""
+    return _fill("router.md", {})
+
+
 # builders for the lines of the user message
 
 

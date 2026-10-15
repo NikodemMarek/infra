@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import ask, config, curate, data, decisions, emit, hooks, importer, index, llm, locks, records, retention
+from . import ask, config, curate, data, decisions, emit, hooks, importer, index, llm, locks, records, retention, route
 from .config import UsageError
 from .data import Json, Obj, ParseError, dumps
 from .entry import KINDS
@@ -48,6 +48,7 @@ class Args(argparse.Namespace):
     taken: bool
     hook_name: str
     question: list[str]
+    task: list[str]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -67,6 +68,10 @@ def _parser() -> argparse.ArgumentParser:
     submit.add_argument("--user", action="store_true", help="a submission of the user, stored directly with user trust; needs a terminal")
     asker = sub.add_parser("ask", help="ask the memory (curated knowledge and project memory) a question; prints the answer")
     asker.add_argument("question", nargs="*", metavar="QUESTION", help="the question; read from stdin if omitted")
+    router = sub.add_parser(
+        "route", help="pick the repo a task belongs in among the repo directories on stdin (one per line); prints one JSON line"
+    )
+    router.add_argument("task", nargs="*", metavar="TASK", help="the task; put -- before one that starts with a dash")
     sub.add_parser("receive", help="store a knowledge.submit event read from stdin (run by the event router)")
     imp = sub.add_parser("import", help="submit notes (e.g. Claude Code auto-memory files) to the curator, stored directly")
     imp.add_argument("paths", nargs="+", metavar="PATH", help="markdown files, or directories of them (MEMORY.md is skipped)")
@@ -300,6 +305,20 @@ def _ask(args: Args) -> str:
     return ask.answer(question, Path(os.getcwd()))
 
 
+def _route(args: Args) -> str:
+    """The repo the task belongs in among the directories on stdin, as one JSON line: {"repo": name or null, "reason": ...}."""
+    task = " ".join(args.task)
+    if not task.strip():
+        raise UsageError("pass the task as arguments")
+    candidates = [Path(line.strip()) for line in data.read_stdin().splitlines() if line.strip()]
+    if not candidates:
+        raise UsageError("pass the repo directories on stdin, one per line")
+    _memory()
+    picked = route.route(task, candidates)
+    out: Obj = {"repo": picked.repo, "reason": picked.reason}
+    return dumps(out)
+
+
 def _curate(args: Args) -> tuple[Obj | str, int]:
     """Run the curator; the summary, or the prompt/preview a flag asks for. Exit 1 if the model call failed."""
     weekly = args.weekly or args.mode == "weekly"
@@ -347,6 +366,8 @@ def main() -> None:
             result = _submit(args)  # the id alone, for scripts and agents
         elif args.command == "ask":
             result = _ask(args)
+        elif args.command == "route":
+            result = _route(args)
         elif args.command == "receive":
             result = _receive()
         elif args.command == "import":

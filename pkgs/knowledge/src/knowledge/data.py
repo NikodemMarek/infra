@@ -61,6 +61,14 @@ def loads(data: str | bytes) -> Json:
         raise ParseError(f"invalid json: {e}") from e
 
 
+def loads_from(text: str, start: int) -> Json:
+    """The JSON document that begins at `start` in text; what follows it is ignored."""
+    try:
+        return _clean(cast(Json, json.JSONDecoder().raw_decode(text, start)[0]))
+    except json.JSONDecodeError as e:
+        raise ParseError(f"invalid json: {e}") from e
+
+
 def dumps(value: Json, indent: int | None = None) -> str:
     if indent is None:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))

@@ -178,7 +178,7 @@ Own programs that are not wrappers of an upstream package. They are top-level at
 
 | Package | What it is |
 |---------|------------|
-| `knowledge` | knowledge curator CLI (`knowledge submit`, `curate`, ...), keeps the memory repo of claude |
+| `knowledge` | knowledge curator CLI (`knowledge submit`, `curate`, ...), keeps the memory repo of claude; `knowledge route` picks the repo a task belongs in |
 | `jj-upload` | pushes a stack of jj changes as stacked merge/pull requests (GitLab, GitHub) |
 | `jw` | jj workspaces at `<repo>.agents/<name>` for the repos under `projectsRoot` (default `~/projects`, set with `.override {projectsRoot = ...;}`; `yenn` uses `/persist/data/home/nikodem/projects`), with a fish function and completions; `jw agent` runs Claude in a shpool session; outside a repo, `jw agent "<task>"` picks the repo the task fits (one `claude -p` call; the picker if unsure) |
 | `wallpaper` | the wallpaper image (the store path is the file), used by stylix, hyprpaper and hyprlock |
