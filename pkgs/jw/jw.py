@@ -22,6 +22,9 @@ SHPOOL = "shpool"
 BASH = "bash"
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 GITLAB = re.compile(r"^gl-[a-z]+-[0-9]+(-[0-9]+)?$")  # gitlab-context's workspaces: it reuses and cleans them
+ROUTE_PROMPT = ("You choose the repository a coding task belongs in. You get the task, the repository names and maybe an "
+                "index of the user's projects. Reply with exactly one repository name from the list and nothing else. "
+                "If none fits clearly, or several fit equally, reply `none`. Do not do the task.")
 
 
 class Fail(Exception):
@@ -85,8 +88,10 @@ def pick(items, query="", empty=None):
                        input="\n".join(items), stdout=subprocess.PIPE, text=True)
     if p.returncode == 1:
         raise Fail("no match")
+    if p.returncode == 130:  # Esc, Ctrl-C
+        raise Fail("cancelled")  # agent-inbox matches this line (its `N`)
     if p.returncode != 0:
-        raise Fail()  # cancelled
+        raise Fail(f"fzf failed (exit {p.returncode})")
     return p.stdout.strip()
 
 
@@ -103,6 +108,42 @@ def repo_home(arg):
     except Fail:
         pass  # not in a repo
     return f"{ROOT}/{pick(items, arg or '')}"
+
+
+def route(task):
+    """Guess the repo for the task with one claude call; None = no confident guess."""
+    names = repos()
+    if not names:
+        return None
+    memory = os.environ.get("CLAUDE_MEMORY_DIR") or \
+        f"{os.environ.get('CLAUDE_CONFIG_DIR') or os.path.expanduser('~/.local/share/claude')}/memory"
+    try:
+        with open(f"{memory}/INDEX.md") as f:
+            index = f.read().strip()
+    except OSError:
+        index = ""
+    sys.stderr.write("jw: choosing a repo...\n")
+    text = f"Task:\n{task}\n\nRepos under {ROOT}:\n" + "\n".join(names)
+    if index:
+        text += f"\n\nProject index of the user's notes (the repo path column ends in the repo name):\n{index}"
+    cmd = ["claude", "-p", "--model", "sonnet", "--effort", "low", "--tools", "", "--no-session-persistence",
+           "--strict-mcp-config", "--settings", '{"disableAllHooks":true}', "--append-system-prompt", ROUTE_PROMPT]
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    try:
+        p = subprocess.run(cmd, input=text, cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
+        if p.returncode != 0:
+            last = next((l.strip() for l in reversed(p.stderr.splitlines()) if l.strip()), "")
+            raise OSError(f"exit {p.returncode}: {last}" if last else f"exit {p.returncode}")
+    except (OSError, subprocess.TimeoutExpired) as e:
+        why = "timed out" if isinstance(e, subprocess.TimeoutExpired) else e  # its text is the whole command line
+        sys.stderr.write(f"jw: could not choose a repo ({why}), pick one\n")
+        return None
+    lines = [l for l in p.stdout.splitlines() if l.strip()]
+    answer = lines[-1].strip().strip("`'\"*. ") if lines else ""
+    if answer in names:
+        return answer
+    sys.stderr.write("jw: no repo fits clearly, pick one\n")
+    return None
 
 
 def in_use(d):
@@ -329,16 +370,19 @@ def session_name(base):
 
 
 def cmd_agent(a):
-    repo = a.args[0] if a.args and os.path.isdir(f"{ROOT}/{a.args[0]}/.jj") else None
-    prompt = a.args[1:] if repo else a.args
+    # argparse keeps the `--` in REMAINDER; after it everything is the prompt, even a first word naming a repo
+    args, literal = (a.args[1:], True) if a.args[:1] == ["--"] else (a.args, False)
+    repo = args[0] if args and not literal and os.path.isdir(f"{ROOT}/{args[0]}/.jj") else None
+    prompt = args[1:] if repo else args
     if repo:
         workdir = f"{ROOT}/{repo}"
     else:
         try:  # the claude wrapper gives a session of its own to the main checkout and the w-* workspaces
             root, home = locate()
             workdir = root if root == home or layout(root)[1].startswith("w-") else home
-        except Fail:
-            workdir = repo_home(None)
+        except Fail:  # not in a repo: the prompt says which, else pick one
+            guess = route(" ".join(prompt)) if prompt else None
+            workdir = f"{ROOT}/{guess}" if guess else repo_home(None)
     name = session_name(layout(workdir)[0])
     # the environment and the prompt go only into this 0600 file: shpool does not pass on the client's
     # environment, and its -c is split like shell words
@@ -428,7 +472,7 @@ def parse_args():
     s.set_defaults(func=cmd_prune)
     s = sub.add_parser("info", help="print the jj workspace and stack of the current directory as JSON")
     s.set_defaults(func=cmd_info)
-    s = sub.add_parser("agent", aliases=["a"], help="run Claude in a shpool session in a repo (default: this one, else pick one)")
+    s = sub.add_parser("agent", aliases=["a"], help="run Claude in a shpool session in a repo (default: this one; outside a repo the one the prompt fits, else pick one)")
     s.add_argument("-d", "--detach", action="store_true", help="start the session in the background")
     s.add_argument("args", nargs=argparse.REMAINDER, help=f"[repo under {ROOT}] [prompt...]")
     s.set_defaults(func=cmd_agent)
@@ -448,6 +492,9 @@ def main():
         if str(e):
             print(f"jw: {e}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        print("jw: cancelled", file=sys.stderr)
+        return 130
     return 0
 
 
