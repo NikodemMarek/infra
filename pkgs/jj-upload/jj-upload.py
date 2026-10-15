@@ -11,6 +11,7 @@ the MR target branch.  Once an MR exists, its title and description on the forge
 win: they are pulled into the commit description (local edits are overwritten)
 and jj upload only maintains the stack list in the description.
 Changes you abandoned or squashed away get their MR closed and their branch deleted.
+Changes at the bottom of the stack whose MR was merged into trunk are abandoned by the sync.
 Before pushing, it syncs: fetch, rebase onto trunk, and pull commits that exist only
 on a change's remote branch into the change (or, if both sides changed, into a
 "remote changes on <branch>" change after it, and stop).  `jj sync` alone also
@@ -46,9 +47,12 @@ FS, RS = "\x1f", "\x1e"
 REMOTE_TITLE = "remote changes on "
 
 
+class Fatal(Exception):
+    pass
+
+
 def die(msg):
-    print(f"error: {msg}", file=sys.stderr)
-    sys.exit(1)
+    raise Fatal(msg)  # main reports it; sync catches it where it can carry on without
 
 
 def info(msg):
@@ -56,7 +60,10 @@ def info(msg):
 
 
 def run(cmd, check=True):
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        die(f"{cmd[0]} not found on PATH")
     if check and p.returncode != 0:
         die(f"`{' '.join(cmd)}` failed:\n{p.stderr.strip()}")
     return p
@@ -212,7 +219,9 @@ def choose_bookmark(c, prefix):
 #
 # A backend turns forge API objects into plain dicts:
 #   {"id", "ref" (e.g. "!12" / "#12"), "url", "state": open|closed|merged,
-#    "draft": bool, "title" (without draft marker), "target", "description"}
+#    "draft": bool, "title" (without draft marker), "target", "description",
+#    "head" (commit id of the source branch tip),
+#    "landed" (commit ids the merge put on the target branch; may be empty)}
 
 class Forge:
     name = "?"
@@ -265,7 +274,8 @@ class GitLab(Forge):
                 "state": {"opened": "open"}.get(mr["state"], mr["state"]), "draft": draft,
                 "title": self.DRAFT.sub("", mr["title"]) if draft else mr["title"],
                 "target": mr["target_branch"],
-                "description": mr.get("description") or ""}
+                "description": mr.get("description") or "", "head": mr.get("sha"),
+                "landed": [s for s in (mr.get("merge_commit_sha"), mr.get("squash_commit_sha")) if s]}
 
     def find(self, branch):
         q = urllib.parse.urlencode({"source_branch": branch, "order_by": "created_at", "sort": "desc"})
@@ -316,7 +326,9 @@ class GitHub(Forge):
         state = "merged" if pr.get("merged_at") else pr["state"]  # open | closed
         return {"id": pr["number"], "ref": f"#{pr['number']}", "url": pr["html_url"],
                 "state": state, "draft": bool(pr.get("draft")), "title": pr["title"],
-                "target": pr["base"]["ref"], "description": pr.get("body") or ""}
+                "target": pr["base"]["ref"], "description": pr.get("body") or "",
+                "head": pr["head"]["sha"],
+                "landed": [pr["merge_commit_sha"]] if pr.get("merge_commit_sha") else []}
 
     def find(self, branch):
         q = urllib.parse.urlencode({"head": f"{self.owner}:{branch}", "state": "all",
@@ -397,6 +409,47 @@ def pull_descriptions(commits, fg, prefix, pushed, dry_run):
     return pulled
 
 
+def merged_bottom(remote, prefix, commits, names, branch):
+    """The bottom run of commits whose MR is merged into trunk and that have no edits since their push.
+
+    Squash-merging a stack leaves changes that `rebase --skip-emptied` cannot drop:
+    a later change edited the same lines, so they conflict instead of becoming empty.
+    The forge usually deletes the source branch on merge, so the branch name comes from
+    the bookmark (`names`, read before the fetch) and the pushed commit from the MR.
+    """
+    merged = []
+    try:
+        fg = make_forge(remote)
+        for c in commits:
+            b = branch[c["change"]][0] if c["change"] in branch else names.get(c["change"])
+            if not b and c["description"]:
+                b = choose_bookmark(c, prefix)[0]  # the fetch may have deleted the local bookmark
+            if not b:
+                info(f"warning: no branch name for {c['change'][:8]}; keeping it")
+                break
+            mr = fg.find(b)
+            if not mr or mr["state"] != "merged":
+                break
+            head = mr["head"]
+            # the interdiff survives a plain rebase, which changes the commit id
+            unchanged = head and log_ids(f"present({head})") and (
+                head == c["commit"]
+                or not jj("interdiff", "--from", head, "--to", c["commit"], "--summary").strip())
+            if not unchanged:
+                info(f"warning: {mr['ref']} is merged but {c['change'][:8]} has changes since its "
+                     "last push (or the pushed commit is unknown here); keeping it")
+                break
+            # a PR merged into its parent's branch is not in trunk; the head counts for fast-forwards
+            if not any(log_ids(f"present({s}) & ::trunk()") for s in (*mr["landed"], head)):
+                info(f"warning: {mr['ref']} is merged but not into {trunk_branch(remote)} here; keeping it")
+                break
+            merged.append(c)
+    except Fatal as e:
+        info(f"warning: cannot look up merged MRs, not dropping any: {' '.join(str(e).split())}")
+        return []
+    return merged
+
+
 def sync(remote, prefix, revset):
     """Fetch, rebase onto trunk, reconcile each change with its remote branch.
 
@@ -425,7 +478,18 @@ def sync(remote, prefix, revset):
         if log_ids(revived):
             jj("abandon", revived)
 
-    jj("rebase", "-b", "@", "-o", "trunk()", "--skip-emptied")
+    dropped = merged_bottom(remote, prefix, before, names, branch)
+    rebase = ["-b", "@"]
+    if dropped:
+        for c in dropped:
+            title = c["description"].partition("\n")[0]
+            info(f"merged: {c['change'][:8]} {title}")
+        jj("abandon", *[c["commit"] for c in dropped])
+        if len(dropped) < len(before):
+            # abandoning @ leaves the kept changes above it outside `-b @`
+            rebase += ["-b", before[len(dropped)]["change"]]
+
+    jj("rebase", *rebase, "-o", "trunk()", "--skip-emptied")
 
     failures = []
     for c in reversed(load_commits(revset)):  # children first: parents' ids stay valid
@@ -643,4 +707,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Fatal as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
