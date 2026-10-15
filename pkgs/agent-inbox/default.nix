@@ -22,7 +22,7 @@ rustPlatform.buildRustPackage {
 
   nativeBuildInputs = [makeWrapper];
 
-  # `N` in the sessions view runs `jw agent -d`; a jw of the user's own PATH wins. zellij and
+  # `N` asks for a task and runs `jw agent -d <task>`; a jw of the user's own PATH wins. zellij and
   # shpool come from PATH too: they must match the running server and daemon.
   postInstall = ''
     wrapProgram $out/bin/agent-inbox --suffix PATH : ${lib.makeBinPath [jw]}

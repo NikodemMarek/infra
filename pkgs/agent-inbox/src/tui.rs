@@ -3,15 +3,18 @@
 //!
 //! Layout: a header line, the list of items next to (below, on narrow terminals) a detail pane
 //! for the selected item, and a footer with key hints or the last status message. `S` switches
-//! to the same layout over the live Claude sessions (list and detail of the selected session),
-//! where `N` starts a new agent (`jw agent -d`).
+//! to the same layout over the live Claude sessions (list and detail of the selected session).
+//! `N` (in both views) asks for a task in the footer and starts a new agent for it (`jw agent -d`).
 
-use std::io;
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers,
+};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -23,6 +26,7 @@ use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 
 use serde_json::{json, Map, Value};
+use unicode_width::UnicodeWidthChar;
 
 use crate::client::{self, clean, Item, Question};
 use crate::reply::{self, ReplyError};
@@ -69,8 +73,9 @@ enum Effect {
         pid: u32,
         start: u64,
     },
-    /// Start a new agent with `jw agent -d` (needs the terminal: done by `event_loop`).
-    NewAgent,
+    /// Start a new agent for the task `.0` with `jw agent -d` (empty: pick a repo; needs the
+    /// terminal: done by `event_loop`).
+    NewAgent(String),
 }
 
 #[derive(Default)]
@@ -89,6 +94,8 @@ enum Mode {
     /// One key (`y`) confirms killing the session of process `pid`, which started at `start` when
     /// asked (sessions view), any other cancels.
     ConfirmKill { pid: u32, start: u64 },
+    /// The task for a new agent being typed (footer).
+    Task { buf: String },
 }
 
 /// Progress through the questions of one item.
@@ -342,6 +349,7 @@ impl App {
             Mode::ConfirmDismissAll => Effect::None,
             Mode::ConfirmKill { pid, start } if code == KeyCode::Char('y') => self.kill(pid, start),
             Mode::ConfirmKill { .. } => Effect::None,
+            Mode::Task { buf } => self.task_key(buf, code),
         };
         // An item decided in the detail pane of a session: on to the next item of the session.
         // (From the list the focus stays there, a held key must not decide the next item.)
@@ -351,6 +359,27 @@ impl App {
             }
         }
         effect
+    }
+
+    /// A bracketed paste: only the text inputs (task, password, "Other…") take it, as one line.
+    /// Elsewhere it would be commands.
+    fn on_paste(&mut self, text: &str) {
+        // a password has no line breaks to keep (a manager's trailing newline must not become a space)
+        if let Mode::Password { buf, .. } = &mut self.mode {
+            buf.extend(text.chars().filter(|c| !matches!(c, '\n' | '\r')));
+            return;
+        }
+        let text = text.replace(['\n', '\r'], " ");
+        match &mut self.mode {
+            Mode::Task { buf } => buf.push_str(&text),
+            Mode::Answer {
+                st: Answering {
+                    input: Some(buf), ..
+                },
+                ..
+            } => buf.push_str(&text),
+            _ => {}
+        }
     }
 
     /// Opens the item after `id` in the session view (the one before it for the last), and
@@ -392,6 +421,7 @@ impl App {
             KeyCode::Char('j') | KeyCode::Down => self.selected = (self.selected + 1).min(last),
             KeyCode::Char('k') | KeyCode::Up => self.selected = self.selected.saturating_sub(1),
             KeyCode::Char('S') => self.view = View::Sessions,
+            KeyCode::Char('N') => self.mode = Mode::Task { buf: String::new() },
             KeyCode::Esc | KeyCode::Char('s') if self.session.is_some() => self.set_session(None),
             KeyCode::Char('s') => {
                 let session = self.selected_item().map(|i| i.session_id().to_string());
@@ -474,7 +504,7 @@ impl App {
                 ),
                 None => {}
             },
-            KeyCode::Char('N') => return Effect::NewAgent,
+            KeyCode::Char('N') => self.mode = Mode::Task { buf: String::new() },
             _ => {}
         }
         Effect::None
@@ -627,6 +657,27 @@ impl App {
                 self.mode = Mode::Password { id, buf };
             }
             _ => self.mode = Mode::Password { id, buf },
+        }
+        Effect::None
+    }
+
+    /// Typing the task of a new agent; Enter starts it (an empty task: jw asks for the repo).
+    fn task_key(&mut self, mut buf: String, code: KeyCode) -> Effect {
+        match code {
+            KeyCode::Esc => self.mode = Mode::List,
+            KeyCode::Enter => {
+                self.mode = Mode::List;
+                return Effect::NewAgent(buf.trim().to_string());
+            }
+            KeyCode::Backspace => {
+                buf.pop();
+                self.mode = Mode::Task { buf };
+            }
+            KeyCode::Char(c) => {
+                buf.push(c);
+                self.mode = Mode::Task { buf };
+            }
+            _ => self.mode = Mode::Task { buf },
         }
         Effect::None
     }
@@ -809,6 +860,7 @@ impl App {
                     };
                     h.push(("esc", back));
                 }
+                h.push(("N", "new"));
                 h.push(("S", "sessions"));
                 h.push(("q", "quit"));
                 h
@@ -827,6 +879,7 @@ impl App {
                 h
             }
             Mode::Password { .. } => vec![("enter", "send"), ("esc", "cancel")],
+            Mode::Task { .. } => vec![("enter", "start"), ("esc", "cancel")],
             Mode::Answer { id, st } => {
                 let multi = self
                     .find(id)
@@ -1159,6 +1212,20 @@ fn answer_view(item: &Item, st: &Answering) -> (Vec<Line<'static>>, Option<usize
     (lines, Some(cursor))
 }
 
+/// The end of `buf` that fits in `room` columns, so what is typed stays visible.
+fn tail(buf: &str, room: usize) -> String {
+    let mut width = 0;
+    let mut start = buf.len();
+    for (i, c) in buf.char_indices().rev() {
+        width += c.width().unwrap_or(0);
+        if width > room {
+            break;
+        }
+        start = i;
+    }
+    buf[start..].to_string()
+}
+
 /// The inline input row at the bottom of the detail pane: the masked password or the free
 /// text of "Other…".
 fn input_line(mode: &Mode, width: u16) -> Option<Line<'static>> {
@@ -1170,13 +1237,10 @@ fn input_line(mode: &Mode, width: u16) -> Option<Line<'static>> {
             cursor,
         ])),
         Mode::Answer { st, .. } => st.input.as_ref().map(|buf| {
-            // the end of a long text, so what is typed stays visible
             let room = usize::from(width).saturating_sub("Other: ".len() + 1);
-            let skip = buf.chars().count().saturating_sub(room);
-            let tail: String = buf.chars().skip(skip).collect();
             Line::from(vec![
                 Span::styled("Other: ", bold()),
-                Span::raw(clean(&tail)),
+                Span::raw(tail(&clean(buf), room)),
                 cursor,
             ])
         }),
@@ -1488,11 +1552,16 @@ fn render_session_detail(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_detail(f: &mut Frame, app: &App, area: Rect) {
     let (item, scroll) = match &app.mode {
-        Mode::List | Mode::ConfirmDismissAll | Mode::ConfirmKill { .. } => (app.selected_item(), 0),
+        Mode::List | Mode::ConfirmDismissAll | Mode::ConfirmKill { .. } | Mode::Task { .. } => {
+            (app.selected_item(), 0)
+        }
         Mode::Detail { id, scroll } => (app.find(id), *scroll),
         Mode::Password { id, .. } | Mode::Answer { id, .. } => (app.find(id), 0),
     };
-    let focused = !matches!(app.mode, Mode::List | Mode::ConfirmDismissAll);
+    let focused = !matches!(
+        app.mode,
+        Mode::List | Mode::ConfirmDismissAll | Mode::Task { .. }
+    );
     let title = match &app.mode {
         Mode::Answer { .. } if !app.raw => " Answer ",
         _ if app.raw => " Raw ",
@@ -1552,7 +1621,15 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
         Mode::ConfirmKill { pid, .. } => Some(kill_question(app, *pid)),
         _ => None,
     };
-    let line = if let Some(ask) = ask {
+    let line = if let Mode::Task { buf } = &app.mode {
+        let prompt = "task (empty = pick a repo): ";
+        let room = usize::from(area.width).saturating_sub(prompt.len() + 1);
+        Line::from(vec![
+            Span::styled(prompt, bold()),
+            Span::raw(tail(&clean(buf), room)),
+            Span::styled(" ", Style::new().add_modifier(Modifier::REVERSED)),
+        ])
+    } else if let Some(ask) = ask {
         let mut spans = vec![
             Span::styled(
                 ask,
@@ -1580,7 +1657,9 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
 /// `sessions_dir` is the session registry (`<config dir>/sessions`).
 pub fn run(base: &str, runtime: Option<&Path>, sessions_dir: &Path) -> io::Result<()> {
     let mut terminal = ratatui::init();
-    let result = event_loop(&mut terminal, base, runtime, sessions_dir);
+    let result = execute!(io::stdout(), EnableBracketedPaste)
+        .and_then(|()| event_loop(&mut terminal, base, runtime, sessions_dir));
+    let _ = execute!(io::stdout(), DisableBracketedPaste);
     ratatui::restore();
     result
 }
@@ -1603,12 +1682,12 @@ fn event_loop(
         app.area = Rect::new(0, 0, size.width, size.height);
         terminal.draw(|f| render(f, &app))?;
         if event::poll(POLL)? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
                     app.now = client::now(); // not the time of the draw: the guard is timed
                     let effect = app.on_key(key);
-                    if effect == Effect::NewAgent {
-                        new_agent(terminal, &mut app)?;
+                    if let Effect::NewAgent(task) = &effect {
+                        new_agent(terminal, &mut app, task)?;
                         refreshed = None; // a new session shows up in the registry
                         continue;
                     }
@@ -1616,6 +1695,8 @@ fn event_loop(
                         return Ok(());
                     }
                 }
+                Event::Paste(text) => app.on_paste(&text),
+                _ => {}
             }
         }
     }
@@ -1656,7 +1737,7 @@ fn perform(
             return false;
         }
         Effect::Kill { pid, start } => kill(app, base, pid, start),
-        Effect::NewAgent => return false, // needs the terminal: `event_loop` does it
+        Effect::NewAgent(_) => return false, // needs the terminal: `event_loop` does it
     }
     refresh(app, base, sessions_dir);
     false
@@ -1759,45 +1840,133 @@ fn started_session(stderr: &str) -> Option<String> {
         .map(String::from)
 }
 
-/// Starts a new agent: leaves the TUI's screen for `jw agent -d` (it asks for the repo with
-/// fzf, which draws on /dev/tty; the cwd `/` makes it always ask), then goes to the session.
-/// jw's stderr is captured for the name of the session and the reason of a failure.
-fn new_agent(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
-    // what `ratatui::init` and `restore` do, without their panic hook
-    disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen)?;
-    let output = Command::new("jw")
-        .args(["agent", "-d"])
+/// What jw prints (last) when the user cancels its fzf.
+const JW_CANCELLED: &str = "jw: cancelled";
+
+/// What a `jw agent -d` run came to.
+#[derive(Debug, PartialEq)]
+enum Outcome {
+    /// Go to the session (no task: the user picked the repo in fzf).
+    Attach(String),
+    /// The session runs in the background (a task was given).
+    Started(String),
+    Cancelled,
+    Failed(String),
+}
+
+/// The outcome of `jw agent -d` for `task` from its exit status and its stderr.
+fn outcome(task: &str, success: bool, stderr: &str) -> Outcome {
+    if success {
+        return match started_session(stderr) {
+            Some(name) if task.is_empty() => Outcome::Attach(name),
+            Some(name) => Outcome::Started(name),
+            None => Outcome::Failed("jw agent -d: no session name in its output".into()),
+        };
+    }
+    // with a task the stderr also has the routing lines: only the last one says why jw failed
+    match stderr.lines().map(str::trim).rfind(|l| !l.is_empty()) {
+        Some(JW_CANCELLED) => Outcome::Cancelled,
+        Some(why) => Outcome::Failed(why.into()),
+        None => Outcome::Failed("jw agent -d failed".into()),
+    }
+}
+
+/// The arguments of `jw` for a new agent. `--` keeps a task like `-x` from being an option and
+/// its first word from being taken for a repo.
+fn jw_args(task: &str) -> Vec<String> {
+    let mut args = vec!["agent".to_string(), "-d".to_string()];
+    if !task.is_empty() {
+        args.push("--".into());
+        args.push(task.into());
+    }
+    args
+}
+
+extern "C" fn ignore_sigint(_: libc::c_int) {}
+
+/// Waits for `jw` (its stderr is piped) and returns whether it succeeded and its stderr, which is
+/// echoed line by line as jw prints it.
+fn wait_echoing(mut jw: Child) -> io::Result<(bool, String)> {
+    let pipe = jw.stderr.take().expect("stderr is piped");
+    let echo = std::thread::spawn(move || {
+        let mut stderr = String::new();
+        let mut pipe = BufReader::new(pipe);
+        let mut buf = Vec::new();
+        // not `lines()`: it stops at output that is not UTF-8
+        while matches!(pipe.read_until(b'\n', &mut buf), Ok(n) if n > 0) {
+            let line = String::from_utf8_lossy(&buf);
+            let line = line.trim_end_matches(['\r', '\n']);
+            let _ = writeln!(io::stderr(), "{line}");
+            stderr.push_str(line);
+            stderr.push('\n');
+            buf.clear();
+        }
+        stderr
+    });
+    let status = jw.wait();
+    let stderr = echo.join().unwrap_or_default();
+    Ok((status?.success(), stderr))
+}
+
+/// Runs `jw agent -d <task>`: whether it succeeded and its stderr.
+fn run_jw(task: &str) -> io::Result<(bool, String)> {
+    // jw is in our process group, so a Ctrl-C while it routes reaches us too. A handler that
+    // does nothing, not SIG_IGN: jw would inherit that.
+    let handler = ignore_sigint as extern "C" fn(libc::c_int) as libc::sighandler_t;
+    // SAFETY: the handler does nothing, so it is async-signal-safe.
+    let previous = unsafe { libc::signal(libc::SIGINT, handler) };
+    let result = Command::new("jw")
+        .args(jw_args(task))
         .current_dir("/")
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::piped())
-        .output();
-    execute!(io::stdout(), EnterAlternateScreen)?;
+        .spawn()
+        .and_then(wait_echoing);
+    // SAFETY: restores the handler `signal` returned above.
+    unsafe { libc::signal(libc::SIGINT, previous) };
+    result
+}
+
+/// Starts a new agent: leaves the TUI's screen for `jw agent -d <task>` (jw picks the repo
+/// the task fits; without a task it asks with fzf, which draws on /dev/tty; the cwd `/` makes it
+/// always pick). Without a task it then goes to the session, with one the user stays in the
+/// inbox. jw's stderr is shown while it runs and parsed for the name of the session and the
+/// reason of a failure.
+fn new_agent(terminal: &mut DefaultTerminal, app: &mut App, task: &str) -> io::Result<()> {
+    // what `ratatui::init` and `restore` do, without their panic hook
+    disable_raw_mode()?;
+    execute!(io::stdout(), LeaveAlternateScreen, DisableBracketedPaste)?;
+    if !task.is_empty() {
+        println!("New agent: {task}"); // jw's progress follows, e.g. "choosing a repo..."
+    }
+    let ran = run_jw(task);
+    execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
     enable_raw_mode()?;
     // SAFETY: tcflush only takes integers; it drops what was typed after fzf exited, which
     // would otherwise reach the TUI as commands.
     unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH) };
+    // what crossterm has read already (the rest of a pasted task) must not become commands either
+    while event::poll(Duration::ZERO)? {
+        event::read()?;
+    }
     terminal.clear()?;
     app.now = client::now(); // fzf may have taken a while: the status starts now
-    let output = match output {
-        Ok(output) => output,
+    let (success, stderr) = match ran {
+        Ok(ran) => ran,
         Err(e) => {
             app.notify(format!("jw: {e}"), true);
             return Ok(());
         }
     };
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    match started_session(&stderr).filter(|_| output.status.success()) {
-        Some(name) if std::env::var_os("ZELLIJ").is_some() => attach(app, &name),
-        Some(name) => app.notify(format!("started {name} (shpool attach {name})"), false),
-        None if output.status.success() => {
-            app.notify("jw agent -d: no session name in its output", true);
+    match outcome(task, success, &stderr) {
+        Outcome::Attach(name) if std::env::var_os("ZELLIJ").is_some() => attach(app, &name),
+        Outcome::Attach(name) => {
+            app.notify(format!("started {name} (shpool attach {name})"), false);
         }
-        None => match stderr.lines().map(str::trim).rfind(|l| !l.is_empty()) {
-            Some(why) => app.notify(why, true),
-            None => app.notify("cancelled", false), // e.g. Esc in fzf: not an error
-        },
+        Outcome::Started(name) => app.notify(format!("started {name}"), false),
+        Outcome::Cancelled => app.notify("cancelled", false), // e.g. Esc in fzf: not an error
+        Outcome::Failed(why) => app.notify(why, true),
     }
     Ok(())
 }
@@ -3850,20 +4019,112 @@ mod tests {
     // --- new agent
 
     #[test]
-    fn capital_n_starts_a_new_agent_in_the_sessions_view_only() {
+    fn capital_n_asks_for_a_task_in_both_views() {
         let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
         assert!(screen(&a).contains("N new"));
-        assert_eq!(a.on_key(key('N')), Effect::NewAgent);
-        assert!(matches!(a.mode, Mode::List));
+        assert_eq!(a.on_key(key('N')), Effect::None);
+        assert!(matches!(&a.mode, Mode::Task { buf } if buf.is_empty()));
         // without sessions too
         let mut a = sessions_app(vec![], vec![]);
         assert!(screen(&a).contains("N new"));
-        assert_eq!(a.on_key(key('N')), Effect::NewAgent);
-        // the inbox view ignores it
-        let mut a = app(vec![question("a", 990.0)]);
-        a.set_sessions(vec![session(1, "s-a", "idle")]);
-        assert!(!screen(&a).contains("N new"));
         assert_eq!(a.on_key(key('N')), Effect::None);
+        assert!(matches!(a.mode, Mode::Task { .. }));
+        // the inbox view, with and without items
+        let mut a = app(vec![question("a", 990.0)]);
+        assert!(screen(&a).contains("N new"));
+        assert_eq!(a.on_key(key('N')), Effect::None);
+        assert!(matches!(a.mode, Mode::Task { .. }));
+        let mut a = app(vec![]);
+        assert!(screen(&a).contains("N new"));
+        assert_eq!(a.on_key(key('N')), Effect::None);
+        assert!(matches!(a.mode, Mode::Task { .. }));
+    }
+
+    #[test]
+    fn enter_starts_the_agent_with_the_edited_task() {
+        let mut a = app(vec![question("a", 990.0)]);
+        a.on_key(key('N'));
+        type_text(&mut a, "fix x");
+        assert_eq!(a.on_key(code(KeyCode::Backspace)), Effect::None);
+        type_text(&mut a, "y");
+        assert_eq!(
+            a.on_key(code(KeyCode::Enter)),
+            Effect::NewAgent("fix y".into())
+        );
+        assert!(matches!(a.mode, Mode::List));
+    }
+
+    #[test]
+    fn an_empty_task_means_pick_a_repo() {
+        for text in ["", "  "] {
+            let mut a = app(vec![]);
+            a.on_key(key('N'));
+            type_text(&mut a, text);
+            assert_eq!(
+                a.on_key(code(KeyCode::Enter)),
+                Effect::NewAgent(String::new()),
+                "{text:?}"
+            );
+            assert!(matches!(a.mode, Mode::List));
+        }
+    }
+
+    #[test]
+    fn esc_cancels_the_task_and_keeps_the_view() {
+        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        a.on_key(key('N'));
+        type_text(&mut a, "fix");
+        assert_eq!(a.on_key(code(KeyCode::Esc)), Effect::None);
+        assert!(matches!(a.mode, Mode::List));
+        assert_eq!(a.view, View::Sessions);
+        let mut a = app(vec![question("a", 990.0)]);
+        a.on_key(key('N'));
+        assert_eq!(a.on_key(code(KeyCode::Esc)), Effect::None);
+        assert!(matches!(a.mode, Mode::List));
+        assert_eq!(a.view, View::Inbox);
+    }
+
+    #[test]
+    fn command_keys_are_text_in_the_task() {
+        let mut a = app(vec![permission("a", Some("r"))]);
+        a.on_key(key('N'));
+        type_text(&mut a, "qydx");
+        assert!(matches!(&a.mode, Mode::Task { buf } if buf == "qydx"));
+        assert_eq!(a.items.len(), 1);
+    }
+
+    #[test]
+    fn the_task_is_shown_in_the_footer_over_the_status() {
+        let mut a = app(vec![question("a", 990.0)]);
+        a.notify("some status", false);
+        a.on_key(key('N'));
+        type_text(&mut a, "fix");
+        let s = screen(&a);
+        assert!(s.contains("task (empty = pick a repo): fix"), "{s}");
+        assert!(!s.contains("some status"), "{s}");
+    }
+
+    #[test]
+    fn a_long_task_shows_its_end() {
+        let mut a = app(vec![]);
+        a.on_key(key('N'));
+        type_text(&mut a, &format!("{}tail-end", "x".repeat(150)));
+        let s = screen(&a);
+        assert!(s.contains("xtail-end"), "{s}");
+        assert!(!s.contains(&"x".repeat(72)), "{s}");
+    }
+
+    #[test]
+    fn performing_a_new_agent_leaves_it_to_the_event_loop() {
+        let mut a = app(vec![]);
+        let effect = Effect::NewAgent("fix".into());
+        assert!(!perform(
+            &mut a,
+            effect,
+            "",
+            None,
+            Path::new("/nonexistent")
+        ));
     }
 
     #[test]
@@ -3894,5 +4155,134 @@ mod tests {
         ] {
             assert_eq!(started_session(stderr), None, "{stderr:?}");
         }
+    }
+
+    #[test]
+    fn outcome_of_a_started_session() {
+        let stderr = "jw: choosing a repo...\nshpool attach jw-1\n";
+        assert_eq!(
+            outcome("fix x", true, stderr),
+            Outcome::Started("jw-1".into())
+        );
+        // without a task the user picked the repo: go to the session
+        assert_eq!(
+            outcome("", true, "shpool attach jw-2\n"),
+            Outcome::Attach("jw-2".into())
+        );
+        // success must come with a name
+        for task in ["", "fix x"] {
+            assert!(
+                matches!(
+                    outcome(task, true, "jw: choosing a repo...\n"),
+                    Outcome::Failed(_)
+                ),
+                "{task:?}"
+            );
+        }
+        // a name of a failed run is no session
+        assert_eq!(
+            outcome("", false, "shpool attach jw-3\njw: boom\n"),
+            Outcome::Failed("jw: boom".into())
+        );
+    }
+
+    #[test]
+    fn outcome_of_a_cancelled_or_failed_run() {
+        // cancelling fzf: without a task jw says only that, with one the routing lines come first
+        assert_eq!(outcome("", false, "jw: cancelled\n"), Outcome::Cancelled);
+        assert_eq!(
+            outcome(
+                "fix x",
+                false,
+                "jw: choosing a repo...\njw: no repo fits clearly, pick one\njw: cancelled\n"
+            ),
+            Outcome::Cancelled
+        );
+        // a failure that says nothing is no cancellation
+        assert_eq!(
+            outcome("", false, ""),
+            Outcome::Failed("jw agent -d failed".into())
+        );
+        // a real error, also after the routing lines
+        assert_eq!(
+            outcome("", false, "jw: no match\n"),
+            Outcome::Failed("jw: no match".into())
+        );
+        assert_eq!(
+            outcome(
+                "fix x",
+                false,
+                "jw: choosing a repo...\njw: no jj repos under /r\n"
+            ),
+            Outcome::Failed("jw: no jj repos under /r".into())
+        );
+    }
+
+    #[test]
+    fn jw_args_put_the_task_after_a_double_dash() {
+        assert_eq!(jw_args(""), ["agent", "-d"]);
+        assert_eq!(jw_args("fix x"), ["agent", "-d", "--", "fix x"]);
+        assert_eq!(jw_args("-x"), ["agent", "-d", "--", "-x"]);
+    }
+
+    #[test]
+    fn ctrl_and_alt_characters_are_not_text_in_the_task() {
+        for modifier in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+            let mut a = app(vec![]);
+            a.on_key(key('N'));
+            type_text(&mut a, "ab");
+            assert_eq!(
+                a.on_key(KeyEvent::new(KeyCode::Char('y'), modifier)),
+                Effect::None
+            );
+            assert!(
+                matches!(&a.mode, Mode::Task { buf } if buf == "ab"),
+                "{modifier:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_paste_is_one_line_of_the_task_and_nothing_elsewhere() {
+        let mut a = app(vec![permission("a", Some("r"))]);
+        a.on_key(key('N'));
+        type_text(&mut a, "x ");
+        a.on_paste("a\nb\r\nc");
+        assert!(matches!(&a.mode, Mode::Task { buf } if buf == "x a b  c"));
+        let mut a = app(vec![permission("a", Some("r"))]);
+        a.on_paste("dD");
+        assert!(matches!(a.mode, Mode::List));
+        assert_eq!(a.items.len(), 1);
+        // the password and the free text of "Other…" take it too
+        let mut a = app(vec![sudo("s")]);
+        a.on_key(code(KeyCode::Enter));
+        a.on_key(code(KeyCode::Enter));
+        type_text(&mut a, "pa");
+        a.on_paste("ss\nword\r\n");
+        assert!(matches!(&a.mode, Mode::Password { buf, .. } if buf == "password"));
+        let mut a = app(vec![ask("q", Some(HOOK_REPLY))]);
+        a.on_key(code(KeyCode::Enter));
+        a.now += 1.0;
+        a.on_key(key('G'));
+        a.on_key(code(KeyCode::Enter));
+        type_text(&mut a, "x ");
+        a.on_paste("a\nb");
+        assert!(matches!(&a.mode, Mode::Answer { st, .. } if st.input.as_deref() == Some("x a b")));
+        // a choice that is not typing text ignores it
+        let mut a = app(vec![ask("q", Some(HOOK_REPLY))]);
+        a.on_key(code(KeyCode::Enter));
+        a.on_paste("dD");
+        assert!(matches!(&a.mode, Mode::Answer { st, .. } if st.input.is_none()));
+    }
+
+    #[test]
+    fn tail_counts_columns() {
+        assert_eq!(tail("abc", 5), "abc");
+        assert_eq!(tail("abcdef", 3), "def");
+        // a wide char is two columns: 語abc is 5
+        assert_eq!(tail("日本語abc", 5), "語abc");
+        assert_eq!(tail("日本語abc", 4), "abc");
+        assert_eq!(tail("日本", 3), "本");
+        assert_eq!(tail("日本", 0), "");
     }
 }
