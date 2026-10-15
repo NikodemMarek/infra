@@ -32,6 +32,8 @@ environment.systemPackages = [
 
 `claude-code` is unfree; the flake's `pkgs` allows it.
 
+The package also ships `claude-bare`, a minimal headless claude for narrow tool runs (used by `knowledge ask` and the curator): no MCP servers, slash commands, settings files, `CLAUDE.md` or workspace handling, so a call costs a fraction of the tokens. Pick its tools with `--tools`, e.g. `echo q | claude-bare -p --tools Read,Grep,Glob`. It is not `--bare`, which would drop the subscription login.
+
 ## Using it from another flake
 
 Add this repo as an input and apply its `additions` overlay to **your own** nixpkgs:

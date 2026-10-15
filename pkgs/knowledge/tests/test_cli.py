@@ -19,7 +19,7 @@ def test_paths_prints_one_json_line(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert got["inbox"] == str(tmp_path / "state" / "knowledge" / "inbox")
     assert got["skills_dir"] == str(tmp_path / "skills")
     assert got["router_url"] == "http://127.0.0.1:9"
-    assert got["claude"] == "claude"
+    assert got["claude"] == "claude-bare"
 
 
 def test_no_command_is_a_usage_error(monkeypatch: pytest.MonkeyPatch):
