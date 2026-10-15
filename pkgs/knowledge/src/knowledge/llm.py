@@ -1,4 +1,4 @@
-"""Running `claude -p` as the curator."""
+"""Running a headless `claude-bare -p` as the curator."""
 
 import logging
 import os
@@ -16,7 +16,7 @@ log = logging.getLogger("knowledge")
 ALLOWED_TOOLS = "Read,Grep,Glob"
 # the private notes of the user (`private/` of the memory dir, which is the cwd) are never for the model to read
 PRIVATE_DENY = ("Read(./private/**)", "Grep(./private/**)", "Glob(./private/**)")
-DISALLOWED_TOOLS = ",".join(("Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task", *PRIVATE_DENY))
+DISALLOWED_TOOLS = ",".join(PRIVATE_DENY)
 MAX_DETAIL = 500  # chars of claude's output an error message carries
 
 
@@ -36,7 +36,8 @@ def _tail(text: str) -> str:
 
 
 def build_argv(binary: str, system: str, add_dirs: Sequence[Path], model: str, effort: str) -> list[str]:
-    """The command line. --add-dir takes several values, so it comes last; the message is on stdin."""
+    """The command line. --tools and --add-dir take several values, so a flag follows --tools and
+    --add-dir comes last; the message is on stdin (never a positional argument)."""
     return [
         binary,
         "-p",
@@ -47,11 +48,13 @@ def build_argv(binary: str, system: str, add_dirs: Sequence[Path], model: str, e
         "--output-format",
         "json",
         "--no-session-persistence",
+        "--tools",
+        ALLOWED_TOOLS,
         "--allowedTools",
         ALLOWED_TOOLS,
         "--disallowedTools",
         DISALLOWED_TOOLS,
-        "--strict-mcp-config",
+        "--strict-mcp-config",  # claude-bare already passes it; matters if KNOWLEDGE_CLAUDE is a full claude
         "--settings",
         data.dumps({"disableAllHooks": True}),
         "--append-system-prompt",
@@ -68,7 +71,7 @@ def _document(text: str) -> Obj | None:
 
 
 class ClaudeCli:
-    """The real `claude`: read-only tools, no hooks, no MCP servers, run in the memory dir."""
+    """The real `claude-bare`: read-only tools only, no hooks, no MCP servers, run in the memory dir."""
 
     def __init__(
         self,

@@ -55,7 +55,7 @@ def test_skills_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def test_router_url_and_claude_bin(monkeypatch: pytest.MonkeyPatch):
     assert config.router_url() == "http://127.0.0.1:9"
-    assert config.claude_bin() == "claude"
+    assert config.claude_bin() == "claude-bare"
     monkeypatch.delenv("EVENT_ROUTER_URL")
     monkeypatch.setenv("KNOWLEDGE_CLAUDE", "/bin/fake-claude")
     assert config.router_url() == "http://127.0.0.1:7531"

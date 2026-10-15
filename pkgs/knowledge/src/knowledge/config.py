@@ -57,7 +57,7 @@ def router_url() -> str:
 
 
 def claude_bin() -> str:
-    return _env("KNOWLEDGE_CLAUDE") or "claude"
+    return _env("KNOWLEDGE_CLAUDE") or "claude-bare"
 
 
 def ensure_private(path: Path) -> Path:

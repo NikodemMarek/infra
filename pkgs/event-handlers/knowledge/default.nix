@@ -1,5 +1,4 @@
 {
-  lib,
   writeShellApplication,
   knowledge,
   claude,
@@ -18,7 +17,7 @@ writeShellApplication {
     cargo_bin="''${CARGO_HOME:-$HOME/.cargo}/bin"
     if [[ -x "$cargo_bin/jj" ]]; then export PATH="$cargo_bin:$PATH"; fi
     export PATH="$PATH:${jujutsu}/bin"
-    export KNOWLEDGE_CLAUDE=${lib.getExe claude}
+    export KNOWLEDGE_CLAUDE=${claude}/bin/claude-bare
     export KNOWLEDGE_SKILLS_DIR=${claude.config}/skills
     case "''${ER_TYPE:-}" in
       knowledge.submit) knowledge receive <<<"$event" ;;

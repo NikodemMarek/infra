@@ -6,7 +6,7 @@ import pytest
 
 from fakes import FakeLlm
 from knowledge.config import UsageError
-from knowledge.llm import ALLOWED_TOOLS, DISALLOWED_TOOLS, ClaudeCli, Llm, LlmError, build_argv
+from knowledge.llm import ALLOWED_TOOLS, DISALLOWED_TOOLS, PRIVATE_DENY, ClaudeCli, Llm, LlmError, build_argv
 
 FAKE_CLAUDE = """\
 #!@PYTHON@
@@ -89,6 +89,8 @@ def test_argv_has_every_flag_in_order():
         "--output-format",
         "json",
         "--no-session-persistence",
+        "--tools",
+        ALLOWED_TOOLS,
         "--allowedTools",
         ALLOWED_TOOLS,
         "--disallowedTools",
@@ -109,15 +111,33 @@ def test_argv_settings_parse_and_tools_are_read_only():
     a = argv()
     assert json.loads(a[a.index("--settings") + 1]) == {"disableAllHooks": True}
     assert a[a.index("--allowedTools") + 1] == "Read,Grep,Glob"
-    denied = a[a.index("--disallowedTools") + 1].split(",")
-    assert {"Bash", "Edit", "Write", "WebFetch", "Task"} <= set(denied)
+    assert a[a.index("--tools") + 1] == "Read,Grep,Glob"
+    assert a[a.index("--tools") + 2].startswith("--")  # --tools is variadic: no positional right after it
     assert "--max-turns" not in a
+
+
+def test_argv_has_no_positional_prompt():
+    a = argv()
+    flags_with_value = {
+        "--model",
+        "--effort",
+        "--output-format",
+        "--tools",
+        "--allowedTools",
+        "--disallowedTools",
+        "--settings",
+        "--append-system-prompt",
+        "--add-dir",
+    }
+    rest = [x for i, x in enumerate(a[1:], 1) if not x.startswith("-") and a[i - 1] not in flags_with_value]
+    assert rest == []
 
 
 def test_argv_denies_the_private_notes():
     a = argv()
     denied = a[a.index("--disallowedTools") + 1].split(",")
     assert {"Read(./private/**)", "Grep(./private/**)", "Glob(./private/**)"} <= set(denied)
+    assert denied == list(PRIVATE_DENY)
     assert "Read" not in denied  # only the private directory, not the tool
     assert a[a.index("--allowedTools") + 1] == "Read,Grep,Glob"
 
