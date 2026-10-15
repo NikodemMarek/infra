@@ -35,9 +35,12 @@ def _tail(text: str) -> str:
     return one_line if len(one_line) <= MAX_DETAIL else "..." + one_line[-MAX_DETAIL:]
 
 
-def build_argv(binary: str, system: str, add_dirs: Sequence[Path], model: str, effort: str) -> list[str]:
+def build_argv(
+    binary: str, system: str, add_dirs: Sequence[Path], model: str, effort: str, tools: str = ALLOWED_TOOLS
+) -> list[str]:
     """The command line. --tools and --add-dir take several values, so a flag follows --tools and
-    --add-dir comes last; the message is on stdin (never a positional argument)."""
+    --add-dir comes last; the message is on stdin (never a positional argument).
+    `tools` "": no tools at all (so nothing to allow or deny)."""
     return [
         binary,
         "-p",
@@ -49,11 +52,8 @@ def build_argv(binary: str, system: str, add_dirs: Sequence[Path], model: str, e
         "json",
         "--no-session-persistence",
         "--tools",
-        ALLOWED_TOOLS,
-        "--allowedTools",
-        ALLOWED_TOOLS,
-        "--disallowedTools",
-        DISALLOWED_TOOLS,
+        tools,
+        *(("--allowedTools", tools, "--disallowedTools", DISALLOWED_TOOLS) if tools else ()),
         "--strict-mcp-config",  # claude-bare already passes it; matters if KNOWLEDGE_CLAUDE is a full claude
         "--settings",
         data.dumps({"disableAllHooks": True}),
@@ -79,15 +79,17 @@ class ClaudeCli:
         model: str | None = None,
         effort: str | None = None,
         timeout: float | None = None,
+        tools: str = ALLOWED_TOOLS,
     ) -> None:
         t = tunables()
         self.binary = binary or claude_bin()
         self.model = model or t.model
         self.effort = effort or t.effort
         self.timeout = float(t.timeout) if timeout is None else timeout
+        self.tools = tools
 
     def run(self, system: str, message: str, add_dirs: Sequence[Path]) -> str:
-        argv = build_argv(self.binary, system, add_dirs, self.model, self.effort)
+        argv = build_argv(self.binary, system, add_dirs, self.model, self.effort, self.tools)
         # CLAUDECODE is dropped: a nested launch from inside Claude Code
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"} | {"KNOWLEDGE_CURATOR": "1"}
         try:

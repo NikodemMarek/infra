@@ -147,6 +147,15 @@ def test_argv_without_extra_dirs():
     assert "--add-dir" not in a
 
 
+def test_argv_without_tools_has_nothing_to_allow_or_deny():
+    a = argv(tools="")
+    assert a[a.index("--tools") + 1] == ""
+    assert a[a.index("--tools") + 2] == "--strict-mcp-config"
+    assert "--allowedTools" not in a
+    assert "--disallowedTools" not in a
+    assert "--effort" in a
+
+
 # ClaudeCli
 
 
@@ -163,6 +172,19 @@ def test_run_returns_the_result(fake_claude: Path, memory_repo: Path):
     assert args[args.index("--add-dir") + 1] == str(memory_repo)
     assert args[args.index("--model") + 1] == "sonnet"
     assert args[args.index("--effort") + 1] == "medium"
+
+
+def test_tools_are_passed_through(fake_claude: Path, memory_repo: Path):
+    ClaudeCli(tools="").run("s", "m", [])
+    args = call(fake_claude)["argv"]
+    assert isinstance(args, list)
+    assert args[args.index("--tools") + 1] == ""
+    assert "--allowedTools" not in args
+    ClaudeCli().run("s", "m", [])
+    args = call(fake_claude)["argv"]
+    assert isinstance(args, list)
+    assert args[args.index("--tools") + 1] == ALLOWED_TOOLS
+    assert args[args.index("--allowedTools") + 1] == ALLOWED_TOOLS
 
 
 def test_the_child_does_not_see_claudecode(fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch):
