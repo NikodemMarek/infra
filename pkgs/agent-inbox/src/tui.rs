@@ -4,7 +4,8 @@
 //! Layout: a header line, the list of items next to (below, on narrow terminals) a detail pane
 //! for the selected item, and a footer with key hints or the last status message. `S` switches
 //! to the same layout over the live Claude sessions (list and detail of the selected session).
-//! `N` (in both views) asks for a task in the footer and starts a new agent for it (`jw agent -d`).
+//! `N` (in both views) asks for a task in a popup (Ctrl+J adds a line) and starts a new agent
+//! for it (`jw agent -d`).
 
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -22,7 +23,7 @@ use ratatui::crossterm::terminal::{
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 
 use serde_json::{json, Map, Value};
@@ -325,6 +326,13 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return Effect::Quit;
         }
+        // A line break in the task (before the filter below: Ctrl+J is a Ctrl character).
+        if is_newline(key) {
+            if let Mode::Task { buf } = &mut self.mode {
+                buf.push('\n');
+                return Effect::None;
+            }
+        }
         // Ctrl/Alt + a character is neither a command nor text: Ctrl+Y must not allow, nor
         // Alt+D dismiss. The mode stays as it is.
         if matches!(key.code, KeyCode::Char(_))
@@ -361,24 +369,27 @@ impl App {
         effect
     }
 
-    /// A bracketed paste: only the text inputs (task, password, "Other…") take it, as one line.
-    /// Elsewhere it would be commands.
+    /// A bracketed paste: only the text inputs (task, password, "Other…") take it, the task
+    /// with its lines and the others as one line. Elsewhere it would be commands.
     fn on_paste(&mut self, text: &str) {
+        if let Mode::Task { buf } = &mut self.mode {
+            buf.push_str(&text.replace("\r\n", "\n").replace('\r', "\n"));
+            return;
+        }
         // a password has no line breaks to keep (a manager's trailing newline must not become a space)
         if let Mode::Password { buf, .. } = &mut self.mode {
             buf.extend(text.chars().filter(|c| !matches!(c, '\n' | '\r')));
             return;
         }
         let text = text.replace(['\n', '\r'], " ");
-        match &mut self.mode {
-            Mode::Task { buf } => buf.push_str(&text),
-            Mode::Answer {
-                st: Answering {
-                    input: Some(buf), ..
-                },
-                ..
-            } => buf.push_str(&text),
-            _ => {}
+        if let Mode::Answer {
+            st: Answering {
+                input: Some(buf), ..
+            },
+            ..
+        } = &mut self.mode
+        {
+            buf.push_str(&text);
         }
     }
 
@@ -879,7 +890,7 @@ impl App {
                 h
             }
             Mode::Password { .. } => vec![("enter", "send"), ("esc", "cancel")],
-            Mode::Task { .. } => vec![("enter", "start"), ("esc", "cancel")],
+            Mode::Task { .. } => vec![("enter", "start"), ("ctrl-j", "newline"), ("esc", "cancel")],
             Mode::Answer { id, st } => {
                 let multi = self
                     .find(id)
@@ -911,6 +922,15 @@ impl App {
                 h
             }
         }
+    }
+}
+
+/// Ctrl+J or Alt+Enter: a line break in a text, where plain Enter confirms.
+fn is_newline(key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Char('j') => key.modifiers.contains(KeyModifiers::CONTROL),
+        KeyCode::Enter => key.modifiers.contains(KeyModifiers::ALT),
+        _ => false,
     }
 }
 
@@ -1290,7 +1310,10 @@ fn border_style(focused: bool) -> Style {
 fn render(f: &mut Frame, app: &App) {
     let p = panes(f.area());
     render_header(f, app, p.header);
-    let list_focused = matches!(app.mode, Mode::List | Mode::ConfirmDismissAll);
+    let list_shown = matches!(
+        app.mode,
+        Mode::List | Mode::ConfirmDismissAll | Mode::Task { .. }
+    );
     if app.view == View::Sessions {
         if app.sessions.is_empty() {
             render_empty(f, &p, "No Claude sessions");
@@ -1298,13 +1321,55 @@ fn render(f: &mut Frame, app: &App) {
             render_sessions(f, app, p.list);
             render_session_detail(f, app, p.detail);
         }
-    } else if app.visible().is_empty() && list_focused {
+    } else if app.visible().is_empty() && list_shown {
         render_empty(f, &p, "No pending requests");
     } else {
         render_list(f, app, p.list);
         render_detail(f, app, p.detail);
     }
     render_footer(f, app, p.footer);
+    if let Mode::Task { buf } = &app.mode {
+        render_task(f, &p, buf);
+    }
+}
+
+/// The popup for the task of a new agent, over the body: the lines of `buf`, wrapped, the end
+/// in view.
+fn render_task(f: &mut Frame, p: &Panes, buf: &str) {
+    let body = p.list.union(p.detail);
+    let width = body.width.min(100).saturating_sub(2);
+    // a no-break space: a plain one is dropped by the wrapping where a line exactly fills a row
+    let cursor = Span::styled("\u{a0}", Style::new().add_modifier(Modifier::REVERSED));
+    let mut rows: Vec<&str> = buf.split('\n').collect();
+    let last = rows.pop().unwrap_or_default();
+    let mut lines: Vec<Line> = rows.into_iter().map(|l| Line::raw(clean(l))).collect();
+    let mut last = vec![Span::raw(clean(last)), cursor];
+    if buf.is_empty() {
+        last.push(Span::styled(
+            "What should the agent do? (empty: pick a repo and attach)",
+            dim(),
+        ));
+    }
+    lines.push(Line::from(last));
+    let total = wrapped_height(&lines, width.saturating_sub(2)) + 2;
+    let height = total.max(5).min(usize::from(body.height)) as u16;
+    let area = Rect::new(
+        body.x + (body.width - width) / 2,
+        body.y + (body.height - height) / 2,
+        width,
+        height,
+    );
+    let block = Block::bordered().title(" New agent ");
+    let inner = block.inner(area);
+    let scroll = scroll_for(&lines, Some(lines.len() - 1), 0, inner);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0)),
+        inner,
+    );
 }
 
 /// `text` in the middle of the body.
@@ -1621,15 +1686,11 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
         Mode::ConfirmKill { pid, .. } => Some(kill_question(app, *pid)),
         _ => None,
     };
-    let line = if let Mode::Task { buf } = &app.mode {
-        let prompt = "task (empty = pick a repo): ";
-        let room = usize::from(area.width).saturating_sub(prompt.len() + 1);
-        Line::from(vec![
-            Span::styled(prompt, bold()),
-            Span::raw(tail(&clean(buf), room)),
-            Span::styled(" ", Style::new().add_modifier(Modifier::REVERSED)),
-        ])
-    } else if let Some(ask) = ask {
+    // the task popup has the focus: no status over its hints
+    let status = app
+        .status()
+        .filter(|_| !matches!(app.mode, Mode::Task { .. }));
+    let line = if let Some(ask) = ask {
         let mut spans = vec![
             Span::styled(
                 ask,
@@ -1639,7 +1700,7 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
         ];
         spans.extend(hint_spans(&[("y", "yes"), ("n", "no")], "  "));
         Line::from(spans)
-    } else if let Some(status) = app.status() {
+    } else if let Some(status) = status {
         let color = if status.error {
             Color::Red
         } else {
@@ -2394,6 +2455,7 @@ mod tests {
             ),
             (vec![question("a", 990.0)], vec![key('D')]),
             (vec![sudo("s")], vec![key('S')]),
+            (vec![], vec![key('N'), key('a'), ctrl_j(), key('b')]),
         ];
         for (w, h) in [(20, 5), (1, 1), (2, 2)] {
             for (items, keys) in &key_sets {
@@ -4070,6 +4132,27 @@ mod tests {
     }
 
     #[test]
+    fn a_task_of_only_a_line_break_means_pick_a_repo() {
+        let mut a = app(vec![]);
+        a.on_key(key('N'));
+        a.on_key(ctrl_j());
+        assert_eq!(
+            a.on_key(code(KeyCode::Enter)),
+            Effect::NewAgent(String::new())
+        );
+        assert!(matches!(a.mode, Mode::List));
+    }
+
+    #[test]
+    fn the_popup_keeps_the_empty_screen_under_it() {
+        let mut a = app(vec![]);
+        a.on_key(key('N'));
+        let s = screen(&a);
+        assert!(s.contains(" New agent "), "{s}");
+        assert!(!s.contains(" Detail "), "{s}");
+    }
+
+    #[test]
     fn esc_cancels_the_task_and_keeps_the_view() {
         let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
         a.on_key(key('N'));
@@ -4093,25 +4176,88 @@ mod tests {
         assert_eq!(a.items.len(), 1);
     }
 
+    fn ctrl_j() -> KeyEvent {
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL)
+    }
+
     #[test]
-    fn the_task_is_shown_in_the_footer_over_the_status() {
+    fn the_task_is_shown_in_a_popup_over_the_status() {
         let mut a = app(vec![question("a", 990.0)]);
         a.notify("some status", false);
         a.on_key(key('N'));
+        let s = screen(&a);
+        assert!(s.contains("What should the agent do?"), "{s}");
         type_text(&mut a, "fix");
         let s = screen(&a);
-        assert!(s.contains("task (empty = pick a repo): fix"), "{s}");
+        assert!(s.contains(" New agent "), "{s}");
+        assert!(s.contains("fix"), "{s}");
+        assert!(!s.contains("What should the agent do?"), "{s}");
         assert!(!s.contains("some status"), "{s}");
+        assert!(s.contains("enter start  ctrl-j newline  esc cancel"), "{s}");
     }
 
     #[test]
     fn a_long_task_shows_its_end() {
+        // wrapped: seven rows in a popup of six
         let mut a = app(vec![]);
         a.on_key(key('N'));
-        type_text(&mut a, &format!("{}tail-end", "x".repeat(150)));
-        let s = screen(&a);
+        type_text(&mut a, &format!("{}tail-end", "x".repeat(600)));
+        let s = screen_at(&a, 100, 10);
         assert!(s.contains("xtail-end"), "{s}");
-        assert!(!s.contains(&"x".repeat(72)), "{s}");
+        // lines
+        let mut a = app(vec![]);
+        a.on_key(key('N'));
+        for i in 0..40 {
+            type_text(&mut a, &format!("line{i}"));
+            a.on_key(ctrl_j());
+        }
+        let s = screen(&a);
+        assert!(s.contains("line39"), "{s}");
+        assert!(!s.contains("line0"), "{s}");
+    }
+
+    #[test]
+    fn a_task_of_several_lines_is_drawn_on_separate_rows() {
+        let mut a = app(vec![]);
+        a.on_key(key('N'));
+        type_text(&mut a, "first");
+        a.on_key(ctrl_j());
+        a.on_key(ctrl_j());
+        type_text(&mut a, "second");
+        let s = screen(&a);
+        let row = |t: &str| s.lines().position(|l| l.contains(t)).unwrap();
+        assert_eq!(row("second"), row("first") + 2, "{s}");
+    }
+
+    #[test]
+    fn ctrl_j_and_alt_enter_add_a_line_to_the_task() {
+        for newline in [ctrl_j(), KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)] {
+            let mut a = app(vec![]);
+            a.on_key(key('N'));
+            type_text(&mut a, "a");
+            assert_eq!(a.on_key(newline), Effect::None);
+            assert!(matches!(a.mode, Mode::Task { .. }), "{newline:?}");
+            type_text(&mut a, "b");
+            assert_eq!(
+                a.on_key(code(KeyCode::Enter)),
+                Effect::NewAgent("a\nb".into()),
+                "{newline:?}"
+            );
+        }
+        // not elsewhere
+        let mut a = app(vec![question("a", 990.0)]);
+        assert_eq!(a.on_key(ctrl_j()), Effect::None);
+        assert!(matches!(a.mode, Mode::List));
+    }
+
+    #[test]
+    fn backspace_removes_a_line_break_of_the_task() {
+        let mut a = app(vec![]);
+        a.on_key(key('N'));
+        type_text(&mut a, "a");
+        a.on_key(ctrl_j());
+        assert_eq!(a.on_key(code(KeyCode::Backspace)), Effect::None);
+        assert!(matches!(&a.mode, Mode::Task { buf } if buf == "a"));
     }
 
     #[test]
@@ -4243,12 +4389,12 @@ mod tests {
     }
 
     #[test]
-    fn a_paste_is_one_line_of_the_task_and_nothing_elsewhere() {
+    fn a_paste_keeps_the_lines_of_the_task_and_is_one_line_elsewhere() {
         let mut a = app(vec![permission("a", Some("r"))]);
         a.on_key(key('N'));
         type_text(&mut a, "x ");
-        a.on_paste("a\nb\r\nc");
-        assert!(matches!(&a.mode, Mode::Task { buf } if buf == "x a b  c"));
+        a.on_paste("a\nb\r\nc\rd");
+        assert!(matches!(&a.mode, Mode::Task { buf } if buf == "x a\nb\nc\nd"));
         let mut a = app(vec![permission("a", Some("r"))]);
         a.on_paste("dD");
         assert!(matches!(a.mode, Mode::List));
