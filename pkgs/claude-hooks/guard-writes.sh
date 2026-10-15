@@ -1,5 +1,5 @@
 # PreToolUse guard for Edit/Write/NotebookEdit in subagents.
-# Usage: claude-guard-writes code    -> allow writes only inside the session cwd, never into config/secrets/.git/architect memory
+# Usage: claude-guard-writes code    -> allow writes only inside the session cwd or ~/projects, never into config/secrets/.git/architect memory
 #        claude-guard-writes memory  -> allow writes only to the architect's own files in the memory repo
 #                                       (README.md, INDEX.md, templates/**, projects/<slug>/{overview,decisions,log}.md, projects/<slug>/notes/**)
 # (writeShellApplication prepends the shebang and `set -o errexit -o nounset -o pipefail`)
@@ -36,7 +36,12 @@ if [ "$MODE" = memory ]; then
 fi
 
 # MODE=code
-under "$cwd" || deny "Writes outside the working directory ($cwd) are not allowed (got $abs)."
+# Other repos under ~/projects are fine, but not the other workspaces of this one (<repo>, <repo>.agents/*):
+# the agent's work must stay in its own workspace to be squashed into the right change.
+home="$cwd"
+case "$(dirname -- "$cwd")" in *.agents) home="$(dirname -- "$cwd")" && home="${home%.agents}" ;; esac
+under "$cwd" || { under "$HOME/projects" && ! under "$home" && ! under "$home.agents"; } \
+  || deny "Writes outside the working directory ($cwd) and other repos under ~/projects are not allowed (got $abs)."
 for p in "$HOME/.claude" "$CFG" "$HOME/.ssh" "$HOME/.gnupg" "$HOME/.config" "$HOME/.local" "$HOME/.aws" "$HOME/.kube" "$HOME/.m2/settings.xml" "$MEM"; do
   under "$p" && deny "Path $abs is protected (config/secrets/architect memory)."
 done
