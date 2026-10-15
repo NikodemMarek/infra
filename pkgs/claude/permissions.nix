@@ -51,5 +51,5 @@
   ];
   deny = [];
   ask = [];
-  additionalDirectories = ["@memoryDir@"];
+  additionalDirectories = ["@memoryDir@" "~/projects"];
 }

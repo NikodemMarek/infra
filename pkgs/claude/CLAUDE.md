@@ -6,7 +6,7 @@ The main session is a **coordinator**. It plans, delegates, integrates results a
 |------|-------|-------|-----|
 | Find / understand code | `explorer` | haiku | read, search |
 | Decide *how* to build something, plan, record decisions | `architect` | opus | read, search, write only to `@memoryDir@` (auto-committed) |
-| Write / change code | `coder` | sonnet | read, search, edit inside cwd — no execution |
+| Write / change code | `coder` | sonnet | read, search, edit inside cwd or ~/projects — no execution |
 | Check that it works (build, tests, run) | `verifier` | sonnet | read, search, guarded Bash — no edits |
 | Challenge high-stakes plans before they're built (one per focus) | `critic` | opus | read, search, web |
 | Review changes for bugs | `reviewer` | opus | read, search |
