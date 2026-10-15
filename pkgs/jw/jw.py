@@ -20,11 +20,9 @@ ROOT = os.path.expanduser("~/projects")
 FZF = "fzf"  # the nix package pins the store paths
 SHPOOL = "shpool"
 BASH = "bash"
+KNOWLEDGE = "knowledge"  # the nix package pins it
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 GITLAB = re.compile(r"^gl-[a-z]+-[0-9]+(-[0-9]+)?$")  # gitlab-context's workspaces: it reuses and cleans them
-ROUTE_PROMPT = ("You choose the repository a coding task belongs in. You get the task, the repository names and maybe an "
-                "index of the user's projects. Reply with exactly one repository name from the list and nothing else. "
-                "If none fits clearly, or several fit equally, reply `none`. Do not do the task.")
 
 
 class Fail(Exception):
@@ -111,39 +109,32 @@ def repo_home(arg):
 
 
 def route(task):
-    """Guess the repo for the task with one claude call; None = no confident guess."""
+    """Guess the repo for the task with `knowledge route`; None = no confident guess."""
     names = repos()
     if not names:
         return None
-    memory = os.environ.get("CLAUDE_MEMORY_DIR") or \
-        f"{os.environ.get('CLAUDE_CONFIG_DIR') or os.path.expanduser('~/.local/share/claude')}/memory"
-    try:
-        with open(f"{memory}/INDEX.md") as f:
-            index = f.read().strip()
-    except OSError:
-        index = ""
     sys.stderr.write("jw: choosing a repo...\n")
-    text = f"Task:\n{task}\n\nRepos under {ROOT}:\n" + "\n".join(names)
-    if index:
-        text += f"\n\nProject index of the user's notes (the repo path column ends in the repo name):\n{index}"
-    cmd = ["claude", "-p", "--model", "sonnet", "--effort", "low", "--tools", "", "--no-session-persistence",
-           "--strict-mcp-config", "--settings", '{"disableAllHooks":true}', "--append-system-prompt", ROUTE_PROMPT]
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}  # a nested claude refuses to start otherwise
     try:
-        p = subprocess.run(cmd, input=text, cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
+        p = subprocess.run([KNOWLEDGE, "route", "--", task], input="\n".join(f"{ROOT}/{n}" for n in names),
+                           env=env, capture_output=True, text=True, timeout=90)
         if p.returncode != 0:
             last = next((l.strip() for l in reversed(p.stderr.splitlines()) if l.strip()), "")
-            raise OSError(f"exit {p.returncode}: {last}" if last else f"exit {p.returncode}")
+            raise OSError(last or f"exit {p.returncode}")
     except (OSError, subprocess.TimeoutExpired) as e:
-        why = "timed out" if isinstance(e, subprocess.TimeoutExpired) else e  # its text is the whole command line
+        why = "timed out" if isinstance(e, subprocess.TimeoutExpired) else e
         sys.stderr.write(f"jw: could not choose a repo ({why}), pick one\n")
         return None
-    lines = [l for l in p.stdout.splitlines() if l.strip()]
-    answer = lines[-1].strip().strip("`'\"*. ") if lines else ""
-    if answer in names:
-        return answer
-    sys.stderr.write("jw: no repo fits clearly, pick one\n")
-    return None
+    try:
+        answer = json.loads(p.stdout)
+        repo, reason = answer["repo"], answer.get("reason", "")
+    except (ValueError, TypeError, KeyError):  # not JSON, not an object, or no repo key
+        repo, reason = None, "bad answer"
+    if repo not in names:
+        sys.stderr.write(f"jw: no repo fits clearly ({reason}), pick one\n")
+        return None
+    sys.stderr.write(f"jw: {repo}: {reason}\n")
+    return repo
 
 
 def in_use(d):
