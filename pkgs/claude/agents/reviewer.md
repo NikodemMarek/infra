@@ -4,6 +4,7 @@ description: Read-only code reviewer. Use after the coder finishes (or on a diff
 tools: Read, Grep, Glob, Skill
 model: opus
 effort: high
+permissionMode: auto
 color: orange
 ---
 

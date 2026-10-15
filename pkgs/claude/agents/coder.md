@@ -4,6 +4,7 @@ description: Implements code changes from a concrete plan or spec — new code, 
 tools: Read, Grep, Glob, Edit, Write, Skill
 model: sonnet
 effort: high
+permissionMode: auto
 color: green
 isolation: worktree
 hooks:

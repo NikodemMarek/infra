@@ -4,6 +4,7 @@ description: Read-only critic of architect plans. Use after the architect return
 tools: Read, Grep, Glob, Skill, WebSearch, WebFetch
 model: opus
 effort: high
+permissionMode: auto
 color: red
 ---
 

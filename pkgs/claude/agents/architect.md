@@ -4,6 +4,7 @@ description: Design and planning partner with long-term memory of every ongoing 
 tools: Read, Grep, Glob, Edit, Write, Skill
 model: opus
 effort: high
+permissionMode: auto
 color: purple
 hooks:
   PreToolUse:
