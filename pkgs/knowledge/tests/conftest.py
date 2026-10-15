@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from editing_claude import EditingClaude
+
 
 @pytest.fixture(autouse=True)
 def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -23,6 +25,12 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for who in ("AUTHOR", "COMMITTER"):
         monkeypatch.setenv(f"GIT_{who}_NAME", "Test")
         monkeypatch.setenv(f"GIT_{who}_EMAIL", "test@example.com")
+
+
+@pytest.fixture
+def editing_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> EditingClaude:
+    """KNOWLEDGE_CLAUDE is a script that does what `editing_claude.plan(...)` says (and logs the call)."""
+    return EditingClaude.install(tmp_path, monkeypatch)
 
 
 @pytest.fixture
