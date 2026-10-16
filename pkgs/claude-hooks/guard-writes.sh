@@ -1,5 +1,6 @@
 # PreToolUse guard for Edit/Write/NotebookEdit in subagents.
 # Usage: claude-guard-writes code    -> allow writes only inside the session cwd or ~/projects, never into config/secrets/.git/architect memory
+#        claude-guard-writes tests   -> like code, but only test files (the verifier writes tests, never the implementation)
 #        claude-guard-writes memory  -> allow writes only to the architect's own files in the memory repo
 #                                       (README.md, INDEX.md, templates/**, projects/<slug>/{overview,decisions,log}.md, projects/<slug>/notes/**)
 # (writeShellApplication prepends the shebang and `set -o errexit -o nounset -o pipefail`)
@@ -35,7 +36,7 @@ if [ "$MODE" = memory ]; then
   deny "Architect may only write README.md, INDEX.md, templates/**, projects/<slug>/{overview,decisions,log}.md and projects/<slug>/notes/** in $MEM (got $rel); the rest is the curator's or private."
 fi
 
-# MODE=code
+# MODE=code or tests
 # Other repos under ~/projects are fine, but not the other workspaces of this one (<repo>, <repo>.agents/*):
 # the agent's work must stay in its own workspace to be squashed into the right change.
 home="$cwd"
@@ -48,4 +49,10 @@ done
 # Top-level dotfiles in $HOME (.bashrc, .profile, ...)
 [ "$(dirname -- "$abs")" = "$HOME" ] && case "$(basename -- "$abs")" in .*) deny "Home dotfiles are protected." ;; esac
 case "$(basename -- "$abs")" in .env|.env.*|*.pem|*.key|id_rsa*|id_ed25519*) deny "Secret-like files are protected." ;; esac
-exit 0
+[ "$MODE" = tests ] || exit 0
+
+case "$abs" in */test/*|*/tests/*|*/__tests__/*|*/spec/*|*/specs/*|*/testdata/*|*/fixtures/*|*/testing/*) exit 0 ;; esac
+case "$(basename -- "$abs")" in
+  test_*|*_test.*|*_tests.*|*.test.*|*.spec.*|*_spec.*|*Test.*|*Tests.*|conftest.py) exit 0 ;;
+esac
+deny "Only test files may be written (test/, tests/, __tests__/, spec/, testdata/, fixtures/, *_test.*, test_*, *.test.*, *.spec.*, *Test.*, ...); got $abs."
