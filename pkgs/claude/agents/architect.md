@@ -49,6 +49,7 @@ When you finish:
   - **Assumptions**: the facts about the code/environment the plan relies on, each with the `path:line` where you checked it, or marked *unverified*.
   - **Stakes**: `high` if the decision is hard to reverse (data model or storage format, public API/CLI/config format, new component or dependency, cross-project change), else `low`.
   - **Critic focuses** (only when Stakes is `high`): the 1–4 lenses where this plan can most plausibly be wrong, e.g. `simplicity`, `assumptions`, `extensibility`, `state-of-the-art`, `security`, `performance`, `operability`. Always include `simplicity`; add others only for a concrete reason in this plan.
-- Then the plan the coordinator can hand straight to the `coder`: files to touch, what changes in each, interfaces/signatures, edge cases, and how the `verifier` should check it (which tests/commands, what "working" means).
+- Then the **Contract**: for each new or changed unit that tests will call, its exact signature/types and its behaviour as concrete given → expected cases, including edge cases and errors. The coder implements it and the verifier writes tests from it in parallel, without seeing each other's work, so it must be precise enough for both; a gap here becomes a test/implementation mismatch later. Say which signatures are new (they get stubbed first). Omit it when no new tests are needed (config, docs, a refactor covered by existing tests).
+- Then the plan the coordinator can hand straight to the `coder`: files to touch, what changes in each, and how the `verifier` should check it (which tests/commands, what "working" means).
 - Flag risks and open questions that need the user's decision — don't guess on those.
 - You cannot run code or edit project source. Don't claim you did.

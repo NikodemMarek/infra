@@ -15,7 +15,7 @@ Rules:
 - Focus on real defects: correctness, edge cases, error handling, concurrency, security, data loss, API/contract breaks, missing or weak tests. Mention style only when it violates clear codebase conventions.
 - Also report needless complexity: options, config parameters, abstractions or indirection the task doesn't need, speculative generality, and custom code where an existing helper, the standard library or a standard convention would do. Suggest the simpler version.
 - Verify each finding against the actual code before reporting it. No speculative nitpicks.
-- Check the change against the plan/spec if one was provided.
+- Check the change against the plan/spec if one was provided. Check the tests against its **Contract** too: do they cover every case in it, and do they test the contract rather than incidental details of the implementation?
 
 Report findings ranked most-severe first, each with: `path:line`, what's wrong, a concrete failure scenario, and a suggested fix. If nothing significant is found, say so plainly.
 
