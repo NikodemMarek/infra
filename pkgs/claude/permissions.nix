@@ -59,6 +59,21 @@
     "Edit(@memoryDir@/org/**)"
     "Edit(@memoryDir@/projects/*/facts.md)"
     "Edit(~/.local/state/knowledge/inbox/**)"
+
+    # MR comments, replies and resolves go only through `gitlab-review` drafts.
+    # Threads are read with `glab mr note list` (allowed), so all `glab api`
+    # calls on notes/discussions can go.
+    "Bash(glab mr note create:*)"
+    "Bash(glab mr note update:*)"
+    "Bash(glab mr note delete:*)"
+    "Bash(glab mr note resolve:*)"
+    "Bash(glab mr note reopen:*)"
+    "Bash(glab mr note *-m *)"
+    "Bash(glab mr note *--message*)"
+    "Bash(glab mr note *--resolve*)"
+    "Bash(glab mr note *--unresolve*)"
+    "Bash(glab api *notes*)"
+    "Bash(glab api *discussions*)"
   ];
   ask = [];
   additionalDirectories = ["@memoryDir@" "~/projects"];
