@@ -26,8 +26,8 @@ case "$abs" in */.jj/*|*/.jj) deny "Writing inside .jj is not allowed for this a
 
 if [ "$MODE" = memory ]; then
   under "$MEM" || deny "Architect may only write inside $MEM (got $abs)."
-  # The curator owns the rest of the repo (KNOWLEDGE.md, SCOPES.toml, global/, lang/, topic/, org/, projects/<slug>/facts/)
-  # and private/ holds credentials: only the architect's own files are allowed.
+  # The curator owns global.md, lang/, topic/, org/ and projects/<slug>/facts.md; SCOPES.toml and private/ are the user's
+  # (private/ holds credentials): only the architect's own files are allowed.
   rel="${abs#"$(realpath -m -- "$MEM")"/}"
   slug='[a-z0-9][a-z0-9-]{0,63}'
   [[ "$rel" =~ ^(README\.md|INDEX\.md|templates/.+)$ ]] && exit 0

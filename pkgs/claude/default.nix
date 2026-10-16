@@ -88,8 +88,10 @@ let
     }:
     let
       # "$HOME/.local/share/claude" -> "~/.local/share/claude" (for prose in the markdown files)
+      # The deny rules in the settings use the `~/` form, so a dataDir outside $HOME would silently disable them.
       prettyDataDir =
-        if lib.hasPrefix "$HOME" dataDir then "~" + lib.removePrefix "$HOME" dataDir else dataDir;
+        assert lib.assertMsg (lib.hasPrefix "$HOME/" dataDir) "claude: dataDir must start with $HOME/ (got ${dataDir})";
+        "~" + lib.removePrefix "$HOME" dataDir;
       prettyMemoryDir = "${prettyDataDir}/memory";
 
       settingsFile = writeText "claude-settings.json" (builtins.toJSON settings);
@@ -290,7 +292,6 @@ let
           --run "source ${preamble}" \
           --run "source ${workspace}" \
           --set-default DISABLE_AUTOUPDATER 1 \
-          --set-default KNOWLEDGE_SKILLS_DIR ${config}/skills \
           --set-default KNOWLEDGE_CLAUDE $out/bin/claude-bare \
           --set-default SUDO_ASKPASS ${claude-hooks}/bin/claude-askpass \
           --prefix PATH : ${
@@ -305,7 +306,7 @@ let
             )
           }
 
-        # Minimal headless claude for narrow tool runs (`knowledge ask`, the curator): no
+        # Minimal headless claude for narrow tool runs (the curator, skills, route): no
         # MCP servers, slash commands, settings files or CLAUDE.md; the caller picks the tools
         # with `--tools`. Not `--bare`: that drops the subscription login. Wraps the unwrapped
         # claude (no jj workspace). Only CLAUDE_CONFIG_DIR is set (where the login is), not the

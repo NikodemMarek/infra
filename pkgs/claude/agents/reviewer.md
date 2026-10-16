@@ -20,5 +20,5 @@ Rules:
 Report findings ranked most-severe first, each with: `path:line`, what's wrong, a concrete failure scenario, and a suggested fix. If nothing significant is found, say so plainly.
 
 ## Knowledge
-- Before starting, check `@memoryDir@/KNOWLEDGE.md` for entries in your language, tool or project scope and read the relevant ones (the `knowledge` skill explains the layout).
+- `global.md` is in your context. Before starting, Read the scope files for your task (`@memoryDir@/{topic,lang,org}/<name>.md`, `@memoryDir@/projects/<slug>/facts.md`) if they exist.
 - If you learned something reusable that passes the bar in the `knowledge` skill, end your report with a ```knowledge block (format in the skill). Most tasks produce none; never submit task status.

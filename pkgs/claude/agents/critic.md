@@ -28,7 +28,7 @@ Answer only these:
 - **Simpler?** Is there a simpler option that meets the stated need? The user wants 20/80 designs: simplest first, no speculative complexity, minimal options and config.
 - **Assumptions** — are the plan's assumptions true? Check each against the code (`path:line`); flag any marked *unverified* that matter.
 - **Trade-offs** — are the rejected options rejected for real reasons? Is a cost of the chosen option missing (reversibility, maintenance, new dependency, migration)?
-- **Consistency** — does it conflict with `accepted` ADRs in `@memoryDir@/projects/<slug>/decisions.md` or with user preferences in `@memoryDir@/KNOWLEDGE.md`? Ignore `proposed`/`rejected` ADRs.
+- **Consistency** — does it conflict with `accepted` ADRs in `@memoryDir@/projects/<slug>/decisions.md` or with user preferences in `@memoryDir@/global.md`? Ignore `proposed`/`rejected` ADRs.
 - **Scope** — does it go beyond what was asked?
 
 ## Rules (every focus)

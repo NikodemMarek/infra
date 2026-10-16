@@ -41,15 +41,25 @@
     "Bash(glab label list:*)"
     "Bash(glab label get:*)"
 
-    # Queueing, recall and read-only status of the knowledge curator.
+    # Queueing notes for the knowledge curator.
     "Bash(knowledge submit:*)"
-    "Bash(knowledge status:*)"
-    "Bash(knowledge ask:*)"
 
     "Bash(mvn test:*)"
     "Bash(mvn compile:*)"
   ];
-  deny = [];
+  # The curator's files (injected into every session) and the note inbox: event
+  # sessions run acceptEdits with the memory dir in additionalDirectories, so
+  # without these they could write them directly. The architect's own files
+  # (overview, decisions, log, notes) are not covered. Only Edit rules: they
+  # apply to Write too, Write path rules are never consulted.
+  deny = [
+    "Edit(@memoryDir@/global.md)"
+    "Edit(@memoryDir@/topic/**)"
+    "Edit(@memoryDir@/lang/**)"
+    "Edit(@memoryDir@/org/**)"
+    "Edit(@memoryDir@/projects/*/facts.md)"
+    "Edit(~/.local/state/knowledge/inbox/**)"
+  ];
   ask = [];
   additionalDirectories = ["@memoryDir@" "~/projects"];
 }

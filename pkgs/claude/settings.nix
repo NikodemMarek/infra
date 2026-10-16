@@ -9,7 +9,7 @@
     command = "claude-statusline";
   };
 
-  # Built-in auto-memory is replaced by the knowledge curator. Both the
+  # Built-in auto-memory is replaced by the knowledge notes and curator. Both the
   # setting and the env var, so a wrong key name cannot leave it on.
   autoMemoryEnabled = false;
   env = {

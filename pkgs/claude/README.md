@@ -11,7 +11,7 @@ nix build .#claude                                # build it (from the repo root
 
 - `pkgs/claude/` - the wrapper (`default.nix`), `CLAUDE.md`, `agents/*.md`, `settings.nix` (rendered to `settings.json`), `permissions.nix` (imported by `settings.nix`) and this README
 - `pkgs/agent-skills/skills/` - `*/SKILL.md`, tool-agnostic skills shared by Claude and other tools (`jj`, `atomic-commits`, `commit`, `knowledge`); `claude` takes them from the `agent-skills` package
-- `pkgs/knowledge` - the knowledge curator CLI: `knowledge submit`, `curate`, `undo`/`restore`/`drop`, hooks
+- `pkgs/knowledge` - the knowledge CLI: `knowledge submit` (queue a note), `curate`, `skills`, `route`, hooks
 - `pkgs/jj-upload`, `pkgs/claude-hooks`, `pkgs/claude-statusline`, `pkgs/agent-skills` - the other tools
 - `pkgs/default.nix` - registers `claude` and the tools; `overlays/default.nix` exposes them as the `additions` overlay and `flake.nix` exports them as `packages`
 
@@ -32,7 +32,7 @@ environment.systemPackages = [
 
 `claude-code` is unfree; the flake's `pkgs` allows it.
 
-The package also ships `claude-bare`, a minimal headless claude for narrow tool runs (used by `knowledge ask`, `knowledge route` and the curator): no MCP servers, slash commands, settings files, `CLAUDE.md` or workspace handling, so a call costs a fraction of the tokens. Pick its tools with `--tools`, e.g. `echo q | claude-bare -p --tools Read,Grep,Glob`. It is not `--bare`, which would drop the subscription login.
+The package also ships `claude-bare`, a minimal headless claude for narrow tool runs (used by `knowledge route`, `knowledge skills` and the curator): no MCP servers, slash commands, settings files, `CLAUDE.md` or workspace handling, so a call costs a fraction of the tokens. Pick its tools with `--tools`, e.g. `echo q | claude-bare -p --tools Read,Grep,Glob`. It is not `--bare`, which would drop the subscription login.
 
 ## Using it from another flake
 
@@ -94,15 +94,17 @@ On launch the wrapper uses `CLAUDE_CONFIG_DIR` (default: the package's `dataDir`
   skills/<name>      -> /nix/store/...-claude-config/skills/<name>
   settings.json      -> /nix/store/...-claude-config/settings.json (read-only)
   backups/           unmanaged settings.json files moved aside on launch
-  memory/            project memory (a git repo, not managed by Nix), shared: the architect owns
-                     projects/<slug>/{overview,decisions,log}.md and notes/, the knowledge curator the rest
+  memory/            project memory (a git repo, not managed by Nix), shared. The architect owns README.md,
+                     INDEX.md, templates/ and projects/<slug>/{overview,decisions,log}.md + notes/; the
+                     knowledge curator owns global.md, topic/, lang/, org/ and projects/*/facts.md
+                     (`knowledge skills` writes skill-ideas/); SCOPES.toml and private/ are the user's
   ...                sessions, credentials, etc. (claude's own state)
-~/.local/state/knowledge/   the curator's state (inbox of pending submissions, decisions, rejected.md)
+~/.local/state/knowledge/inbox/   the curator's inbox (one file per pending note)
 ```
 
 Managed entries are symlinks refreshed on every launch; stale ones from older builds are pruned. Real files or foreign symlinks are never overwritten (a warning is printed), except `settings.json`, which is moved to `backups/` first.
 
-`dataDir` is shell-expanded at runtime and should start with `$HOME` (the markdown prose shows it as `~/...`). Variants (e.g. different `extend` results) sharing one `dataDir` re-link each other's entries on every launch; give a variant its own `dataDir` to run them side by side.
+`dataDir` is shell-expanded at runtime and must start with `$HOME/` (checked at build time; the markdown prose shows it as `~/...`). Variants (e.g. different `extend` results) sharing one `dataDir` re-link each other's entries on every launch; give a variant its own `dataDir` to run them side by side.
 
 ## Migrating from ~/.claude
 
