@@ -12,6 +12,10 @@ win: they are pulled into the commit description (local edits are overwritten)
 and jj upload only maintains the stack list in the description.
 Changes you abandoned or squashed away get their MR closed and their branch deleted.
 Changes at the bottom of the stack whose MR was merged into trunk are abandoned by the sync.
+When an MR is created, local images/videos in its description (`![alt](path)`, absolute
+or relative to the repo root) are uploaded to the GitLab project and the links rewritten
+to the uploaded URLs; GitHub has no API for that, so its links are left alone with a warning,
+as are files that are missing or fail to upload.
 Before pushing, it syncs: fetch, rebase onto trunk, and pull commits that exist only
 on a change's remote branch into the change (or, if both sides changed, into a
 "remote changes on <branch>" change after it, and stop).  `jj sync` alone also
@@ -45,6 +49,8 @@ STACK_START = "<!-- jj-stack:start -->"
 STACK_END = "<!-- jj-stack:end -->"
 FS, RS = "\x1f", "\x1e"
 REMOTE_TITLE = "remote changes on "
+MEDIA_EXTENSIONS = tuple(f".{e}" for e in (
+    "png jpg jpeg gif webp svg bmp avif mp4 webm mov mkv m4v ogv".split()))
 
 
 class Fatal(Exception):
@@ -245,6 +251,10 @@ class Forge:
         """state: "open" (reopen) or "closed"."""
         raise NotImplementedError
 
+    def upload(self, path):
+        """Upload a local file for use in a description; returns its URL, or None if unsupported."""
+        return None
+
 
 def cli_api(cmd):
     out = run(cmd).stdout
@@ -257,7 +267,8 @@ class GitLab(Forge):
 
     def __init__(self, host, project):
         super().__init__(host, project)
-        self.base = f"projects/{urllib.parse.quote(project, safe='')}/merge_requests"
+        self.prefix = f"projects/{urllib.parse.quote(project, safe='')}"
+        self.base = f"{self.prefix}/merge_requests"
         self.bin = os.environ.get("JJ_UPLOAD_GLAB", "glab")
 
     def api(self, method, path, **fields):
@@ -301,6 +312,18 @@ class GitLab(Forge):
     def set_state(self, mr, state):
         event = {"open": "reopen", "closed": "close"}[state]
         return self.api("PUT", f"{self.base}/{mr['id']}", state_event=event)
+
+    def upload(self, path):
+        cmd = [self.bin, "api", "--hostname", self.host, "-X", "POST",
+               f"{self.prefix}/uploads", "--form", f"file=@{path}"]
+        p = run(cmd, check=False)
+        try:
+            if p.returncode == 0:
+                return json.loads(p.stdout)["url"]
+        except (ValueError, KeyError, TypeError):
+            pass
+        info(f"  {path}: upload failed: {p.stderr.strip() or 'invalid response'}; link left as is")
+        return None
 
 
 class GitHub(Forge):
@@ -357,6 +380,10 @@ class GitHub(Forge):
             return self.norm(json.loads(p.stdout))
         return self.api("PATCH", f"{self.base}/{mr['id']}", state=state)
 
+    def upload(self, path):
+        info(f"  {path}: GitHub cannot attach files to a PR description; link left as is")
+        return None
+
 
 FORGES = {f.name: f for f in (GitLab, GitHub)}
 
@@ -385,6 +412,36 @@ def stack_section(entries, current, term):
 
 def strip_stack(text):
     return re.sub(rf"\n*{re.escape(STACK_START)}.*?{re.escape(STACK_END)}\n*", "", text or "", flags=re.S).strip()
+
+
+def local_file(target, root):
+    """Path of a local image/video that a link target points to, or None for anything else."""
+    if (re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", target) or target.startswith(("//", "#", "/uploads/"))
+            or not target.lower().endswith(MEDIA_EXTENSIONS)):
+        return None
+    return os.path.join(root, os.path.expanduser(target))  # absolute paths win
+
+
+def upload_media(text, fg):
+    """Rewrite the local files in `![alt](path)` links to the URLs fg.upload() returns."""
+    if "![" not in text:
+        return text
+    root = jj("root").strip()
+    urls = {}
+
+    def link(m):
+        path = local_file(m.group(2), root)
+        if not path:
+            return m.group(0)
+        if path not in urls:
+            if os.path.isfile(path):
+                urls[path] = fg.upload(path)
+            else:
+                info(f"  {m.group(2)}: file not found; link left as is")
+                urls[path] = None
+        return m.group(1) + urls[path] if urls[path] else m.group(0)
+
+    return re.sub(r"(!\[[^\]]*\]\()([^)\s]+)", link, text)
 
 
 # ---------------------------------------------------------------- main
@@ -673,7 +730,8 @@ def main():
         if mr and mr["state"] == "closed":
             mr = fg.set_state(mr, "open")
         if not mr:
-            mr = fg.create(e["branch"], e["target"], e["title"], e["body"], draft)
+            body = upload_media(e["body"], fg)
+            mr = fg.create(e["branch"], e["target"], e["title"], body, draft)
             info(f"  created {mr['ref']}  {mr['url']}")
         else:
             # the draft state chosen in the forge is kept

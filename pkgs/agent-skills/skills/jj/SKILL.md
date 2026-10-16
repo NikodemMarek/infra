@@ -105,7 +105,7 @@ Useful template fields: `change_id`, `commit_id`, `description`, `bookmarks`, `l
 Script: the `jj-upload` package, with the jj aliases `upload` and `sync`. It is configured under `[upload]` in the jj config.
 
 Rules:
-- **Once an MR exists, the forge's title and description are the source of truth.** `jj upload` pulls them into the commit description, overwriting local `jj describe` edits to changes that already have an MR (it only maintains the stack list in the MR description). Edit title/description on the forge; edit the commit message locally only before the first upload.
+- **Once an MR exists, the forge's title and description are the source of truth.** `jj upload` pulls them into the commit description, overwriting local `jj describe` edits to changes that already have an MR (it only maintains the stack list in the MR description). Edit title/description on the forge; edit the commit message locally only before the first upload. Local images/videos in a description (`![alt](path)`, absolute or relative to the repo root) are uploaded to GitLab and the links rewritten when the MR is created (GitHub: not supported; missing files and failed uploads: warning, links stay as they are).
 - **Bookmarks starting with `nm/` are managed** (`nm/<slug>-<change-id>`). Don't create, rename, move or delete them by hand. To drop an MR, `jj abandon` the change; the next `jj upload` closes it.
 - **Every change needs a description before upload.** Use Conventional Commits (`feat: …`, `fix: …`). Each change should compile and pass tests on its own.
 - **Addressing review feedback on change X:**
