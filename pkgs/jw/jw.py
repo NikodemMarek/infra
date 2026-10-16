@@ -137,11 +137,11 @@ def route(task):
     return repo
 
 
-def in_use(d):
-    """Whether some process has its working directory in d."""
+def in_use(d, ignore=()):
+    """Whether some process, other than those in ignore (pids), has its working directory in d."""
     d = os.path.realpath(d)
     for pid in os.listdir("/proc"):
-        if not pid.isdigit():
+        if not pid.isdigit() or int(pid) in ignore:
             continue
         try:
             cwd = os.readlink(f"/proc/{pid}/cwd")
@@ -234,14 +234,18 @@ def rmdir_agents(home):
         pass
 
 
-def remove(home, name):
-    d = f"{home}.agents/{name}"
+def ask_lost(d):
+    """Snapshot the workspace at d and, if files jj does not track would be lost with it, ask whether to delete."""
     jj("status", cwd=d)  # snapshot: its work stays in its change after the workspace is gone
     lost = untracked(d)
     if lost:
         more = f", ... (+{len(lost) - 5} more)" if len(lost) > 5 else ""
         confirm(f"jw: {len(lost)} file(s) in {d} are not tracked by jj (ignored or too large) "
                 f"and will be lost: {', '.join(lost[:5])}{more}. Delete? [y/N] ")
+
+
+def remove(home, name):
+    d = f"{home}.agents/{name}"
     jj("--ignore-working-copy", "workspace", "forget", cwd=d)  # its own workspace: the jj name may differ from name
     shutil.rmtree(d)
     rmdir_agents(home)
@@ -287,15 +291,134 @@ def cmd_rm(a):
     if name == "default" or not NAME.match(name) or not os.path.isdir(f"{d}/.jj"):
         raise Fail(f"no workspace at {d}")
     inside = (os.path.realpath(os.getcwd()) + "/").startswith(os.path.realpath(d) + "/")
+    ask_lost(d)
     remove(home, name)
     if inside:
         print(home)
 
 
+def stat_fields(pid):
+    """Fields 3.. of /proc/<pid>/stat (the command name, field 2, may contain spaces and parentheses): ppid is
+    [1], the start time (field 22) [19]."""
+    with open(f"/proc/{pid}/stat") as f:
+        return f.read().rpartition(")")[2].split()
+
+
+def claude_sessions(d):
+    """{pid: (status, shpool session or None, statusUpdatedAt in ms or None)} of the live Claude sessions with their
+    working directory in d."""
+    d = os.path.realpath(d)
+    base = f"{os.environ.get('CLAUDE_CONFIG_DIR') or os.path.expanduser('~/.local/share/claude')}/sessions"
+    try:
+        files = os.listdir(base)
+    except OSError:
+        return {}
+    found = {}
+    for f in files:
+        try:
+            with open(f"{base}/{f}") as fh:
+                s = json.load(fh)
+            pid = int(s["pid"])
+            if stat_fields(pid)[19] != s["procStart"]:  # a dead pid fails here
+                continue  # the pid was reused
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+            with open(f"/proc/{pid}/environ", "rb") as fh:
+                env = fh.read().split(b"\0")
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            continue
+        if cwd == d or cwd.startswith(d + "/"):
+            prefix = b"SHPOOL_SESSION_NAME="
+            name = next((e[len(prefix):].decode(errors="replace") for e in env if e.startswith(prefix)), None)
+            found[pid] = (s.get("status"), name, s.get("statusUpdatedAt"))
+    return found
+
+
+def descendants(pids):
+    """pids and all their descendant processes."""
+    children = {}
+    for p in os.listdir("/proc"):
+        if p.isdigit():
+            try:
+                ppid = int(stat_fields(p)[1])
+            except (OSError, ValueError, IndexError):
+                continue
+            children.setdefault(ppid, []).append(int(p))
+    found, todo = set(), list(pids)
+    while todo:
+        p = todo.pop()
+        if p not in found:
+            found.add(p)
+            todo += children.get(p, [])
+    return found
+
+
+def shpool_status():
+    """{shpool session: attached or disconnected}."""
+    try:
+        p = subprocess.run([SHPOOL, "--no-daemonize", "list"], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, text=True)
+    except OSError as e:
+        raise Fail(f"shpool: {e}")
+    if p.returncode != 0:
+        raise Fail("shpool list failed (is shpool.socket running?)")
+    rows = [line.split() for line in p.stdout.splitlines()[1:]]  # after the header
+    return {r[0]: r[-1] for r in rows if r}
+
+
+def check_claudes(d, sessions):
+    """The shpool sessions of the Claude sessions in d if all are idle for an hour, alone in detached shpool sessions
+    and nothing else is using d. Fail says why not."""
+    mine = descendants(sessions)
+    if os.getpid() in mine:
+        raise Fail("this session runs jw")
+    if in_use(d, mine):
+        raise Fail("in use by other processes")
+    for pid, (status, name, at) in sessions.items():
+        if status != "idle":
+            raise Fail(f"Claude {pid} is {status}")
+        if not name:
+            raise Fail(f"Claude {pid} is not in a shpool session")
+        if not isinstance(at, (int, float)) or time.time() - at / 1000 < 3600:
+            raise Fail(f"Claude {pid} idle for less than an hour")
+    names = sorted({name for _, name, _ in sessions.values()})
+    state = shpool_status()
+    for n in names:
+        if state.get(n) != "disconnected":
+            raise Fail(f"shpool session {n} is {state.get(n, 'unknown')}")
+    for pid, (_, name, _) in sessions.items():  # the shpool daemon is the parent of the session's first process
+        with open(f"/proc/{stat_fields(pid)[1]}/comm") as f:
+            if f.read().strip() != "shpool":
+                raise Fail(f"shpool session {name} also runs other processes")
+    return names
+
+
+def kill_shpool(d, names):
+    """Kill the shpool sessions and wait until nothing is using d."""
+    for n in names:
+        p = subprocess.run([SHPOOL, "--no-daemonize", "kill", n], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        if p.returncode != 0:
+            raise Fail(f"shpool kill {n} failed")
+    for _ in range(50):
+        if not in_use(d):
+            return
+        time.sleep(0.1)
+    raise Fail(f"still in use after killing shpool session {', '.join(names)}")
+
+
+def removable(d):
+    """Whether the workspace at d holds nothing. Not --ignore-working-copy: snapshot first, so unsnapshotted edits
+    count. Merged: @ is in trunk (snapshotted edits make a new commit that is not); after a squash-merge `jj sync`
+    leaves an empty @."""
+    out = jj("log", "--no-graph", "-T", "change_id", "-r",
+             '@ & (::trunk() | (empty() & description(exact:"") & visible_heads()))', cwd=d)
+    return bool(out.strip())
+
+
 def cmd_prune(a):
-    """Remove the workspaces that hold nothing: empty, undescribed, a visible head, not in use, not modified within
-    the last hour. gitlab-context's (gl-*) are left to `gitlab-context gc`, which knows when they are reused.
-    Directories jj cannot read (failing to load) are deleted only after asking once for all of them."""
+    """Remove the workspaces that hold nothing: empty and undescribed (a visible head) or merged into trunk, not
+    modified within the last hour. Those in use go too if the only users are idle Claude sessions in detached shpool
+    sessions, which are killed along with their background jobs. gitlab-context's (gl-*) are left to `gitlab-context gc`, which knows when they are
+    reused. Directories jj cannot read (failing to load) are deleted only after asking once for all of them."""
     broken_ones = []
     for r in repos():
         home = f"{ROOT}/{r}"
@@ -304,26 +427,45 @@ def cmd_prune(a):
         except OSError:
             continue
         try:
+            jj("--ignore-working-copy", "git", "fetch", cwd=home)  # to see what has been merged
+        except Fail:
+            sys.stderr.write(f"jw: {r}: fetch failed, continuing\n")
+        try:
             known = jj("--ignore-working-copy", "workspace", "list", "-T", 'name ++ "\\n"', cwd=home).split()
         except Fail:
             continue  # jj already said why
         for name in names:
             d = f"{home}.agents/{name}"
-            if GITLAB.match(name) or not os.path.isdir(f"{d}/.jj") or in_use(d) or recent(d):
+            if GITLAB.match(name) or not os.path.isdir(f"{d}/.jj") or recent(d):
                 continue
+            busy = in_use(d)
+            sessions = claude_sessions(d) if busy else {}
+            if busy and not sessions:
+                continue  # something else is using it
             try:
-                broken = not loads(d)
-                if broken:
-                    broken_ones.append((r, home, name, known))
+                if busy:
+                    try:
+                        killable = check_claudes(d, sessions)
+                    except (Fail, OSError):
+                        continue  # not ours to kill; no jj call for that
+                if not loads(d):
+                    if not busy:
+                        broken_ones.append((r, home, name, known))
                     continue
-                # not --ignore-working-copy: snapshot first, so unsnapshotted edits count
-                empty = jj("log", "--no-graph", "-T", "change_id", "-r",
-                           '@ & empty() & description(exact:"") & visible_heads()', cwd=d)
-                if not empty.strip():
+                if not removable(d):
                     continue
+                if busy:
+                    sys.stderr.write(f"jw: {r}.agents/{name}: will kill shpool session(s) {', '.join(killable)}\n")
+                ask_lost(d)  # may wait for the user: check again afterwards
+                if busy:
+                    killable = check_claudes(d, claude_sessions(d))
+                    kill_shpool(d, killable)
+                    if not removable(d):
+                        raise Fail("changed while pruning")
                 remove(home, name)
-                sys.stderr.write(f"jw: removed {r}.agents/{name}\n")
-            except Fail as e:
+                sys.stderr.write(f"jw: removed {r}.agents/{name}"
+                                 + (f" (killed shpool session {', '.join(killable)})" if busy else "") + "\n")
+            except (Fail, OSError) as e:
                 sys.stderr.write(f"jw: kept {r}.agents/{name}" + (f": {e}" if str(e) else "") + "\n")
     if shutil.which("gitlab-context"):
         subprocess.run(["gitlab-context", "gc", "--all"], stdout=subprocess.DEVNULL)  # it logs what it removes
@@ -346,14 +488,7 @@ def cmd_prune(a):
 
 def session_name(base):
     """base, or base-2, base-3, ...: the first not taken by a shpool session."""
-    try:
-        p = subprocess.run([SHPOOL, "--no-daemonize", "list"], stdin=subprocess.DEVNULL,
-                           stdout=subprocess.PIPE, text=True)
-    except OSError as e:
-        raise Fail(f"shpool: {e}")
-    if p.returncode != 0:
-        raise Fail("shpool list failed (is shpool.socket running?)")
-    taken = {line.split()[0] for line in p.stdout.splitlines() if line.strip()}
+    taken = set(shpool_status())
     name, i = base, 2
     while name in taken:
         name, i = f"{base}-{i}", i + 1
@@ -459,7 +594,7 @@ def parse_args():
     s.add_argument("url")
     s.add_argument("name", nargs="?", help=f"directory name under {ROOT} (default: from the url)")
     s.set_defaults(func=cmd_clone)
-    s = sub.add_parser("prune", help="remove empty and broken workspaces in all repos")
+    s = sub.add_parser("prune", help="remove empty, merged and broken workspaces in all repos, and the idle detached Claude shpool sessions in merged ones (killing a session kills its background jobs)")
     s.set_defaults(func=cmd_prune)
     s = sub.add_parser("info", help="print the jj workspace and stack of the current directory as JSON")
     s.set_defaults(func=cmd_info)
