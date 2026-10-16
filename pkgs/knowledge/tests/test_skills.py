@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from editing_claude import EditingClaude
-from knowledge import config, skills
+from knowledge import config, prompts, skills
 
 
 def sh(repo: Path, *args: str) -> str:
@@ -70,8 +70,9 @@ def test_the_call(memory_repo: Path, editing_claude: EditingClaude):
     skill("plain", "---\ndescription: Without a name.\n---")
     assert skills.run() == 0
     stdin = editing_claude.stdin()
-    assert "- jj: Use when working with jj." in stdin
-    assert "- plain: Without a name." in stdin
+    assert "## jj\n\ndescription: Use when working with jj.\n\n# body\nrules\n" in stdin
+    assert "## plain\n\ndescription: Without a name.\n\n# body\nrules\n" in stdin
+    assert "name: jj" not in stdin  # the frontmatter is not repeated in the body
     assert "- skill-ideas/draft.md" in stdin
     args = editing_claude.argv()
     assert Path(str(editing_claude.call()["cwd"])).resolve() == memory_repo.resolve()
@@ -79,6 +80,19 @@ def test_the_call(memory_repo: Path, editing_claude: EditingClaude):
     assert args[args.index("--allowedTools") + 1] == f"Edit(/{memory_repo.resolve()}/skill-ideas/**)"
     assert args[args.index("--permission-mode") + 1] == "default"
     assert "skill ideas" in args[args.index("--append-system-prompt") + 1]
+
+
+def test_a_long_skill_body_is_cut(memory_repo: Path, editing_claude: EditingClaude):
+    skill("big", "---\nname: big\ndescription: Use when big.\n---\n" + "x" * (skills.MAX_BODY + 100))
+    assert skills.run() == 0
+    stdin = editing_claude.stdin()
+    assert "x" * skills.MAX_BODY in stdin
+    assert "x" * (skills.MAX_BODY + 1) not in stdin
+
+
+def test_the_prompt_does_not_ask_to_read_a_deployed_skill():
+    """The deployed skills are outside the cwd, where a read is denied: their bodies are in the message instead."""
+    assert "SKILL.md first" not in prompts.read(skills.PROMPT)
 
 
 def test_no_deployed_skills_and_no_drafts_yet(memory_repo: Path, editing_claude: EditingClaude):

@@ -15,6 +15,7 @@ log = logging.getLogger("knowledge")
 
 DIR = "skill-ideas"
 PROMPT = "skills.md"
+MAX_BODY = 16_000  # characters of a deployed skill's body in the message
 
 _KEY = re.compile(r"([A-Za-z_-]+):[ \t]*(.*)")
 _BLOCK_SCALARS = (">", "|", ">-", "|-")
@@ -40,15 +41,34 @@ def _frontmatter(text: str) -> dict[str, str]:
     return found
 
 
+def _body(text: str) -> str:
+    """The text after the `---` block at the top."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return text.strip()
+    for i, line in enumerate(lines[1:], 1):
+        if line.strip() == "---":
+            return "\n".join(lines[i + 1 :]).strip()
+    return ""
+
+
 def deployed() -> list[str]:
-    """`name: description` of each skill of the Claude config (`skills/*/SKILL.md`)."""
+    """Name, description and body (at most MAX_BODY characters) of each skill of the Claude config (`skills/*/SKILL.md`)."""
     lines: list[str] = []
     for path in sorted((config.claude_config_dir() / "skills").glob("*/SKILL.md")):
         try:
-            fm = _frontmatter(path.read_text(encoding="utf-8", errors="replace"))
+            text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        lines.append(f"- {fm.get('name') or path.parent.name}: {fm.get('description', '')}")
+        fm = _frontmatter(text)
+        lines += [
+            f"## {fm.get('name') or path.parent.name}",
+            "",
+            f"description: {fm.get('description', '')}",
+            "",
+            _body(text)[:MAX_BODY],
+            "",
+        ]
     return lines
 
 
@@ -59,7 +79,7 @@ def _mtimes(directory: Path) -> dict[str, int]:
 def _message(drafts: list[str]) -> str:
     return "\n".join(
         [
-            "# Deployed skills (name: description)",
+            "# Deployed skills (name, description, body)",
             "",
             *(deployed() or ["(none)"]),
             "",

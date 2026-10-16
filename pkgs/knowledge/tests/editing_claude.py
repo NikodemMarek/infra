@@ -2,7 +2,8 @@
 
 The plan (JSON, set with `EditingClaude.plan`): `writes` {path: text} and `deletes` [path] (relative paths are relative to the
 cwd of the call, the memory dir; absolute ones work too), `result` (the final text), `denials` (the permission_denials of the
-result) and `exit` (a non-zero exit status: it fails before doing anything).
+result), `exit` (a non-zero exit status: it fails before doing anything) and `hang` (a path: after the edits it creates that
+file and sleeps, to be killed).
 """
 
 import json
@@ -13,7 +14,7 @@ import pytest
 
 SCRIPT = """\
 #!@PYTHON@
-import json, os, sys
+import json, os, sys, time
 from pathlib import Path
 
 plan = json.loads(Path(os.environ["FAKE_CLAUDE_PLAN"]).read_text())
@@ -28,6 +29,9 @@ for name, text in plan.get("writes", {}).items():
     path.write_text(text)
 for name in plan.get("deletes", []):
     Path(name).unlink()
+if plan.get("hang"):
+    Path(plan["hang"]).write_text("")
+    time.sleep(60)
 print(json.dumps({"type": "result", "is_error": False, "result": plan.get("result", ""), "permission_denials": plan.get("denials", [])}))
 """
 
@@ -57,8 +61,16 @@ class EditingClaude:
         result: str = "",
         denials: tuple[str, ...] = (),
         exit_code: int = 0,
+        hang: Path | None = None,
     ) -> None:
-        doc = {"writes": writes or {}, "deletes": list(deletes), "result": result, "denials": list(denials), "exit": exit_code}
+        doc = {
+            "writes": writes or {},
+            "deletes": list(deletes),
+            "result": result,
+            "denials": list(denials),
+            "exit": exit_code,
+            "hang": str(hang) if hang else "",
+        }
         self.plan_file.write_text(json.dumps(doc))
 
     @property
