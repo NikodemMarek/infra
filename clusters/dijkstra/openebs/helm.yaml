@@ -38,3 +38,7 @@ spec:
       zfs:
         # the node plugin runs the host's zfs via chroot; NixOS has no /sbin/zfs
         bin: /run/current-system/sw/bin/zfs
+    loki:
+      enabled: false
+    alloy:
+      enabled: false
