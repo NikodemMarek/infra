@@ -13,8 +13,6 @@
     ../features/optional/tailscale.nix
     ../features/optional/libvirt.nix
     ../features/optional/maintenance.nix
-
-    ./proxy.nix
   ];
 
   environment.systemPackages = [
