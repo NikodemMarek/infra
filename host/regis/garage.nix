@@ -41,8 +41,15 @@
 
   # A static user, so the secret and the dataset can be owned by it
   systemd.services.garage = {
-    unitConfig.RequiresMountsFor = ["/mnt/garage"];
+    # The fstab mount of tank/garage races zfs-mount.service at boot and loses
+    # (the dataset ends up mounted anyway), so RequiresMountsFor would fail
+    # garage. Wait for zfs-mount instead and refuse to start on the bare root.
+    after = ["zfs-mount.service"];
+    wants = ["zfs-mount.service"];
     serviceConfig = {
+      ExecStartPre = "${pkgs.util-linux}/bin/mountpoint -q /mnt/garage";
+      Restart = "on-failure";
+      RestartSec = "30s";
       DynamicUser = false;
       User = "garage";
       Group = "garage";
