@@ -9,3 +9,5 @@ allowVolumeExpansion: true
 parameters:
   fstype: "zfs"
   poolname: "rpool/openebs"
+  # arrstack-config is mounted by several pods on regis; zfs-localpv refuses a second mount otherwise
+  shared: "yes"
