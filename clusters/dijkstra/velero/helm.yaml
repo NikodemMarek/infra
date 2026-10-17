@@ -23,31 +23,24 @@ spec:
         name: velero
         namespace: velero
   values:
+    initContainers:
+      - name: velero-plugin-for-aws
+        image: velero/velero-plugin-for-aws:v1.14.4
+        imagePullPolicy: IfNotPresent
+        volumeMounts:
+          - mountPath: /target
+            name: plugins
+    credentials:
+      existingSecret: secrets
     configuration:
       backupStorageLocation:
         - name: default
-          provider: velero.io/filesystem
-          bucket: openebs-backups
+          provider: aws
+          bucket: velero
+          default: true
           config:
-            path: /backups
-    initContainers: []
+            region: garage
+            s3ForcePathStyle: "true"
+            s3Url: http://100.100.215.91:3900
     snapshotsEnabled: false
     deployNodeAgent: true
-    extraVolumes:
-      - name: backups
-        persistentVolumeClaim:
-          claimName: velero-backups-pvc
-    extraVolumeMounts:
-      - name: backups
-        mountPath: /backups
-        subPath: velero
-    nodeAgent:
-      uploaderType: kopia
-      extraVolumes:
-        - name: backups
-          persistentVolumeClaim:
-            claimName: velero-backups-pvc
-      extraVolumeMounts:
-        - name: backups
-          mountPath: /backups
-          subPath: velero

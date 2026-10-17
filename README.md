@@ -233,6 +233,39 @@ To remove a subscription, delete its line, then delete the calendar (read-only o
 kubectl -n omniverse exec deploy/radicale -- rm -r /data/collection-root/nikodem/sub-<name>
 ```
 
+### Backups
+
+Velero backs up the cluster daily at 18:00 Europe/Warsaw and keeps each backup for 30 days. The target is Garage on `regis` (`host/regis/garage.nix`): a single-node S3 store on the `tank/garage` dataset, bucket `velero` at `http://100.100.215.91:3900`, reachable only over `tailscale0` and `cni0`. Velero and Garage share one key pair, from Bitwarden `infra/dijkstra-velero/ACCESS_KEY_ID` and `SECRET_ACCESS_KEY`; Garage creates the layout, the bucket and the key on startup (`--single-node --default-bucket`).
+
+- Backed up: every namespace except `kube-system`, `velero` and `flux-system`, without Secrets (they come from Bitwarden), and the pod volumes through kopia, except `local-storage` (the media on tank), `nfs`, emptyDir and PVCs labelled `backup: skip` (downloads, caches).
+- Nothing alerts on a failed backup: check `velero backup get` now and then.
+
+#### Restore
+
+Velero's file-system restore provisions new PVCs, which clashes with the static PVs git pins by `volumeName`. Restore the volume data with kopia instead:
+
+1. Suspend Flux (it resets `replicas`), scale the app to 0, and delete its HTTPScaledObject if KEDA scales it:
+   ```sh
+   flux suspend kustomization flux-system -n flux-system
+   kubectl -n <namespace> scale deploy/<app> --replicas=0
+   ```
+2. On the node holding the volume, connect read-only to the namespace's repository. The password is Velero's static default (secret `velero/velero-repo-credentials`), so this works without the cluster:
+   ```sh
+   sudo nix run nixpkgs#kopia -- repository connect s3 --endpoint 100.100.215.91:3900 --disable-tls --bucket velero --prefix kopia/<namespace>/ --region garage --access-key <GK...> --secret-access-key <secret> --password static-passw0rd --readonly
+   ```
+3. Find the snapshot ID (without the cluster: `kopia snapshot list --all`):
+   ```sh
+   kubectl -n velero get podvolumebackups -l velero.io/backup-name=<backup> -o custom-columns=VOL:.spec.volume,POD:.spec.pod.name,SNAP:.status.snapshotID
+   ```
+4. Restore into an empty directory, because leftover SQLite `-wal`/`-shm` files corrupt a restored database:
+   ```sh
+   sudo mv <path> <path>.old && sudo mkdir <path>
+   sudo chown --reference=<path>.old <path> && sudo chmod --reference=<path>.old <path>
+   sudo nix run nixpkgs#kopia -- snapshot restore <snapshotID> <path>
+   sudo nix run nixpkgs#kopia -- repository disconnect
+   ```
+5. `flux resume kustomization flux-system -n flux-system`, check the app, delete `<path>.old`.
+
 ### Kubernetes secrets
 
 Encrypted with SOPS using the cluster's age key (`.sops.yaml`); Flux decrypts them when applying (`sops-age` secret). Files must match `*.enc.*`. Only `data` and `stringData` are encrypted.
