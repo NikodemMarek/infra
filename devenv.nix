@@ -112,6 +112,7 @@ in {
 
     pkgs.kubectl
     pkgs.fluxcd
+    pkgs.velero
     pkgs.age
     pkgs.yamlfmt
     pkgs.nfs-utils
