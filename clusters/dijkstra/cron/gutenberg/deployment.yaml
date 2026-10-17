@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gutenberg-boot-sync
+  namespace: cron
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: gutenberg-boot-sync
+  template:
+    metadata:
+      labels:
+        app: gutenberg-boot-sync
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: regis
+      terminationGracePeriodSeconds: 5
+      volumes:
+        - name: books
+          persistentVolumeClaim:
+            claimName: gutenberg-books-pvc
+        - name: scripts
+          configMap:
+            name: gutenberg-scripts
+            defaultMode: 0755
+      containers:
+        - name: gutenberg
+          image: alpine:3.20
+          command:
+            - sh
+            - -c
+            - apk add --no-cache rsync bash coreutils findutils exiftool perl-archive-zip jq && exec /scripts/boot-sync.sh
+          volumeMounts:
+            - name: books
+              mountPath: /data
+            - name: scripts
+              mountPath: /scripts
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+              cpu: 1000m
