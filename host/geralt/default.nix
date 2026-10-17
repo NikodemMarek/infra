@@ -22,8 +22,6 @@
   networking = {
     hostId = "76cc60bb";
     hostName = "geralt";
-
-    interfaces.eth0.wakeOnLan.enable = true;
   };
 
   systemd.network = {
@@ -33,7 +31,10 @@
           Type = "ether";
           Kind = "!*";
         };
-        linkConfig = {Name = "eth0";};
+        linkConfig = {
+          Name = "eth0";
+          WakeOnLan = "magic";
+        };
       };
       "10-wireless-rename" = {
         matchConfig = {
