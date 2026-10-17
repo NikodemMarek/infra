@@ -65,6 +65,7 @@ in {
 
       (pkgs.prismlauncher.override {dataDir = "${generated}/prismlauncher";})
       (pkgs.heroic.override {dataDir = "${generated}/heroic";})
+      (pkgs.moonlight-qt.override {dataDir = "${generated}/moonlight-qt";})
       pkgs.steam
       pkgs.lutris
       pkgs.wine

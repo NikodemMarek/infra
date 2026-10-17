@@ -22,6 +22,7 @@
   obsidian = pkgs.callPackage ./obsidian {obsidian = prev.obsidian;};
   zen-browser = pkgs.callPackage ./zen-browser {zen-browser = prev.zen-browser;};
   heroic = pkgs.callPackage ./heroic {heroic = prev.heroic;};
+  moonlight-qt = pkgs.callPackage ./moonlight-qt {moonlight-qt = prev.moonlight-qt;};
   prismlauncher = pkgs.callPackage ./prismlauncher {prismlauncher = prev.prismlauncher;};
   glab = pkgs.callPackage ./glab {glab = prev.glab;};
   gh = pkgs.callPackage ./gh {gh = prev.gh;};
