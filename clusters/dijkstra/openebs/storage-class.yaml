@@ -3,6 +3,7 @@ kind: StorageClass
 metadata:
   name: openebs-zfs
 provisioner: zfs.csi.openebs.io
+reclaimPolicy: Retain
 volumeBindingMode: WaitForFirstConsumer
 allowVolumeExpansion: true
 parameters:
