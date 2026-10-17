@@ -47,16 +47,6 @@
     wait-online.enable = false;
   };
 
-  boot.initrd.network = {
-    enable = true;
-    ssh = {
-      enable = true;
-      port = 2222;
-      authorizedKeyFiles = [../yenn/user_nikodem_ssh_id_ed25519.pub];
-      hostKeys = [config.secrets.host_ssh_ed25519_priv.path];
-    };
-  };
-
   services.k3s = {
     role = "agent";
     serverAddr = "https://100.97.10.25:6443";
