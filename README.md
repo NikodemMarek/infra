@@ -32,7 +32,7 @@ clusters/dijkstra/     Kubernetes manifests, reconciled by Flux
 | `yenn` | x86_64 | laptop/desktop (Hyprland), LUKS + btrfs. Not a deploy node, rebuilt with `host-switch` |
 | `geralt` | x86_64 | headless game streaming (Wolf + Moonlight), docker, libvirt; usually off, woken over LAN |
 | `roach` | x86_64 | k3s agent, NFS server (media), music tooling |
-| `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool` + data pool `tank`), NFS |
+| `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool` + data pool `tank`), NFS, Garage (S3 for Velero) |
 | `triss` | aarch64 | k3s server (control plane), qemu/virtio guest |
 | `alp` | x86_64 | installer ISO, not in `nixosConfigurations` (see `mkiso`) |
 
