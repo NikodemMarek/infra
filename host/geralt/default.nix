@@ -12,6 +12,7 @@
     ../features/optional/systemd-boot.nix
     ../features/optional/tailscale.nix
     ../features/optional/libvirt.nix
+    ../features/optional/wolf.nix
     ../features/optional/maintenance.nix
   ];
 

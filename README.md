@@ -30,13 +30,21 @@ clusters/dijkstra/     Kubernetes manifests, reconciled by Flux
 | Host | Arch | Role |
 |------|------|------|
 | `yenn` | x86_64 | laptop/desktop (Hyprland), LUKS + btrfs. Not a deploy node, rebuilt with `host-switch` |
-| `geralt` | x86_64 | server/workstation: docker, libvirt, traefik reverse proxy (mostly inactive) |
+| `geralt` | x86_64 | headless game streaming (Wolf + Moonlight), docker, libvirt; usually off, woken over LAN |
 | `roach` | x86_64 | k3s agent, NFS server (media), music tooling |
 | `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool` + data pool `tank`), NFS |
 | `triss` | aarch64 | k3s server (control plane), qemu/virtio guest |
 | `alp` | x86_64 | installer ISO, not in `nixosConfigurations` (see `mkiso`) |
 
 `geralt`, `roach`, `regis` and `triss` are deploy-rs nodes (`deploy.nodes` in `flake.nix`): ssh as `maintenance`, interactive sudo.
+
+## Game streaming (geralt)
+
+`host/features/optional/wolf.nix` runs [Wolf](https://github.com/games-on-whales/wolf) (Moonlight server) as a docker container, pinned by image digest.
+
+- Wake (usually off): `ssh maintenance@regis wakeonlan -i 192.168.18.255 b4:2e:99:a4:86:1c`. `regis` must be cabled to geralt's LAN and wake-on-PCIe enabled in the BIOS. `.link` changes apply only when the NIC appears, so reboot once after deploying them.
+- Pair: add `geralt` in Moonlight (over tailscale); it shows a PIN. `docker logs -f wolf` on geralt prints `Insert pin at http://<ip>:47989/pin/#<secret>`: open that with geralt's tailscale address and enter the PIN.
+- State lives in `/etc/wolf` (persisted under `/persist/data`): `cfg/config.toml` (Wolf-owned, holds the paired clients, edited by hand), certs, per-client app homes with game libraries. Typical hand edits: add Heroic (image `ghcr.io/games-on-whales/heroic-games-launcher:edge`) and set the apps' `DeviceCgroupRules` hidraw major `244` to geralt's (`grep hidraw /proc/devices`).
 
 ## Dev shell
 
