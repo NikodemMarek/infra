@@ -64,6 +64,12 @@
   config = let
     cfg = config.persist;
 
+    # The ZFS pool import covers the device and the key (ZFS native encryption, no cryptsetup.target).
+    rollbackDeps =
+      if cfg.isZfs
+      then ["zfs-import-rpool.service"]
+      else [cfg.deviceService] ++ lib.optional cfg.isCrypted "cryptsetup.target";
+
     inherit (lib) mkIf;
   in
     mkIf cfg.enable {
@@ -75,8 +81,8 @@
             description = "Rollback BTRFS root subvolume to a pristine state";
             wantedBy = ["initrd.target"];
             before = ["sysroot.mount"];
-            requires = [cfg.deviceService] ++ lib.optional cfg.isCrypted "cryptsetup.target";
-            after = [cfg.deviceService] ++ lib.optional cfg.isCrypted "cryptsetup.target";
+            requires = rollbackDeps;
+            after = rollbackDeps;
             unitConfig.DefaultDependencies = "no";
             serviceConfig.Type = "oneshot";
             script =
