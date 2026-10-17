@@ -31,3 +31,10 @@ spec:
       replicated:
         mayastor:
           enabled: false
+    localpv-provisioner:
+      hostpathClass:
+        reclaimPolicy: Retain
+    zfs-localpv:
+      zfs:
+        # the node plugin runs the host's zfs via chroot; NixOS has no /sbin/zfs
+        bin: /run/current-system/sw/bin/zfs
