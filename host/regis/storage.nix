@@ -235,6 +235,17 @@
               atime = "off";
             };
           };
+          "garage" = {
+            type = "zfs_fs";
+            mountpoint = "/mnt/garage";
+            mountOptions = ["nofail"];
+            options = {
+              recordsize = "128K";
+              overlay = "on";
+              atime = "off";
+              quota = "1T";
+            };
+          };
         };
       };
     };

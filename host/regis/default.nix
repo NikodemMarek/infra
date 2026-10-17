@@ -13,6 +13,7 @@
     ../features/optional/k3s.nix
 
     ./nfs.nix
+    ./garage.nix
   ];
 
   networking.hostName = "regis";
