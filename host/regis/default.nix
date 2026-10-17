@@ -1,4 +1,8 @@
-{config, ...}: {
+{
+  config,
+  pkgs,
+  ...
+}: {
   imports = [
     ./hardware-configuration.nix
 
@@ -12,6 +16,8 @@
   ];
 
   networking.hostName = "regis";
+
+  environment.systemPackages = [pkgs.wakeonlan];
 
   time.timeZone = "Europe/Warsaw";
 
