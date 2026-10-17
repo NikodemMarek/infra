@@ -23,6 +23,13 @@
   networking = {
     hostId = "76cc60bb";
     hostName = "geralt";
+
+    # Wolf (Moonlight) for home clients without tailscale; 5353 is mDNS discovery.
+    # Ethernet only: wlan0 is just a fallback for remote debugging.
+    firewall.interfaces.eth0 = {
+      allowedTCPPorts = [47984 47989 48010];
+      allowedUDPPorts = [47999 48100 48200 5353];
+    };
   };
 
   systemd.network = {
