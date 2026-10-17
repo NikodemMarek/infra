@@ -17,6 +17,8 @@ spec:
       labels:
         app: ollama
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: triss
       volumes:
         - name: models
           persistentVolumeClaim:

@@ -29,9 +29,6 @@ spec:
         - name: home-shani
           persistentVolumeClaim:
             claimName: shani-home-pvc
-        - name: omniverse
-          persistentVolumeClaim:
-            claimName: shani-omniverse-pvc
         - name: host-ssh-key
           secret:
             secretName: secrets
@@ -53,8 +50,6 @@ spec:
               mountPath: /tmp
             - name: home-shani
               mountPath: /home/shani
-            - name: omniverse
-              mountPath: /omniverse
             - name: host-ssh-key
               mountPath: /secrets
               readOnly: true
