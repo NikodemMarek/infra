@@ -86,6 +86,9 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/hostname: regis
+      # the image runs as node (1000); its data predates that and is root-owned
+      securityContext:
+        fsGroup: 1000
       volumes:
         - name: data
           persistentVolumeClaim:
