@@ -23,6 +23,7 @@ in {
       pkgs.claude
       pkgs.agent-inbox
       pkgs.jj-upload
+      (pkgs.gh.override {dataDir = "${generated}/gh";})
       (pkgs.jw.override {projectsRoot = projects;})
       (pkgs.bitwarden-cli.override {dataDir = bitwarden;})
       pkgs.git
