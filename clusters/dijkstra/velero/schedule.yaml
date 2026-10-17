@@ -4,10 +4,20 @@ metadata:
   name: daily-openebs
   namespace: velero
 spec:
-  schedule: "0 2 * * *"
+  schedule: "CRON_TZ=Europe/Warsaw 0 18 * * *"
   template:
-    ttl: 168h0m0s
+    ttl: 720h0m0s
     defaultVolumesToFsBackup: true
     snapshotVolumes: false
     includedNamespaces:
       - "*"
+    excludedNamespaces:
+      - kube-system
+      - velero
+      - flux-system
+    # secrets come from Bitwarden via cluster-secrets-build
+    excludedResources:
+      - secrets
+    resourcePolicy:
+      kind: configmap
+      name: volume-policy

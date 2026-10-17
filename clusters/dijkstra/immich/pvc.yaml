@@ -32,6 +32,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: immich-ml-pvc
   namespace: immich
+  labels:
+    backup: skip
 spec:
   accessModes:
     - ReadWriteOnce

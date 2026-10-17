@@ -46,6 +46,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: arrstack-downloads-pvc
   namespace: arrstack
+  labels:
+    backup: skip
 spec:
   accessModes:
     - ReadWriteMany

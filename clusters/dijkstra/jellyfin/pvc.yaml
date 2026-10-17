@@ -60,6 +60,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: jellyfin-cache-pvc
   namespace: jellyfin
+  labels:
+    backup: skip
 spec:
   accessModes:
     - ReadWriteOnce
