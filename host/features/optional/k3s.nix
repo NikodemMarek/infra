@@ -29,6 +29,12 @@
 
   persist.generated.directories = [
     {
+      directory = "/etc/rancher/node";
+      user = "root";
+      group = "root";
+      mode = "755";
+    }
+    {
       directory = "/var/lib/rancher/k3s";
       user = "root";
       group = "root";
