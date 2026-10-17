@@ -225,16 +225,6 @@
               atime = "off";
             };
           };
-          "backups" = {
-            type = "zfs_fs";
-            mountpoint = "/mnt/backups";
-            mountOptions = ["nofail"];
-            options = {
-              recordsize = "128K";
-              overlay = "on";
-              atime = "off";
-            };
-          };
           "garage" = {
             type = "zfs_fs";
             mountpoint = "/mnt/garage";
