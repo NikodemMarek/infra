@@ -25,4 +25,3 @@ spec:
   resources:
     requests:
       storage: 5Gi
-  volumeName: navidrome-data-pv

@@ -11,19 +11,3 @@ spec:
   resources:
     requests:
       storage: 20Gi
-  volumeName: shani-home-pv
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: shani-omniverse-pvc
-  namespace: shani
-spec:
-  accessModes:
-    - ReadWriteOnce
-  storageClassName: openebs-hostpath
-  volumeMode: Filesystem
-  resources:
-    requests:
-      storage: 30Gi
-  volumeName: shani-omniverse-pv

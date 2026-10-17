@@ -90,26 +90,3 @@ spec:
               operator: In
               values:
                 - regis
----
-apiVersion: v1
-kind: PersistentVolume
-metadata:
- name: arrstack-config-pv
-spec:
-  capacity:
-    storage: 10Gi
-  volumeMode: Filesystem
-  accessModes:
-    - ReadWriteOnce
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: openebs-zfs
-  local:
-    path: /mnt/openebs/arrstack-config-pv
-  nodeAffinity:
-    required:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: In
-              values:
-                - regis

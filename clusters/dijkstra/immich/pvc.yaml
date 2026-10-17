@@ -25,7 +25,6 @@ spec:
   resources:
     requests:
       storage: 10Gi
-  volumeName: immich-data-pv
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -41,4 +40,3 @@ spec:
   resources:
     requests:
       storage: 5Gi
-  volumeName: immich-ml-pv

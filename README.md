@@ -242,7 +242,27 @@ Velero backs up the cluster daily at 18:00 Europe/Warsaw and keeps each backup f
 
 #### Restore
 
-Velero's file-system restore provisions new PVCs, which clashes with the static PVs git pins by `volumeName`. Restore the volume data with kopia instead:
+App volumes are provisioned dynamically (openebs-zfs on `regis`, openebs-hostpath on `triss`, both Retain), so a plain Velero restore works. To restore one app:
+
+```sh
+flux suspend kustomization flux-system -n flux-system
+kubectl -n <namespace> delete deploy --all
+kubectl -n <namespace> get pvc -L backup
+kubectl -n <namespace> delete pvc <the openebs-* PVCs without backup=skip>
+velero restore create --from-backup <backup> --include-namespaces <namespace> --wait
+velero restore describe <restore> --details
+flux resume kustomization flux-system -n flux-system
+```
+
+- Delete only the backed-up `openebs-*` PVCs. Keep the `backup: skip` ones and the static `local-storage`/`nfs` ones: Velero restores their PV as is, so a deleted one stays Pending.
+- A PVC shared by several Deployments (`arrstack-config-pvc`, `omniverse-pvc`) is restored through only one of their pods; the others start on the empty volume and write to it (fresh SQLite databases, a git clone) before the restore finishes. Restore those volumes with kopia (below) instead.
+- Don't delete the namespace: the static media PVs would go Released with a stale `claimRef` and the restored PVCs wouldn't bind.
+- Arrstack apps are scaled by KEDA: delete their HTTPScaledObjects first (`kubectl -n arrstack delete httpscaledobject --all`). Flux is suspended, so it doesn't recreate them until you resume.
+- The replaced volumes stay as Released PVs (Retain). Once the app works, clean up with `kubectl delete pv <pv>`, then `kubectl -n openebs delete zfsvolume <pv>` (destroys the dataset) for openebs-zfs, or remove `/var/openebs/local/<pv>` on `triss`.
+
+##### Restore a volume with kopia
+
+For shared volumes, or when a Velero restore fails, restore the data with kopia into the existing volume:
 
 1. Suspend Flux (it resets `replicas`), scale the app to 0, and delete its HTTPScaledObject if KEDA scales it:
    ```sh
@@ -257,14 +277,21 @@ Velero's file-system restore provisions new PVCs, which clashes with the static 
    ```sh
    kubectl -n velero get podvolumebackups -l velero.io/backup-name=<backup> -o custom-columns=VOL:.spec.volume,POD:.spec.pod.name,SNAP:.status.snapshotID
    ```
-4. Restore into an empty directory, because leftover SQLite `-wal`/`-shm` files corrupt a restored database:
+4. Find the volume's directory `<path>` and a place `<aside>` for its current contents outside it (`<pv>` is the PVC's `spec.volumeName`):
+   - `triss`: `<path>` is `/var/openebs/local/<pv>`, `<aside>` is `/var/openebs/local/<pv>.pre-restore`.
+   - `regis`: mount the dataset (it is not mounted while the app is down); `<path>` is `/mnt/restore`, `<aside>` is `/mnt/openebs/pre-restore-<pv>`, outside the dataset so its quota doesn't count both copies:
+     ```sh
+     sudo mkdir -p /mnt/restore && sudo mount -t zfs rpool/openebs/<pv> /mnt/restore
+     ```
+5. Restore into an empty directory, because leftover SQLite `-wal`/`-shm` files corrupt a restored database:
    ```sh
-   sudo mv <path> <path>.old && sudo mkdir <path>
-   sudo chown --reference=<path>.old <path> && sudo chmod --reference=<path>.old <path>
+   sudo mkdir <aside>
+   sudo find <path> -mindepth 1 -maxdepth 1 -exec mv -t <aside> {} +
    sudo nix run nixpkgs#kopia -- snapshot restore <snapshotID> <path>
    sudo nix run nixpkgs#kopia -- repository disconnect
    ```
-5. `flux resume kustomization flux-system -n flux-system`, check the app, delete `<path>.old`.
+   On `regis`, `sudo umount /mnt/restore` afterwards.
+6. `flux resume kustomization flux-system -n flux-system`, check the app, then delete `<aside>`.
 
 ### Kubernetes secrets
 

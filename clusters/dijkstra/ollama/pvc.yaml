@@ -29,19 +29,3 @@ spec:
   resources:
     requests:
       storage: 10Gi
-  volumeName: ollama-local-models-pv
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: ollama-data-pvc
-  namespace: ollama
-spec:
-  accessModes:
-    - ReadWriteOnce
-  storageClassName: openebs-hostpath
-  volumeMode: Filesystem
-  resources:
-    requests:
-      storage: 5Gi
-  volumeName: ollama-data-pv
