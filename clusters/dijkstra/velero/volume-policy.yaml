@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: volume-policy
+  namespace: velero
+data:
+  # local-storage and nfs PVs are the media and model datasets on tank: too big, and already on regis
+  # PVCs labelled backup=skip hold throwaway/cache data (in-flight downloads, caches, model caches)
+  policy.yaml: |
+    version: v1
+    volumePolicies:
+      - conditions:
+          storageClass:
+            - local-storage
+            - nfs
+        action:
+          type: skip
+      - conditions:
+          volumeTypes:
+            - emptyDir
+        action:
+          type: skip
+      - conditions:
+          pvcLabels:
+            backup: skip
+        action:
+          type: skip

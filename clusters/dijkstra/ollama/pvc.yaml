@@ -19,6 +19,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: ollama-local-models-pvc
   namespace: ollama
+  labels:
+    backup: skip
 spec:
   accessModes:
     - ReadWriteOnce
