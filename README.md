@@ -220,6 +220,8 @@ flux reconcile kustomization flux-system --namespace flux-system --with-source
 
 Each app is a directory: `arrstack` (sonarr, radarr, lidarr, prowlarr, bazarr, qbittorrent, beets, flaresolverr), `cloudflare` (tunnel), `cnpg` (CloudNativePG operator), `cron`, `immich`, `intel-gpu-plugin` (exposes regis's iGPU as `gpu.intel.com/i915`), `jellyfin`, `keda`, `navidrome` (with audiomuse-ai), `ollama`, `omniverse` (git-sync, webdav, radicale), `openebs`, `proxy` (traefik, gateway), `shani`, `tailscale` (operator), `velero`. Shared: `storageclass.yaml`.
 
+AudioMuse-AI (`navidrome/audiomuse-ai`) keeps its settings (Navidrome login, auth/API token, AI provider) in its own database, set in its web UI at `http://audiomuse-ai/` (Tailscale). Navidrome's `audiomuseai` plugin is configured in Navidrome's UI with that token.
+
 Radicale (`omniverse/radicale`) serves CalDAV at `http://radicale.tail5874bc.ts.net/`, user `nikodem`. Its data is the omniverse `dav/` directory, versioned by git-sync except what the `omniverse-gitignore` ConfigMap excludes (the `sub-*` subscription calendars and Radicale runtime files). `dav/` is not served over the omniverse WebDAV because Radicale is its only writer: use CalDAV (DAVx⁵ on Android).
 
 Calendar subscriptions are listed in the secret `CALENDAR_SUBSCRIPTIONS` (profile `dijkstra-omniverse`, rebuild with `cluster-secrets-build`), one `<name> <url> [<display name>]` per line: `<name>` is lowercase letters, digits and dashes, starting with a letter or digit; `<url>` is `http(s)://` or `webcal://`; the display name (may contain spaces) defaults to `<name>`. All other lines are ignored. The CronJob `calendar-subscriptions` refreshes them daily at 04:00 Europe/Warsaw into read-only `sub-<name>` calendars. Run it now with:
