@@ -60,5 +60,6 @@ spec:
   ports:
     - name: immich-machine-learning-http
       protocol: TCP
-      port: 80
+      # the server's default machine learning URL is http://immich-machine-learning:3003
+      port: 3003
       targetPort: 3003
