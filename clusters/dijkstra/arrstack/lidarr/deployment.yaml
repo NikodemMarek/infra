@@ -55,3 +55,17 @@ spec:
             limits:
               cpu: "1000m"
               memory: "1Gi"
+        # YouTube PO-token provider for Tubifarry (trustedSessionGeneratorUrl = http://localhost:4416).
+        # Unauthenticated, so it stays pod-local with no Service.
+        - name: bgutil-pot-provider
+          image: brainicism/bgutil-ytdlp-pot-provider:latest
+          ports:
+            - name: pot
+              containerPort: 4416
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
