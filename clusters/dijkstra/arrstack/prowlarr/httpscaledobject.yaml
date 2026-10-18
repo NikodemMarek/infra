@@ -6,7 +6,6 @@ metadata:
 spec:
   hosts:
     - prowlarr
-    - prowlarr.tail5874bc.ts.net
     - prowlarr.arrstack
     - prowlarr.arrstack.svc
     - prowlarr.arrstack.svc.cluster.local
