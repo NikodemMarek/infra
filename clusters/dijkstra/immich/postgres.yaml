@@ -1,0 +1,45 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: immich-postgres
+  namespace: immich
+spec:
+  instances: 1
+  imageName: ghcr.io/tensorchord/cloudnative-vectorchord:17.5-0.4.3@sha256:acebb38ca309938bc05ce268b019c98aa718cb554dd54e4443654d9d00a0d498
+  postgresql:
+    shared_preload_libraries:
+      - vchord.so
+  bootstrap:
+    initdb:
+      database: immich
+      owner: immich
+      dataChecksums: true
+  managed:
+    roles:
+      # login must be explicit (CNPG reconciles omitted attributes to NOLOGIN);
+      # superuser because Immich's own pg_dumpall backups need it
+      - name: immich
+        ensure: present
+        login: true
+        superuser: true
+  storage:
+    storageClass: openebs-zfs
+    size: 5Gi
+  affinity:
+    nodeSelector:
+      kubernetes.io/hostname: regis
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 50m
+    limits:
+      memory: 1Gi
+      cpu: 1000m
+  inheritedMetadata:
+    annotations:
+      # Velero copies the PVC files while postgres is running, so the copied
+      # PGDATA is not consistent: restore only from this dump
+      pre.hook.backup.velero.io/container: postgres
+      pre.hook.backup.velero.io/command: '["/bin/sh","-c","pg_dump -Fc -d immich -f /var/lib/postgresql/data/immich.dump.tmp && mv /var/lib/postgresql/data/immich.dump.tmp /var/lib/postgresql/data/immich.dump"]'
+      pre.hook.backup.velero.io/on-error: Fail
+      pre.hook.backup.velero.io/timeout: 10m
