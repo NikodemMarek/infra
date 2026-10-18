@@ -15,6 +15,7 @@ data:
       incremental: no
       quiet: yes
       quiet_fallback: asis
+      duplicate_action: remove
 
     match:
       strong_rec_thresh: 0.10
