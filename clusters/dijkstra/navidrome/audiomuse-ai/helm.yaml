@@ -23,23 +23,35 @@ spec:
       version: v1.1.6
   interval: 10m0s
   values:
-    redis:
-      replicaCount: 0
+    image:
+      tag: "3.6.4"
     postgres:
-      replicaCount: 0
-    worker:
-      replicaCount: 0
+      enabled: false
+      external:
+        host: audiomuse-postgres-rw
+      existingSecret: audiomuse-postgres-app
+      existingSecretKeys:
+        user: username
+        password: password
+        db: dbname
     flask:
-      replicaCount: 0
-  valuesFrom:
-    - kind: ConfigMap
-      name: audiomuse-ai-config
-      valuesKey: values.yaml
-    - kind: Secret
-      name: secrets
-      valuesKey: audiomuse_navidrome_user
-      targetPath: navidrome.user
-    - kind: Secret
-      name: secrets
-      valuesKey: audiomuse_navidrome_password
-      targetPath: navidrome.password
+      service:
+        type: ClusterIP
+      nodeSelector:
+        kubernetes.io/hostname: regis
+      resources:
+        requests:
+          cpu: 50m
+          memory: 256Mi
+        limits:
+          memory: 1Gi
+    worker:
+      nodeSelector:
+        kubernetes.io/hostname: regis
+      resources:
+        requests:
+          cpu: 250m
+          memory: 2Gi
+        limits:
+          cpu: "4"
+          memory: 3Gi
