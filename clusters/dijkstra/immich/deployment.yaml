@@ -117,6 +117,9 @@ spec:
           env:
             - name: IMMICH_PORT
               value: "3003"
+            # FP32 (the default) needs over 3Gi to load the CLIP and face models on the iGPU
+            - name: MACHINE_LEARNING_OPENVINO_PRECISION
+              value: FP16
           volumeMounts:
             - name: ml
               mountPath: /cache
@@ -126,6 +129,6 @@ spec:
               cpu: "50m"
             limits:
               # OpenVINO keeps compiled models in iGPU memory, which is system RAM charged to this cgroup
-              memory: "3Gi"
+              memory: "4Gi"
               cpu: "2000m"
               gpu.intel.com/i915: "1"
