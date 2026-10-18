@@ -46,8 +46,7 @@ spec:
         limits:
           memory: 1Gi
     worker:
-      nodeSelector:
-        kubernetes.io/hostname: regis
+      replicaCount: 2
       resources:
         requests:
           cpu: 250m
@@ -55,3 +54,28 @@ spec:
         limits:
           cpu: "4"
           memory: 3Gi
+  # The chart only exposes nodeSelector: run one worker on each of regis and triss.
+  postRenderers:
+    - kustomize:
+        patches:
+          - target:
+              kind: Deployment
+              name: audiomuse-ai-release-worker
+            patch: |
+              - op: add
+                path: /spec/template/spec/affinity
+                value:
+                  nodeAffinity:
+                    requiredDuringSchedulingIgnoredDuringExecution:
+                      nodeSelectorTerms:
+                        - matchExpressions:
+                            - key: kubernetes.io/hostname
+                              operator: In
+                              values: [regis, triss]
+                  podAntiAffinity:
+                    requiredDuringSchedulingIgnoredDuringExecution:
+                      - topologyKey: kubernetes.io/hostname
+                        labelSelector:
+                          matchLabels:
+                            app.kubernetes.io/instance: audiomuse-ai-release
+                            app.kubernetes.io/component: worker
