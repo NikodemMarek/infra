@@ -29,6 +29,13 @@ spec:
         - name: music
           persistentVolumeClaim:
             claimName: arrstack-music-pvc
+        - name: youtube-cookies
+          secret:
+            secretName: secrets
+            optional: true
+            items:
+              - key: youtube_cookies
+                path: cookies.txt
       containers:
         - name: lidarr
           image: linuxserver/lidarr:nightly
@@ -48,6 +55,9 @@ spec:
               mountPath: /downloads
             - name: music
               mountPath: /music
+            - name: youtube-cookies
+              mountPath: /secrets/youtube
+              readOnly: true
           resources:
             requests:
               cpu: "50m"
