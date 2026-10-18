@@ -1,0 +1,9 @@
+[package]
+name = "tm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+serde_json = "1"
