@@ -3,6 +3,8 @@ use std::fmt::Write;
 
 use chrono::{Datelike, Duration, NaiveDate, Weekday};
 use clap::{Args, Subcommand};
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::store::{Result, Store};
@@ -26,34 +28,42 @@ pub enum Request {
     Lint(LintArgs),
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AddArgs {
+    /// One line: the description with #tags and @tokens
     #[arg(allow_hyphen_values = true)]
     pub text: String,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DoneArgs {
     /// Line number or a substring of an open task's description
     #[arg(required = true, value_name = "REF")]
     pub refs: Vec<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListArgs {
     /// Case-insensitive substring of the description
     pub query: Option<String>,
     /// Scope: backlog (no @week) or a week (current, next, YYYY-wNN)
     #[arg(long = "in")]
+    #[serde(rename = "in")]
     pub scope: Option<String>,
     /// Only open tasks
     #[arg(long, conflicts_with = "done")]
+    #[serde(default)]
     pub open: bool,
     /// Only done tasks
     #[arg(long)]
+    #[serde(default)]
     pub done: bool,
-    /// Tag (also matches sub-tags); repeat to require several
+    /// Tags (also match sub-tags); with several, all must match
     #[arg(long = "tag", value_name = "TAG")]
+    #[serde(default)]
     pub tags: Vec<String>,
     /// Exact @proj value
     #[arg(long)]
@@ -63,13 +73,15 @@ pub struct ListArgs {
     pub due_before: Option<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct WeekArgs {
     /// current, next or YYYY-wNN
     pub week: Option<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TakeArgs {
     /// Line number or a substring of an open task's description
     #[arg(required = true, value_name = "REF")]
@@ -79,7 +91,8 @@ pub struct TakeArgs {
     pub week: Option<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LintArgs {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
