@@ -6,6 +6,13 @@
   projects = "/persist/data/home/nikodem/projects";
   generated = "/persist/generated/home/nikodem";
   bitwarden = "${generated}/bitwarden";
+
+  # regis is always on and cabled to geralt's LAN, so it can send the magic packet.
+  wake-geralt = pkgs.writeShellApplication {
+    name = "wake-geralt";
+    runtimeInputs = [pkgs.openssh];
+    text = "exec ssh -o BatchMode=yes maintenance@regis wakeonlan -i 192.168.18.255 b4:2e:99:a4:86:1c";
+  };
 in {
   imports = [
     ../features/optional/syncthing.nix
@@ -19,6 +26,7 @@ in {
       pkgs.antigravity-cli
       pkgs.jujutsu
       pkgs.zellij
+      wake-geralt
 
       pkgs.claude
       pkgs.agent-inbox

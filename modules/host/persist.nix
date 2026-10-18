@@ -82,7 +82,8 @@
             wantedBy = ["initrd.target"];
             before = ["sysroot.mount"];
             requires = rollbackDeps;
-            after = rollbackDeps;
+            # A hibernated kernel still has the root mounted: resume must happen before the rollback touches it.
+            after = rollbackDeps ++ ["systemd-hibernate-resume.service"];
             unitConfig.DefaultDependencies = "no";
             serviceConfig.Type = "oneshot";
             script =
