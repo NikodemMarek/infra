@@ -35,14 +35,11 @@ spec:
               value: "2283"
             - name: IMMICH_TELEMETRY_INCLUDE
               value: all
-            - name: DB_HOSTNAME
-              value: immich-postgres
-            - name: DB_USERNAME
-              value: immich
-            - name: DB_PASSWORD
-              value: immich
-            - name: DB_DATABASE_NAME
-              value: immich
+            - name: DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: immich-postgres-app
+                  key: uri
             - name: REDIS_HOSTNAME
               value: immich-redis
           volumeMounts:
@@ -96,7 +93,8 @@ metadata:
   labels:
     app: immich-postgres
 spec:
-  replicas: 1
+  # replaced by the CloudNativePG cluster in postgres.yaml; kept as the rollback target until the cutover is confirmed
+  replicas: 0
   selector:
     matchLabels:
       app: immich-postgres
