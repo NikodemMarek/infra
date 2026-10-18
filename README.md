@@ -294,6 +294,45 @@ For shared volumes, or when a Velero restore fails, restore the data with kopia 
    On `regis`, `sudo umount /mnt/restore` afterwards.
 6. `flux resume kustomization flux-system -n flux-system`, check the app, then delete `<aside>`.
 
+#### Immich database
+
+The Immich database is the CloudNativePG cluster `immich-postgres` (`clusters/dijkstra/immich/postgres.yaml`). Its PVC is copied by Velero like any other, but live PGDATA is not a consistent backup: the daily 18:00 backup first runs a pre-hook that writes `immich.dump` (`pg_dump -Fc`) to the PVC root, then copies the PVC. Restore only from that dump.
+
+##### Restore the database
+
+Run everything from the workstation (dev shell). `<pod>` is the primary, `kubectl -n immich get cluster immich-postgres -o jsonpath='{.status.currentPrimary}'` (usually `immich-postgres-1`).
+
+1. Make sure the Cluster from git is healthy (`kubectl -n immich get cluster immich-postgres`); if it is missing, let Flux recreate it and wait. Any hand-written bootstrap must set `database: immich` and `owner: immich`, otherwise CNPG creates an empty `app` database.
+2. Suspend Flux and stop Immich:
+   ```sh
+   flux suspend kustomization flux-system -n flux-system
+   kubectl -n immich scale deploy/immich --replicas=0
+   ```
+3. Connect read-only to the `immich` repository (step 2 of "Restore a volume with kopia", without `sudo`) and find the snapshot of volume `pgdata` of `<pod>` (step 3 there).
+4. Restore it to a scratch directory and copy the dump into the pod:
+   ```sh
+   nix run nixpkgs#kopia -- snapshot restore <snapshotID> ./immich-pgdata
+   nix run nixpkgs#kopia -- repository disconnect
+   kubectl -n immich cp -c postgres ./immich-pgdata/immich.dump <pod>:/var/lib/postgresql/data/restore.dump
+   ```
+5. In the pod (`kubectl -n immich exec -it <pod> -c postgres -- bash`):
+   ```sh
+   dropdb --force immich && createdb -O immich immich
+   pg_restore -d immich --exit-on-error --single-transaction /var/lib/postgresql/data/restore.dump
+   pg_restore -C -f - /var/lib/postgresql/data/restore.dump | grep -E '^ALTER DATABASE .* SET ' | psql -d postgres
+   psql -d immich -c ANALYZE
+   rm /var/lib/postgresql/data/restore.dump
+   ```
+   Without `--create`, `pg_restore` drops database-level settings such as `vchordrq.probes`; the second `pg_restore` replays them.
+6. `flux resume kustomization flux-system -n flux-system`, check Immich, then delete `./immich-pgdata`.
+
+Don't `velero restore` the `immich` namespace for the database: it would recreate operator-owned objects.
+
+##### Break-glass
+
+- Operator down: the CNPG webhooks use `failurePolicy: Fail` and everything is one `flux-system` Kustomization, so every apply fails. Suspend it (`flux suspend kustomization flux-system -n flux-system`), roll the operator back with `helm -n cnpg-system rollback cloudnative-pg` (or fix the release), then resume.
+- PVC full: raise `spec.storage.size` in `immich/postgres.yaml` (openebs-zfs allows expansion).
+
 ### Kubernetes secrets
 
 Encrypted with SOPS using the cluster's age key (`.sops.yaml`); Flux decrypts them when applying (`sops-age` secret). Files must match `*.enc.*`. Only `data` and `stringData` are encrypted.
