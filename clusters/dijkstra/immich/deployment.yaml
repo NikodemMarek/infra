@@ -50,7 +50,8 @@ spec:
               memory: "256Mi"
               cpu: "50m"
             limits:
-              memory: "768Mi"
+              # 768Mi got OOMKilled while ingesting a bulk upload (thumbnails + metadata in the same process)
+              memory: "1536Mi"
               cpu: "1000m"
               gpu.intel.com/i915: "1"
 ---
