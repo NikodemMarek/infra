@@ -52,6 +52,7 @@ spec:
             limits:
               memory: "768Mi"
               cpu: "1000m"
+              gpu.intel.com/i915: "1"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -159,7 +160,7 @@ spec:
             claimName: immich-ml-pvc
       containers:
         - name: immich-machine-learning
-          image: ghcr.io/immich-app/immich-machine-learning:v2.4.1
+          image: ghcr.io/immich-app/immich-machine-learning:v2.4.1-openvino
           ports:
             - containerPort: 3003
           env:
@@ -173,5 +174,7 @@ spec:
               memory: "512Mi"
               cpu: "50m"
             limits:
-              memory: "1536Mi"
+              # OpenVINO keeps compiled models in iGPU memory, which is system RAM charged to this cgroup
+              memory: "3Gi"
               cpu: "2000m"
+              gpu.intel.com/i915: "1"
