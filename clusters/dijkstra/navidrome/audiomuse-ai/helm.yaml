@@ -55,6 +55,7 @@ spec:
           cpu: "4"
           memory: 3Gi
   # The chart only exposes nodeSelector: run one worker on each of regis and triss.
+  # The anti-affinity blocks surging a new pod onto a node, so replace pods in place.
   postRenderers:
     - kustomize:
         patches:
@@ -79,3 +80,10 @@ spec:
                           matchLabels:
                             app.kubernetes.io/instance: audiomuse-ai-release
                             app.kubernetes.io/component: worker
+              - op: add
+                path: /spec/strategy
+                value:
+                  type: RollingUpdate
+                  rollingUpdate:
+                    maxSurge: 0
+                    maxUnavailable: 1
