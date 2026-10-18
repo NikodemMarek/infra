@@ -98,6 +98,17 @@ data:
         if not isinstance(data, dict):
             return None
 
+        track_files = data.get("trackFiles")
+        if isinstance(track_files, list):
+            paths = [
+                tf["path"] for tf in track_files
+                if isinstance(tf, dict) and isinstance(tf.get("path"), str) and os.path.isabs(tf["path"])
+            ]
+            if paths:
+                common = os.path.commonpath([os.path.dirname(p) for p in paths])
+                if os.path.isdir(common) and not os.path.ismount(common):
+                    return common
+
         candidates = [
             data.get("downloadPath"),
             data.get("download_path"),
