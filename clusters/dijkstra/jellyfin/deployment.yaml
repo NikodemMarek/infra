@@ -66,6 +66,7 @@ spec:
             limits:
               memory: "1536Mi"
               cpu: "4000m"
+              gpu.intel.com/i915: "1"
 ---
 apiVersion: apps/v1
 kind: Deployment
