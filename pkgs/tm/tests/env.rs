@@ -58,3 +58,14 @@ fn invalid_today_is_error() {
     let o = e.tm_on("not-a-date", &["lint"]);
     assert_eq!(o.code, 1, "stderr: {}", o.stderr);
 }
+
+#[test]
+fn help_shows_flag_and_arg_names() {
+    let e = Env::empty();
+    let help = |args: &[&str]| e.tm(args).ok().stdout.clone();
+    let h = help(&["list", "--help"]);
+    assert!(h.contains("--tag <TAG>"), "{h}");
+    assert!(h.contains("--due-before <DATE>"), "{h}");
+    let h = help(&["start", "--help"]);
+    assert!(h.contains("<REF>..."), "{h}");
+}
