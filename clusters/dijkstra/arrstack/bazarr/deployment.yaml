@@ -34,7 +34,7 @@ spec:
               mountPath: /config
               subPath: bazarr
             - name: shows
-              mountPath: /tv
+              mountPath: /shows
             - name: movies
               mountPath: /movies
           resources:
