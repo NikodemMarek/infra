@@ -17,6 +17,15 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/hostname: regis
+      # data predates non-root and is root-owned; fsGroup hands it to group 1000 once
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       volumes:
         - name: config
           persistentVolumeClaim:
@@ -37,6 +46,11 @@ spec:
         - name: jellyfin
           image: jellyfin/jellyfin:unstable
           imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: 8096
           env:
