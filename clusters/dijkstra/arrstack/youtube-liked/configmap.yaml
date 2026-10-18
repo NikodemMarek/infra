@@ -1,0 +1,86 @@
+# One-off import of the YouTube Music "Liked Music" playlist (LM) into the beets
+# library as singletons. Run it once, manually:
+#   kubectl -n arrstack create job --from=cronjob/youtube-liked youtube-liked-1
+# Reruns resume via the yt-dlp archive. To give up on an unavailable song, append
+# "youtube <id>" to archive.txt on the config PVC (arrstack-config-pvc, subdir
+# youtube-liked). Delete this directory once the import is done.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: youtube-liked
+  namespace: arrstack
+data:
+  run.sh: |
+    #!/bin/bash
+    # Downloads the liked songs into $STAGING (skipping those in $ARCHIVE), then
+    # imports whatever is in $STAGING into beets. Exit 0 only if both steps succeed.
+    set -uo pipefail
+    COOKIES="${COOKIES:-/secrets/youtube/cookies.txt}"
+    ARCHIVE="${ARCHIVE:-/state/archive.txt}"
+    # Not under /downloads: leftovers are duplicates of library tracks, and a
+    # pipeline import of /downloads (duplicate_action remove) would drop those tracks.
+    STAGING="${STAGING:-/state/staging}"
+    SCRIPTS_DIR="${SCRIPTS_DIR:-/scripts}"
+    PLAYLIST_ITEMS="${PLAYLIST_ITEMS:-}"
+
+    if [[ ! -s "$COOKIES" ]]; then
+        echo "cookies file $COOKIES is missing or empty" >&2
+        exit 1
+    fi
+
+    # yt-dlp writes cookies back and the secret mount is read-only
+    COOKIES_COPY=$(mktemp)
+    trap 'rm -f "$COOKIES_COPY"' EXIT
+    cp "$COOKIES" "$COOKIES_COPY"
+
+    mkdir -p "$STAGING" "$(dirname "$ARCHIVE")"
+
+    args=(
+        --cookies "$COOKIES_COPY"
+        --js-runtimes node
+        --download-archive "$ARCHIVE"
+        --format bestaudio
+        --extract-audio
+        --embed-metadata
+        --embed-thumbnail
+        --sleep-requests 1
+        --sleep-interval 5
+        --max-sleep-interval 15
+        --no-progress
+        --output "$STAGING/%(artist,uploader)s - %(track,title)s [%(id)s].%(ext)s"
+    )
+    if [[ -n "$PLAYLIST_ITEMS" ]]; then
+        args+=(--playlist-items "$PLAYLIST_ITEMS")
+    fi
+    args+=("https://music.youtube.com/playlist?list=LM")
+
+    yt-dlp "${args[@]}"
+    ytdlp_rc=$?
+
+    count_files() {
+        find "$STAGING" -type f | wc -l
+    }
+
+    # runs even if yt-dlp failed, so what was downloaded is not stranded
+    beet_rc=0
+    if [[ "$(count_files)" -gt 0 ]]; then
+        beet -c "$SCRIPTS_DIR/beets-singleton.yaml" import -q -s "$STAGING"
+        beet_rc=$?
+    fi
+
+    echo "youtube-liked: $(count_files) file(s) left in $STAGING"
+
+    rc=0
+    if [[ "$ytdlp_rc" -ne 0 ]]; then
+        echo "yt-dlp exited $ytdlp_rc" >&2
+        rc=1
+    fi
+    if [[ "$beet_rc" -ne 0 ]]; then
+        echo "beet exited $beet_rc" >&2
+        rc=1
+    fi
+    exit "$rc"
+  # the pipeline config has duplicate_action remove: a singleton matching an album track would delete the album track
+  beets-singleton.yaml: |
+    import:
+      duplicate_action: skip

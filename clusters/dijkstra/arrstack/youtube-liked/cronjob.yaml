@@ -1,0 +1,96 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: youtube-liked
+  namespace: arrstack
+spec:
+  schedule: "0 4 * * *"
+  timeZone: Europe/Warsaw
+  # manual runs only (kubectl create job --from=cronjob/youtube-liked); the schedule is never used
+  suspend: true
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 259200
+      template:
+        spec:
+          nodeSelector:
+            kubernetes.io/hostname: regis
+          restartPolicy: Never
+          volumes:
+            - name: scripts
+              configMap:
+                name: youtube-liked
+                defaultMode: 0755
+            - name: beets-config
+              configMap:
+                name: beets-config
+            - name: downloads
+              persistentVolumeClaim:
+                claimName: arrstack-downloads-pvc
+            - name: music
+              persistentVolumeClaim:
+                claimName: arrstack-music-pvc
+            - name: config
+              persistentVolumeClaim:
+                claimName: arrstack-config-pvc
+            - name: youtube-cookies
+              secret:
+                secretName: secrets
+                # a missing key then fails in run.sh instead of hanging in ContainerCreating
+                optional: true
+                items:
+                  - key: youtube_cookies
+                    path: cookies.txt
+          initContainers:
+            # YouTube PO-token provider for yt-dlp; native sidecar, stopped when the main container exits
+            - name: bgutil-pot-provider
+              image: brainicism/bgutil-ytdlp-pot-provider:latest
+              restartPolicy: Always
+              ports:
+                - name: pot
+                  containerPort: 4416
+              resources:
+                requests:
+                  cpu: "10m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+          containers:
+            - name: youtube-liked
+              image: lscr.io/linuxserver/beets:latest
+              env:
+                - name: BEETSDIR
+                  value: /beets
+              # yt-dlp goes in a venv appended to PATH, so beet keeps its own python
+              command:
+                - bash
+                - -c
+                - apk add --no-cache nodejs ffmpeg && python3 -m venv /opt/yt && /opt/yt/bin/pip install --no-cache-dir "yt-dlp[default]" bgutil-ytdlp-pot-provider && PATH="$PATH:/opt/yt/bin" exec /scripts/run.sh
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                - name: beets-config
+                  mountPath: /beets/config.yaml
+                  subPath: config.yaml
+                - name: downloads
+                  mountPath: /downloads
+                - name: music
+                  mountPath: /music
+                - name: config
+                  mountPath: /state
+                  subPath: youtube-liked
+                - name: youtube-cookies
+                  mountPath: /secrets/youtube
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 1000m
+                  memory: 1Gi
