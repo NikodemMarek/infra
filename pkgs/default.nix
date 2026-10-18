@@ -52,6 +52,7 @@
   agent-inbox = pkgs.callPackage ./agent-inbox {};
   agent-task = pkgs.callPackage ./agent-task {};
   tm = pkgs.callPackage ./tm {};
+  tm-image = pkgs.callPackage ./tm/image.nix {};
 
   event-handlers = {
     notify = pkgs.callPackage ./event-handlers/notify {};
