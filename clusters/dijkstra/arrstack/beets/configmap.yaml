@@ -34,6 +34,10 @@ data:
     embedart:
       remove_art_file: yes
 
+    lyrics:
+      synced: yes
+      sources: [lrcmux, lrclib, genius]
+
   server.py: |
     #!/usr/bin/env python3
     import json
