@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tasks
+  namespace: omniverse
+  labels:
+    app: tasks
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: tasks
+  template:
+    metadata:
+      labels:
+        app: tasks
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: triss
+      terminationGracePeriodSeconds: 5
+      volumes:
+        - name: omniverse-volume
+          persistentVolumeClaim:
+            claimName: omniverse-pvc
+      containers:
+        - name: tasks
+          image: tm:302p81cgk9k949w16vwapp7r6c54sdii
+          imagePullPolicy: Never
+          env:
+            - name: TM_DIR
+              value: /tasks
+            - name: TZ
+              value: Europe/Warsaw
+          ports:
+            - containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: omniverse-volume
+              mountPath: /tasks
+              subPath: tasks
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "5m"
+            limits:
+              memory: "64Mi"
+              cpu: "200m"
