@@ -6,7 +6,6 @@ metadata:
 spec:
   hosts:
     - bazarr
-    - bazarr.tail5874bc.ts.net
     - bazarr.arrstack
     - bazarr.arrstack.svc
     - bazarr.arrstack.svc.cluster.local
