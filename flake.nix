@@ -75,7 +75,7 @@
     overlays = allOverlays;
     packages = forEachSystem (pkgs: {
       inherit (pkgs) zellij hyprland hyprlock hypridle hyprpaper rofi dunst jujutsu waybar kanshi glab gh claude;
-      inherit (pkgs) knowledge jj-upload jw wallpaper dictate claude-hooks claude-statusline agent-skills event-router;
+      inherit (pkgs) knowledge jj-upload jw wallpaper dictate claude-hooks claude-statusline agent-skills event-router tm;
       # flake packages must be derivations, not nested sets
       event-handler-notify = pkgs.event-handlers.notify;
       event-handler-claude = pkgs.event-handlers.claude;
