@@ -69,3 +69,16 @@ spec:
   resources:
     requests:
       storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: beets-data
+  namespace: arrstack
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: openebs-zfs
+  resources:
+    requests:
+      storage: 1Gi

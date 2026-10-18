@@ -239,6 +239,7 @@ kubectl -n omniverse exec deploy/radicale -- rm -r /data/collection-root/nikodem
 Velero backs up the cluster daily at 18:00 Europe/Warsaw and keeps each backup for 30 days. The target is Garage on `regis` (`host/regis/garage.nix`): a single-node S3 store on the `tank/garage` dataset, bucket `velero` at `http://100.100.215.91:3900`, reachable only over `tailscale0` and `cni0`. Velero and Garage share one key pair, from Bitwarden `infra/dijkstra-velero/ACCESS_KEY_ID` and `SECRET_ACCESS_KEY`; Garage creates the layout, the bucket and the key on startup (`--single-node --default-bucket`).
 
 - Backed up: every namespace except `kube-system`, `velero` and `flux-system`, without Secrets (they come from Bitwarden), and the pod volumes through kopia, except `local-storage` (the media on tank), `nfs`, emptyDir and PVCs labelled `backup: skip` (downloads, caches).
+- The beets library (`library.db`) lives on its own PVC `beets-data`, mounted only by the always-on beets pod, so Velero backs it up with the rest. To restore it, `velero restore` that PVC; delete a leftover `library.db-journal` next to it first, or sqlite rolls it back onto the restored file.
 - Nothing alerts on a failed backup: check `velero backup get` now and then.
 
 #### Restore

@@ -6,9 +6,11 @@ metadata:
 data:
   config.yaml: |
     directory: /music
-    library: /music/library.db
+    library: /data/library.db
+    timeout: 60
 
     import:
+      log: /music/beets-import.log
       move: yes
       write: yes
       resume: no

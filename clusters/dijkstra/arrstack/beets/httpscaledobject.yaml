@@ -16,9 +16,9 @@ spec:
     service: beets-app
     port: 80
   replicas:
-    min: 0
+    min: 1
     max: 1
-  # Scale to zero after 30 minutes without requests.
+  # Always one replica, so imports are never cut off by a scale-down.
   scaledownPeriod: 1800
   scalingMetric:
     concurrency:
