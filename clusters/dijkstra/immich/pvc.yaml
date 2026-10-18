@@ -16,19 +16,6 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: immich-data-pvc
-  namespace: immich
-spec:
-  accessModes:
-    - ReadWriteOnce
-  storageClassName: openebs-zfs
-  resources:
-    requests:
-      storage: 10Gi
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
   name: immich-ml-pvc
   namespace: immich
   labels:
