@@ -237,3 +237,42 @@ data:
 
     if __name__ == '__main__':
         main()
+
+  backup.py: |
+    #!/usr/bin/env python3
+    # Copies the beets library to <dest_dir>/library-<date>.db (a consistent
+    # snapshot, checked with integrity_check) and keeps the newest <keep> copies.
+    import datetime
+    import fnmatch
+    import os
+    import sqlite3
+
+    def backup(src, dest_dir, keep=7, today=None):
+        today = today or datetime.date.today()
+        final = os.path.join(dest_dir, f"library-{today.isoformat()}.db")
+        tmp = os.path.join(dest_dir, "library.db.tmp")
+        source = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=60)
+        try:
+            copy = sqlite3.connect(tmp)
+            try:
+                source.backup(copy)
+                rows = copy.execute("PRAGMA integrity_check").fetchall()
+            finally:
+                copy.close()
+        except BaseException:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            raise
+        finally:
+            source.close()
+        if rows != [("ok",)]:
+            os.remove(tmp)
+            raise SystemExit(f"integrity_check failed for the copy of {src}: {rows}")
+        os.replace(tmp, final)
+        copies = sorted(n for n in os.listdir(dest_dir) if fnmatch.fnmatch(n, "library-*.db"))
+        for name in copies[:max(len(copies) - keep, 0)]:
+            os.remove(os.path.join(dest_dir, name))
+        return final
+
+    if __name__ == '__main__':
+        print(backup("/music/library.db", "/backup"))

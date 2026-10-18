@@ -240,6 +240,15 @@ Velero backs up the cluster daily at 18:00 Europe/Warsaw and keeps each backup f
 
 - Backed up: every namespace except `kube-system`, `velero` and `flux-system`, without Secrets (they come from Bitwarden), and the pod volumes through kopia, except `local-storage` (the media on tank), `nfs`, emptyDir and PVCs labelled `backup: skip` (downloads, caches).
 - Nothing alerts on a failed backup: check `velero backup get` now and then.
+- The beets library (`/music/library.db`, on tank, so not in the volume backup) is copied daily at 17:30 by the `beets-db-backup` CronJob to `arrstack-config-pvc/beets` (7 daily copies), which Velero then backs up.
+- Restore it when the beets queue is empty. beets scales to zero, so wake it first with a request through the KEDA interceptor (it holds the request until the pod is up), then copy, removing a possible hot journal:
+
+  ```bash
+  kubectl -n arrstack run beets-wake --rm -i --restart=Never --image=curlimages/curl -- curl -s http://beets/health
+  kubectl -n arrstack exec deploy/beets -- sh -c 'rm -f /music/library.db-journal && cp /backup/library-<date>.db /music/library.db'
+  ```
+
+- The backup job fails while a stale `library.db-journal` exists (left by a killed import) until beets opens the library again.
 
 #### Restore
 

@@ -1,0 +1,53 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: beets-db-backup
+  namespace: arrstack
+spec:
+  schedule: "30 17 * * *"
+  timeZone: Europe/Warsaw
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 600
+      template:
+        spec:
+          nodeSelector:
+            kubernetes.io/hostname: regis
+          restartPolicy: Never
+          volumes:
+            - name: scripts
+              configMap:
+                name: beets-config
+                items:
+                  - key: backup.py
+                    path: backup.py
+            - name: music
+              persistentVolumeClaim:
+                claimName: arrstack-music-pvc
+            - name: config
+              persistentVolumeClaim:
+                claimName: arrstack-config-pvc
+          containers:
+            - name: backup
+              image: lscr.io/linuxserver/beets:latest
+              command: ["python3", "/scripts/backup.py"]
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                - name: music
+                  mountPath: /music
+                  readOnly: true
+                - name: config
+                  mountPath: /backup
+                  subPath: beets
+              resources:
+                requests:
+                  memory: 32Mi
+                  cpu: 10m
+                limits:
+                  memory: 256Mi
+                  cpu: 500m

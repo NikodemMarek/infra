@@ -28,6 +28,9 @@ spec:
         - name: music
           persistentVolumeClaim:
             claimName: arrstack-music-pvc
+        - name: config
+          persistentVolumeClaim:
+            claimName: arrstack-config-pvc
       containers:
         - name: beets
           image: lscr.io/linuxserver/beets:latest
@@ -53,6 +56,10 @@ spec:
               mountPath: /downloads
             - name: music
               mountPath: /music
+            - name: config
+              mountPath: /backup
+              subPath: beets
+              readOnly: true
           resources:
             requests:
               cpu: "50m"
