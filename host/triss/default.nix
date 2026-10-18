@@ -1,6 +1,7 @@
 {
   config,
   lib,
+  pkgs,
   ...
 }: {
   imports = [
@@ -59,6 +60,7 @@
 
   services.k3s = {
     role = "server";
+    images = [pkgs.tm-image];
     extraFlags = toString [
       "--kube-proxy-arg=proxy-mode=nftables"
       "--vpn-auth-file=${config.secrets.k3s_vpn_auth.path}"
