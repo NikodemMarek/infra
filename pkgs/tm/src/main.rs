@@ -22,7 +22,7 @@ macro_rules! out {
     };
 }
 
-/// Manage the markdown task lists (raw, backlog, ISO-week files) in $TM_DIR.
+/// Manage the markdown task lists (backlog and ISO-week files) in $TM_DIR.
 #[derive(Parser)]
 #[command(name = "tm", version)]
 struct Cli {
@@ -37,19 +37,6 @@ enum Command {
         #[arg(required = true, allow_hyphen_values = true)]
         text: Vec<String>,
     },
-    /// Append a quick capture to raw.md
-    Raw {
-        #[arg(required = true, allow_hyphen_values = true)]
-        text: Vec<String>,
-    },
-    /// Move a raw task to backlog.md, optionally rewriting it
-    Promote {
-        /// file:line or a substring of the description
-        reference: String,
-        /// Replacement text (without the checkbox)
-        #[arg(allow_hyphen_values = true)]
-        text: Vec<String>,
-    },
     /// Mark tasks done
     Done {
         /// file:line or a substring of the description
@@ -60,7 +47,7 @@ enum Command {
     List {
         /// Case-insensitive substring of the description
         query: Option<String>,
-        /// Scope: raw, backlog or a week (current, next, YYYY-wNN)
+        /// Scope: backlog or a week (current, next, YYYY-wNN)
         #[arg(long = "in")]
         scope: Option<String>,
         /// Only open tasks
@@ -121,8 +108,6 @@ fn run(command: Command) -> Result<()> {
     let mut store = Store::open()?;
     match command {
         Command::Add { text } => store.add(text),
-        Command::Raw { text } => store.raw(text),
-        Command::Promote { reference, text } => store.promote(&reference, text),
         Command::Done { refs } => store.done(&refs),
         Command::List {
             query,
@@ -286,10 +271,10 @@ impl Store {
         weeks
     }
 
-    /// All task files in listing order: raw, backlog, then weeks ascending.
+    /// All task files in listing order: backlog, then weeks ascending.
     fn task_files(&self) -> Vec<String> {
         let weeks = self.existing_weeks().into_iter().map(week_file);
-        ["raw.md".to_string(), "backlog.md".to_string()]
+        ["backlog.md".to_string()]
             .into_iter()
             .chain(weeks)
             .collect()
@@ -415,26 +400,6 @@ impl Store {
         Ok(())
     }
 
-    fn raw(&mut self, text: Vec<String>) -> Result<()> {
-        let number = self.append_to("raw.md", &format!("- [ ] {}", join_text(text)?))?;
-        out!("raw.md:{number}");
-        Ok(())
-    }
-
-    fn promote(&mut self, reference: &str, text: Vec<String>) -> Result<()> {
-        let replacement = (!text.is_empty())
-            .then(|| join_text(text).map(|t| format!("- [ ] {t}")))
-            .transpose()?;
-        let (raw, l) = self.resolve(reference, &["raw.md"], false)?;
-        let original = self.files[raw].text(l).to_string();
-        let line = self.new_task(&replacement.unwrap_or(original))?;
-        let number = self.append_to("backlog.md", &line)?;
-        self.files[raw].lines.remove(l);
-        self.save(raw)?;
-        out!("backlog.md:{number}");
-        Ok(())
-    }
-
     fn done(&mut self, refs: &[String]) -> Result<()> {
         let current = week_file(monday_of(self.today));
         let next = week_file(monday_of(self.today) + Duration::days(7));
@@ -469,7 +434,6 @@ impl Store {
             .transpose()?;
         let names = match scope.as_deref() {
             None => self.task_files(),
-            Some("raw") => vec!["raw.md".to_string()],
             Some("backlog") => vec!["backlog.md".to_string()],
             Some(spec) => vec![week_file(self.week_spec(spec)?)],
         };
@@ -701,13 +665,8 @@ impl Store {
     }
 
     fn lint(&mut self) -> Result<()> {
-        let names: Vec<String> = self
-            .task_files()
-            .into_iter()
-            .filter(|n| n != "raw.md")
-            .collect();
         let mut found_issues = false;
-        for name in names {
+        for name in self.task_files() {
             let f = self.load(&name)?;
             let file = &self.files[f];
             for i in 0..file.lines.len() {
@@ -795,7 +754,7 @@ fn is_task_file(name: &str) -> bool {
         .split_once("/w")
         .and_then(|(year, rest)| Some((year, rest.strip_suffix(".md")?)))
         .and_then(|(year, number)| week_start(&format!("{year}-w{number}")));
-    name == "raw.md" || name == "backlog.md" || week.is_some_and(|m| week_file(m) == name)
+    name == "backlog.md" || week.is_some_and(|m| week_file(m) == name)
 }
 
 /// Splits `file.md:N` into the file name and the digits.

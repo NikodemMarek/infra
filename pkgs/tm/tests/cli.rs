@@ -220,65 +220,6 @@ fn add_adds_newline_to_unterminated_file() {
     );
 }
 
-// 4
-#[test]
-fn raw_then_promote() {
-    let e = Env::fixture();
-    let o = e.tm(&["raw", "call the dentist"]);
-    o.ok();
-    assert_eq!(o.stdout.trim_end(), "raw.md:1");
-    assert_eq!(e.read("raw.md"), "- [ ] call the dentist\n");
-
-    let o = e.tm(&["promote", "dentist", "dentist booked @est(0.5h) #health"]);
-    o.ok();
-    assert_eq!(o.stdout.trim_end(), "backlog.md:6");
-    assert_eq!(e.read("raw.md"), "");
-    assert_eq!(
-        e.read("backlog.md"),
-        with_line(
-            BACKLOG,
-            "- [ ] dentist booked @est(0.5h) #health @created(2026-10-18)"
-        )
-    );
-}
-
-#[test]
-fn promote_without_text_keeps_original_line() {
-    let e = Env::fixture();
-    e.write("raw.md", "- [ ] first\n- [ ] call the dentist #health\n");
-    let o = e.tm(&["promote", "dentist"]);
-    o.ok();
-    assert_eq!(o.stdout.trim_end(), "backlog.md:6");
-    assert_eq!(e.read("raw.md"), "- [ ] first\n");
-    assert_eq!(
-        e.read("backlog.md"),
-        with_line(
-            BACKLOG,
-            "- [ ] call the dentist #health @created(2026-10-18)"
-        )
-    );
-}
-
-#[test]
-fn promote_outside_raw_is_rejected() {
-    let e = Env::fixture();
-    e.write("raw.md", "- [ ] something\n");
-    let o = e.tm(&["promote", "backlog.md:2"]);
-    o.fail("tm: backlog.md:2 is not in raw.md");
-    assert_eq!(e.read("backlog.md"), BACKLOG);
-    assert_eq!(e.read("raw.md"), "- [ ] something\n");
-}
-
-#[test]
-fn raw_does_not_lint_or_add_created() {
-    let e = Env::empty();
-    e.write("raw.md", "- [ ] a\n");
-    let o = e.tm(&["raw", "x @est(2x)"]);
-    o.ok();
-    assert_eq!(o.stdout.trim_end(), "raw.md:2");
-    assert_eq!(e.read("raw.md"), "- [ ] a\n- [ ] x @est(2x)\n");
-}
-
 // 5
 #[test]
 fn done_by_substring() {
@@ -673,15 +614,15 @@ fn list_default_order_and_text_format() {
     let o = e.tm(&["list", "--open"]);
     o.ok();
     let lines: Vec<&str> = o.stdout.lines().collect();
-    assert_eq!(lines[0], "raw.md:1: - [ ] raw thing");
     assert_eq!(
-        lines[1],
+        lines[0],
         "backlog.md:2: - [ ] wireguard container forwards to mullvad @est(2h) #self-hosting"
     );
+    assert!(!o.stdout.contains("raw"), "{}", o.stdout);
     let pos = |s: &str| lines.iter().position(|l| l.starts_with(s)).unwrap();
     assert!(pos("2026/w41.md:3:") < pos("2026/w42.md:4:"));
     assert!(pos("backlog.md:4:") < pos("2026/w41.md:3:"));
-    assert_eq!(lines.len(), 7);
+    assert_eq!(lines.len(), 6);
 }
 
 #[test]
@@ -753,44 +694,30 @@ fn invalid_today_is_error() {
 
 // amendments: single line text
 #[test]
-fn add_raw_promote_reject_multiline_text() {
+fn add_rejects_multiline_text() {
     for bad in ["a\nb", "a\rb"] {
         let e = Env::fixture();
-        e.write("raw.md", "- [ ] item\n");
         e.tm(&["add", bad]).fail("tm: text must be a single line");
-        e.tm(&["raw", bad]).fail("tm: text must be a single line");
-        e.tm(&["promote", "item", bad])
-            .fail("tm: text must be a single line");
         assert_fixture_unchanged(&e);
-        assert_eq!(e.read("raw.md"), "- [ ] item\n");
     }
 }
 
 #[test]
 fn empty_reference_is_error() {
     let e = Env::fixture();
-    e.write("raw.md", "- [ ] item\n");
     e.tm(&["done", ""]).fail("tm: empty reference");
     e.tm(&["take", " "]).fail("tm: empty reference");
-    e.tm(&["promote", ""]).fail("tm: empty reference");
     assert_fixture_unchanged(&e);
-    assert_eq!(e.read("raw.md"), "- [ ] item\n");
     assert!(!e.exists("2026/w43.md"));
 }
 
 #[test]
-fn take_and_promote_refuse_done_task() {
+fn take_refuses_done_task() {
     let e = Env::fixture();
     e.tm(&["take", "backlog.md:5"])
         .fail("tm: already done: backlog.md:5");
     assert_fixture_unchanged(&e);
     assert!(!e.exists("2026/w43.md"));
-
-    e.write("raw.md", "- [x] finished\n");
-    e.tm(&["promote", "raw.md:1"])
-        .fail("tm: already done: raw.md:1");
-    assert_eq!(e.read("raw.md"), "- [x] finished\n");
-    assert_eq!(e.read("backlog.md"), BACKLOG);
 }
 
 #[test]
@@ -898,13 +825,29 @@ fn take_size_boundaries() {
 }
 
 #[test]
-fn promote_lint_failure_writes_nothing() {
+fn raw_and_promote_are_not_commands() {
     let e = Env::fixture();
-    e.write("raw.md", "- [ ] a\n");
-    e.tm(&["promote", "a", "x @est(2x)"])
-        .fail("invalid @est value: 2x");
-    assert_eq!(e.read("raw.md"), "- [ ] a\n");
-    assert_eq!(e.read("backlog.md"), BACKLOG);
+    assert_eq!(e.tm(&["raw", "x"]).code, 2);
+    assert_eq!(e.tm(&["promote", "x"]).code, 2);
+    assert!(!e.exists("raw.md"));
+    assert_fixture_unchanged(&e);
+}
+
+#[test]
+fn list_in_raw_is_invalid_week() {
+    let e = Env::fixture();
+    e.write("raw.md", "- [ ] item\n");
+    e.tm(&["list", "--in", "raw"]).fail("tm: invalid week: raw");
+}
+
+#[test]
+fn done_raw_ref_is_not_in_task_files() {
+    let e = Env::fixture();
+    e.write("raw.md", "- [ ] item\n");
+    e.tm(&["done", "raw.md:1"])
+        .fail("tm: raw.md:1 is not in the task files");
+    assert_eq!(e.read("raw.md"), "- [ ] item\n");
+    assert_fixture_unchanged(&e);
 }
 
 #[test]

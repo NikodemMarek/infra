@@ -1,13 +1,12 @@
 ---
 name: tasks
-description: Read and manage the user's markdown tasks (raw.md, backlog.md, weekly files) with the `tm` CLI: capture, add, promote raw tasks, mark done, query, weekly planning and closing. Use when the user mentions their tasks, todos, backlog or weekly planning.
+description: Read and manage the user's markdown tasks (backlog.md, weekly files) with the `tm` CLI: add, mark done, query, weekly planning and closing. Use when the user mentions their tasks, todos, backlog or weekly planning.
 ---
 
 # Tasks (`tm`)
 
 The user keeps tasks as markdown checkboxes in `$TM_DIR` (default `~/omniverse/tasks`):
 
-- `raw.md`: unstructured captures, not yet planned.
 - `backlog.md`: structured tasks waiting for a week.
 - `<isoyear>/wNN.md`: one file per ISO week (Mon-Sun), e.g. `2026/w42.md`. No front matter.
 
@@ -29,21 +28,13 @@ The user keeps tasks as markdown checkboxes in `$TM_DIR` (default `~/omniverse/t
 
 ## Commands
 
-- `tm raw "<text>"`: capture a new line in raw.md.
 - `tm add "<text>"`: add a structured task to backlog.md (adds `@created`, lints first). Give the text without `- [ ]`.
-- `tm promote <ref> ["<text>"]`: move a raw task to backlog.md, optionally replacing it with a restructured line.
 - `tm done <ref>...`: mark done in the current week, next week or backlog (`file:line` for other files).
-- `tm list [query] [--in raw|backlog|<week>] [--open|--done] [--tag T]... [--proj P] [--due-before DATE] [--json]`: query tasks. A week is `current`, `next` or `YYYY-wNN`.
+- `tm list [query] [--in backlog|<week>] [--open|--done] [--tag T]... [--proj P] [--due-before DATE] [--json]`: query tasks. A week is `current`, `next` or `YYYY-wNN`.
 - `tm week [<week>] [--json]`: planned, done and open hours, plus the average done hours of the past weeks.
 - `tm take <ref>... [--week <week>]`: move backlog tasks into a week (default: current, on Sunday the next one). Refuses tasks over one day.
 - `tm close [<week>]`: copy a finished week's open tasks back to backlog.md with `@drop(week)`. Safe to repeat.
 - `tm lint`: validate backlog.md and the week files.
-
-## Processing raw.md
-
-1. `tm list --in raw --json`.
-2. Per task, decide with the user (ask when the intent is unclear): a clear description, `@est` in hours, `@due` if there is a deadline, `#tags` (reuse existing ones: check `tm list --json`).
-3. `tm promote <ref> "<restructured line without checkbox>"`. If one capture holds several tasks, promote the first and `tm add` the others.
 
 ## Weekly planning (Sunday)
 
