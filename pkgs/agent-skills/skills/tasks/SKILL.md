@@ -25,6 +25,7 @@ The user keeps tasks as markdown checkboxes in `$TM_DIR` (default `~/omniverse/t
 - Prefer `--json` for reading, and `file:line` references (printed by `add`, `list`, `take`, ...) for writing.
 - A plain-text reference is a substring of an open task's description. If it is ambiguous, `tm` fails and lists the candidates as `file:line`; retry with one of those.
 - After any manual edit of a task file, run `tm lint` (prints `file:line: problem`, exit 1 if any).
+- Invalid task lines are skipped, with a `tm: skipping <file>:<line>: <problem>` warning on stderr; run `tm lint` to see them all. A `file:line` reference to an invalid line is an error.
 
 ## Commands
 

@@ -2,41 +2,121 @@ use std::ops::Range;
 
 use chrono::{Datelike, NaiveDate, Weekday};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseError(pub String);
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unit {
+    Hours,
+    Days,
+    Months,
+    Years,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Est {
+    pub amount: f64,
+    pub unit: Unit,
+}
+
+impl std::fmt::Display for Est {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let unit = match self.unit {
+            Unit::Hours => 'h',
+            Unit::Days => 'd',
+            Unit::Months => 'm',
+            Unit::Years => 'y',
+        };
+        write!(f, "{}{unit}", self.amount)
+    }
+}
+
+impl Est {
+    /// Some only for an estimate in hours.
+    pub fn hours(&self) -> Option<f64> {
+        (self.unit == Unit::Hours).then_some(self.amount)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Week {
+    pub year: i32,
+    pub week: u32,
+}
+
+impl std::fmt::Display for Week {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}-w{:02}", self.year, self.week)
+    }
+}
+
+impl Week {
+    /// An existing ISO week given as `YYYY-wNN`.
+    pub fn parse(s: &str) -> Option<Week> {
+        let (year, week) = s.split_once("-w")?;
+        let all_digits = year.bytes().chain(week.bytes()).all(|b| b.is_ascii_digit());
+        if year.len() != 4 || week.len() != 2 || !all_digits {
+            return None;
+        }
+        let year: i32 = year.parse().ok()?;
+        let week: u32 = week.parse().ok()?;
+        let monday = NaiveDate::from_isoywd_opt(year, week, Weekday::Mon)?;
+        let iso = monday.iso_week();
+        (iso.year() == year && iso.week() == week).then_some(Week { year, week })
+    }
+
+    pub fn monday(&self) -> NaiveDate {
+        NaiveDate::from_isoywd_opt(self.year, self.week, Weekday::Mon)
+            .expect("Week holds an existing ISO week")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Task {
     pub done: bool,
     pub description: String,
-    pub tokens: Vec<(String, String)>,
+    pub est: Option<Est>,
+    pub due: Option<NaiveDate>,
+    pub created: Option<NaiveDate>,
+    pub done_on: Option<NaiveDate>,
+    pub drop: Option<Week>,
+    /// The raw `@proj` value, not trimmed.
+    pub proj: Option<String>,
+    pub step: Option<u32>,
     pub tags: Vec<String>,
 }
 
 impl Task {
-    pub fn token(&self, name: &str) -> Option<&str> {
-        self.tokens
-            .iter()
-            .find(|(n, _)| n == name)
-            .map(|(_, v)| v.as_str())
-    }
-
     pub fn est_hours(&self) -> Option<f64> {
-        match parse_est(self.token("est")?)? {
-            (hours, 'h') => Some(hours),
-            _ => None,
-        }
+        self.est?.hours()
     }
 }
 
-/// `@est` value as (amount, unit): `^\d+(\.\d+)?[hdmy]$` with amount > 0.
-pub fn parse_est(value: &str) -> Option<(f64, char)> {
-    let unit = value.chars().last().filter(|c| "hdmy".contains(*c))?;
+/// `@est` value: `^\d+(\.\d+)?[hdmy]$` with amount > 0.
+pub fn parse_est(value: &str) -> Option<Est> {
+    let unit = match value.chars().last()? {
+        'h' => Unit::Hours,
+        'd' => Unit::Days,
+        'm' => Unit::Months,
+        'y' => Unit::Years,
+        _ => return None,
+    };
     let number = &value[..value.len() - 1];
-    let (int, frac) = number.split_once('.').unwrap_or((number, "0"));
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    if !digits(int) || !digits(frac) {
-        return None;
-    }
-    let amount: f64 = number.parse().ok()?;
-    (amount > 0.0).then_some((amount, unit))
+    let shaped = match number.split_once('.') {
+        Some((whole, fraction)) => digits(whole) && digits(fraction),
+        None => digits(number),
+    };
+    let amount: f64 = number.parse().ok().filter(|&a| shaped && a > 0.0)?;
+    Some(Est { amount, unit })
 }
 
 /// A strict `YYYY-MM-DD` date.
@@ -59,16 +139,7 @@ pub fn parse_date(s: &str) -> Option<NaiveDate> {
 
 /// The Monday of an existing ISO week given as `YYYY-wNN`.
 pub fn week_start(id: &str) -> Option<NaiveDate> {
-    let (year, week) = id.split_once("-w")?;
-    let all_digits = year.bytes().chain(week.bytes()).all(|b| b.is_ascii_digit());
-    if year.len() != 4 || week.len() != 2 || !all_digits {
-        return None;
-    }
-    let year: i32 = year.parse().ok()?;
-    let week: u32 = week.parse().ok()?;
-    let monday = NaiveDate::from_isoywd_opt(year, week, Weekday::Mon)?;
-    let iso = monday.iso_week();
-    (iso.year() == year && iso.week() == week).then_some(monday)
+    Some(Week::parse(id)?.monday())
 }
 
 enum Kind {
@@ -80,7 +151,7 @@ enum Kind {
     Word,
 }
 
-struct Unit {
+struct Piece {
     start: usize,
     end: usize,
     kind: Kind,
@@ -91,17 +162,17 @@ struct Parsed<'a> {
     done: bool,
     /// Byte offset where the text after the checkbox begins.
     start: usize,
-    units: Vec<Unit>,
+    units: Vec<Piece>,
     /// Index of the first unit of the trailing run of tokens and tags.
     meta: usize,
 }
 
 impl Parsed<'_> {
-    fn text(&self, unit: &Unit) -> &str {
+    fn text(&self, unit: &Piece) -> &str {
         &self.line[unit.start..unit.end]
     }
 
-    fn token_parts(&self, unit: &Unit) -> Option<(&str, &str)> {
+    fn token_parts(&self, unit: &Piece) -> Option<(&str, &str)> {
         match unit.kind {
             Kind::Token { name_end } => Some((
                 &self.line[unit.start + 1..name_end],
@@ -111,29 +182,8 @@ impl Parsed<'_> {
         }
     }
 
-    fn metadata(&self) -> &[Unit] {
+    fn metadata(&self) -> &[Piece] {
         &self.units[self.meta..]
-    }
-
-    fn task(&self) -> Task {
-        let description_end = self
-            .units
-            .get(self.meta)
-            .map_or(self.line.len(), |u| u.start);
-        let mut task = Task {
-            done: self.done,
-            description: self.line[self.start..description_end].trim().to_string(),
-            tokens: Vec::new(),
-            tags: Vec::new(),
-        };
-        for unit in self.metadata() {
-            if let Some((name, value)) = self.token_parts(unit) {
-                task.tokens.push((name.to_string(), value.to_string()));
-            } else if matches!(unit.kind, Kind::Tag) {
-                task.tags.push(self.text(unit)[1..].to_string());
-            }
-        }
-        task
     }
 }
 
@@ -166,7 +216,7 @@ fn parse(line: &str) -> Option<Parsed<'_>> {
     })
 }
 
-fn split_units(line: &str, from: usize) -> Vec<Unit> {
+fn split_units(line: &str, from: usize) -> Vec<Piece> {
     let mut units = Vec::new();
     let mut i = from;
     while i < line.len() {
@@ -179,19 +229,19 @@ fn split_units(line: &str, from: usize) -> Vec<Unit> {
             .find(char::is_whitespace)
             .map_or(line.len(), |n| i + n);
         let unit = match c {
-            '@' => token_end(line, i).map(|(name_end, end)| Unit {
+            '@' => token_end(line, i).map(|(name_end, end)| Piece {
                 start: i,
                 end,
                 kind: Kind::Token { name_end },
             }),
-            '#' if word_end > i + 1 => Some(Unit {
+            '#' if word_end > i + 1 => Some(Piece {
                 start: i,
                 end: word_end,
                 kind: Kind::Tag,
             }),
             _ => None,
         }
-        .unwrap_or(Unit {
+        .unwrap_or(Piece {
             start: i,
             end: word_end,
             kind: Kind::Word,
@@ -221,8 +271,87 @@ fn token_end(line: &str, at: usize) -> Option<(usize, usize)> {
     (tail.is_empty() || tail.starts_with(char::is_whitespace)).then_some((at + 1 + name_len, end))
 }
 
-pub fn parse_line(line: &str) -> Option<Task> {
-    parse(line).map(|p| p.task())
+/// `Ok(None)` for a line that is not a task, an error for a task line with a problem.
+pub fn parse_line(line: &str) -> Result<Option<Task>, ParseError> {
+    parse_task(line).map_err(ParseError)
+}
+
+fn parse_task(line: &str) -> Result<Option<Task>, String> {
+    if let Some(problem) = unknown_checkbox(line) {
+        return Err(problem);
+    }
+    let Some(p) = parse(line) else {
+        return Ok(None);
+    };
+    let description_end = p.units.get(p.meta).map_or(line.len(), |u| u.start);
+    let description = line[p.start..description_end].trim();
+    if description.is_empty() {
+        return Err("empty description".to_string());
+    }
+    if let Some(u) = p.units[..p.meta]
+        .iter()
+        .find(|u| starts_like_token(p.text(u)))
+    {
+        return Err(format!("token inside description: {}", p.text(u)));
+    }
+
+    let mut task = Task {
+        done: p.done,
+        description: description.to_string(),
+        est: None,
+        due: None,
+        created: None,
+        done_on: None,
+        drop: None,
+        proj: None,
+        step: None,
+        tags: Vec::new(),
+    };
+    let mut seen = Vec::new();
+    for unit in p.metadata() {
+        if let Some((name, value)) = p.token_parts(unit) {
+            if seen.contains(&name) {
+                return Err(format!("duplicate token @{name}"));
+            }
+            seen.push(name);
+            set_token(&mut task, name, value)?;
+        } else {
+            let tag = &p.text(unit)[1..];
+            if tag.split('/').any(str::is_empty) {
+                return Err(format!("invalid tag: #{tag}"));
+            }
+            task.tags.push(tag.to_string());
+        }
+    }
+    if task.step.is_some() && task.proj.is_none() {
+        return Err("@step without @proj".to_string());
+    }
+    Ok(Some(task))
+}
+
+fn set_token(task: &mut Task, name: &str, value: &str) -> Result<(), String> {
+    let invalid = || format!("invalid @{name} value: {value}");
+    let date = || parse_date(value).ok_or_else(|| format!("invalid date in @{name}: {value}"));
+    match name {
+        "est" => task.est = Some(parse_est(value).ok_or_else(invalid)?),
+        "due" => task.due = Some(date()?),
+        "created" => task.created = Some(date()?),
+        "done" => task.done_on = Some(date()?),
+        "drop" => task.drop = Some(Week::parse(value).ok_or_else(invalid)?),
+        "proj" if value.trim().is_empty() => return Err("empty @proj".to_string()),
+        "proj" => task.proj = Some(value.to_string()),
+        "step" => task.step = Some(parse_step(value).ok_or_else(invalid)?),
+        _ => return Err(format!("unknown token @{name}")),
+    }
+    Ok(())
+}
+
+/// A positive integer that fits a u32, in ASCII digits only.
+fn parse_step(value: &str) -> Option<u32> {
+    if !value.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    value.parse().ok().filter(|&n| n > 0)
 }
 
 pub fn with_token(line: &str, name: &str, value: &str) -> String {
@@ -241,46 +370,6 @@ fn find_value(p: &Parsed, name: &str) -> Option<Range<usize>> {
     })
 }
 
-pub fn lint_line(line: &str) -> Vec<String> {
-    let Some(p) = parse(line) else {
-        return unknown_checkbox(line).into_iter().collect();
-    };
-    let mut issues = Vec::new();
-    if p.task().description.is_empty() {
-        issues.push("empty description".to_string());
-    }
-
-    let tokens: Vec<(&str, &str)> = p
-        .metadata()
-        .iter()
-        .filter_map(|u| p.token_parts(u))
-        .collect();
-    for (i, (name, value)) in tokens.iter().enumerate() {
-        issues.extend(check_token(name, value));
-        if tokens[..i].iter().filter(|(n, _)| n == name).count() == 1 {
-            issues.push(format!("duplicate token @{name}"));
-        }
-    }
-    let has = |name: &str| tokens.iter().any(|(n, _)| *n == name);
-    if has("step") && !has("proj") {
-        issues.push("@step without @proj".to_string());
-    }
-
-    for unit in &p.units[..p.meta] {
-        let text = p.text(unit);
-        if starts_like_token(text) {
-            issues.push(format!("token inside description: {text}"));
-        }
-    }
-    for unit in p.metadata() {
-        let text = p.text(unit);
-        if matches!(unit.kind, Kind::Tag) && text[1..].split('/').any(str::is_empty) {
-            issues.push(format!("invalid tag: {text}"));
-        }
-    }
-    issues
-}
-
 fn starts_like_token(word: &str) -> bool {
     let Some(rest) = word.strip_prefix('@') else {
         return false;
@@ -293,22 +382,4 @@ fn unknown_checkbox(line: &str) -> Option<String> {
     let rest = &line[3 + c.len_utf8()..];
     let closed = rest == "]" || rest.starts_with("] ");
     (closed && !matches!(c, ' ' | 'x' | 'X')).then(|| format!("unknown checkbox: [{c}]"))
-}
-
-fn check_token(name: &str, value: &str) -> Option<String> {
-    let invalid = format!("invalid @{name} value: {value}");
-    match name {
-        "est" => parse_est(value).is_none().then_some(invalid),
-        "due" | "created" | "done" => parse_date(value)
-            .is_none()
-            .then(|| format!("invalid date in @{name}: {value}")),
-        "drop" => week_start(value).is_none().then_some(invalid),
-        "proj" => value.trim().is_empty().then(|| "empty @proj".to_string()),
-        "step" => {
-            let digits = value.bytes().all(|b| b.is_ascii_digit());
-            let positive = digits && value.bytes().any(|b| b != b'0');
-            (!positive).then_some(invalid)
-        }
-        _ => Some(format!("unknown token @{name}")),
-    }
 }

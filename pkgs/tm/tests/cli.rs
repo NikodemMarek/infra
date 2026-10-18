@@ -559,7 +559,12 @@ fn list_json_backlog_open() {
     assert_eq!(it["done"], false);
     assert_eq!(it["description"], "kubernetes cluster runs wireguard");
     assert_eq!(it["tags"], json!(["self-hosting"]));
-    assert_eq!(it["tokens"], json!({"est": "4h", "due": "2026-10-25"}));
+    assert_eq!(it["est"], "4h");
+    assert_eq!(it["due"], "2026-10-25");
+    for k in ["created", "done_on", "drop", "proj", "step"] {
+        assert_eq!(it.get(k), Some(&Value::Null), "{k}");
+    }
+    assert!(it.get("tokens").is_none());
     assert_eq!(f(&it["est_hours"]), 4.0);
     assert_eq!(it["text"], KUBE);
     let none = items.iter().find(|i| f(&i["line"]) == 4.0).unwrap();
@@ -856,4 +861,181 @@ fn add_empty_text_is_usage_error() {
     let o = e.tm(&["add", ""]);
     assert_eq!(o.code, 2, "stderr: {}", o.stderr);
     assert_eq!(e.read("backlog.md"), BACKLOG);
+}
+
+// path traversal guard
+#[test]
+fn done_relative_path_outside_tm_dir_is_rejected() {
+    let outer = Env::empty();
+    outer.write("x.md", "- [ ] outside\n");
+    outer.write("tasks/backlog.md", BACKLOG);
+    let dir = outer.dir.join("tasks");
+    let o = outer.run_in(&dir, "2026-10-18", &["done", "../x.md:1"]);
+    o.fail("is not in the task files");
+    assert_eq!(outer.read("x.md"), "- [ ] outside\n");
+    assert_eq!(outer.read("tasks/backlog.md"), BACKLOG);
+}
+
+#[test]
+fn done_absolute_path_outside_tm_dir_is_rejected() {
+    let e = Env::fixture();
+    let out = Env::empty();
+    out.write("x.md", "- [ ] outside\n");
+    let abs = out.dir.join("x.md");
+    let r = format!("{}:1", abs.display());
+    e.tm(&["done", &r]).fail("is not in the task files");
+    assert_eq!(out.read("x.md"), "- [ ] outside\n");
+    assert_fixture_unchanged(&e);
+
+    e.tm(&["done", "/tmp/x.md:1"])
+        .fail("is not in the task files");
+    assert_fixture_unchanged(&e);
+}
+
+// B0: typed fields and fail-early parsing
+const SKIP41: &str = "tm: skipping 2026/w41.md:4: unknown token @project\n";
+
+fn w41x() -> String {
+    with_line(W41, "- [ ] x @project(foo)")
+}
+
+// B0-1
+#[test]
+fn list_skips_invalid_line_with_warning() {
+    let e = Env::fixture();
+    e.write("2026/w41.md", &w41x());
+    let o = e.tm(&["list"]);
+    o.ok();
+    assert!(!o.stdout.contains("2026/w41.md:4"), "{}", o.stdout);
+    assert_eq!(o.stderr, SKIP41);
+}
+
+// B0-2
+#[test]
+fn week_warns_once_per_invalid_line() {
+    let e = Env::fixture();
+    e.write("2026/w41.md", &w41x());
+    let o = e.tm(&["week", "--json"]);
+    o.ok();
+    let v = o.json();
+    assert_eq!(v["past_weeks"], json!(["2026-w41"]));
+    assert_eq!(f(&v["past_avg_done_hours"]), 5.0);
+    assert_eq!(o.stderr, SKIP41);
+
+    let o = e.tm(&["week", "2026-w41", "--json"]);
+    o.ok();
+    assert_eq!(f(&o.json()["tasks"]), 3.0);
+    assert_eq!(o.stderr, SKIP41);
+}
+
+// B0-3
+#[test]
+fn done_ref_to_invalid_line_is_hard_error() {
+    let e = Env::fixture();
+    let content = w41x();
+    e.write("2026/w41.md", &content);
+    let o = e.tm(&["done", "2026/w41.md:4"]);
+    assert_eq!(o.code, 1, "stderr: {}", o.stderr);
+    assert_eq!(o.stderr, "tm: 2026/w41.md:4: unknown token @project\n");
+    assert_eq!(e.read("2026/w41.md"), content);
+}
+
+// B0-4
+#[test]
+fn take_skips_invalid_backlog_line() {
+    let e = Env::fixture();
+    let bl = with_line(BACKLOG, "- [ ] fix gutter @project(a)");
+    e.write("backlog.md", &bl);
+    let skip = "tm: skipping backlog.md:6: unknown token @project\n";
+
+    let o = e.tm(&["take", "gutter"]);
+    assert_eq!(o.code, 1, "stderr: {}", o.stderr);
+    assert_eq!(
+        o.stderr,
+        format!("{skip}tm: no open task matches \"gutter\" in backlog.md\n")
+    );
+    assert_eq!(e.read("backlog.md"), bl);
+    assert!(!e.exists("2026/w43.md"));
+
+    let o = e.tm(&["take", "kubernetes"]);
+    o.ok();
+    assert!(o.stderr.contains(skip), "{}", o.stderr);
+    assert!(e.exists("2026/w43.md"));
+    assert!(e
+        .read("backlog.md")
+        .contains("- [ ] fix gutter @project(a)\n"));
+}
+
+// B0-5
+#[test]
+fn close_skips_invalid_open_task() {
+    let e = Env::fixture();
+    e.write("2026/w42.md", &with_line(W42, "- [ ] y @project(b)"));
+    let o = e.tm(&["close"]);
+    o.ok();
+    let want = format!(
+        "{BACKLOG}- [ ] write a blog post @est(2h) #fun @drop(2026-w42)\n- [ ] stachiewicza wardrobe  @est(4h) @drop(2026-w42) #organization\n"
+    );
+    assert_eq!(e.read("backlog.md"), want);
+    assert_eq!(
+        o.stderr,
+        "tm: skipping 2026/w42.md:8: unknown token @project\n"
+    );
+}
+
+// B0-6
+#[test]
+fn lint_reports_only_first_error_per_line() {
+    let e = Env::fixture();
+    e.write(
+        "2026/w41.md",
+        &with_line(W41, "- [ ] x @project(foo) @est(2x)"),
+    );
+    let o = e.tm(&["lint"]);
+    assert_eq!(o.code, 1, "stderr: {}", o.stderr);
+    assert_eq!(o.stdout, "2026/w41.md:4: unknown token @project\n");
+}
+
+// B0-7
+#[test]
+fn add_reports_only_first_problem() {
+    let e = Env::fixture();
+    let o = e.tm(&["add", "x @est(2x) @project(a)"]);
+    assert_eq!(o.code, 1, "stdout: {}", o.stdout);
+    assert_eq!(o.stderr, "tm: invalid @est value: 2x\n");
+    assert_eq!(e.read("backlog.md"), BACKLOG);
+}
+
+// B0-8
+#[test]
+fn list_json_typed_shape() {
+    let e = Env::fixture();
+    let v = e.tm(&["list", "--in", "2026-w42", "--json"]).ok().json();
+    let items = v.as_array().expect("array");
+    let l6 = items.iter().find(|i| f(&i["line"]) == 6.0).expect("line 6");
+    assert_eq!(l6["est"], "4h");
+    assert_eq!(f(&l6["est_hours"]), 4.0);
+    assert_eq!(l6["drop"], "2026-w41");
+    assert_eq!(l6["tags"], json!(["organization"]));
+    for k in ["due", "created", "done_on", "proj", "step"] {
+        assert_eq!(l6.get(k), Some(&Value::Null), "{k}");
+    }
+    let l5 = items.iter().find(|i| f(&i["line"]) == 5.0).expect("line 5");
+    assert_eq!(l5["done"], true);
+    assert_eq!(l5["due"], "2026-10-14");
+
+    let e = Env::empty();
+    e.write(
+        "backlog.md",
+        "- [x] a @est(0.5h) @created(2026-10-01) @done(2026-10-18) @proj(p q) @step(2) #t\n",
+    );
+    let v = e.tm(&["list", "--json"]).ok().json();
+    let it = &v.as_array().expect("array")[0];
+    assert_eq!(it["est"], "0.5h");
+    assert_eq!(f(&it["est_hours"]), 0.5);
+    assert_eq!(it["created"], "2026-10-01");
+    assert_eq!(it["done_on"], "2026-10-18");
+    assert_eq!(it["proj"], "p q");
+    assert_eq!(it["step"], json!(2));
+    assert_eq!(it["tags"], json!(["t"]));
 }

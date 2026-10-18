@@ -6,8 +6,8 @@ use std::{env, fs, process};
 use chrono::{Datelike, Duration, Local, NaiveDate, Weekday};
 use clap::error::ErrorKind as UsageError;
 use clap::{CommandFactory, Parser, Subcommand};
-use serde_json::{json, Map};
-use tm::{lint_line, parse_date, parse_est, parse_line, week_start, with_token, Task};
+use serde_json::json;
+use tm::{parse_date, parse_line, week_start, with_token, Est, ParseError, Task, Unit};
 
 /// `println!` that exits quietly when stdout is closed (`tm list | head -1`).
 macro_rules! out {
@@ -138,13 +138,11 @@ impl TaskFile {
         self.lines[i].strip_suffix('\n').unwrap_or(&self.lines[i])
     }
 
-    fn task(&self, i: usize) -> Option<Task> {
-        self.lines.get(i)?;
+    fn task(&self, i: usize) -> std::result::Result<Option<Task>, ParseError> {
+        if i >= self.lines.len() {
+            return Ok(None);
+        }
         parse_line(self.text(i))
-    }
-
-    fn tasks(&self) -> impl Iterator<Item = (usize, Task)> + '_ {
-        (0..self.lines.len()).filter_map(|i| Some((i, self.task(i)?)))
     }
 
     fn contains(&self, line: &str) -> bool {
@@ -176,6 +174,8 @@ struct Store {
     dir: PathBuf,
     today: NaiveDate,
     files: Vec<TaskFile>,
+    /// Invalid lines already warned about, as (file index, line index).
+    skipped: BTreeSet<(usize, usize)>,
 }
 
 impl Store {
@@ -197,6 +197,7 @@ impl Store {
             dir,
             today,
             files: Vec::new(),
+            skipped: BTreeSet::new(),
         })
     }
 
@@ -237,6 +238,23 @@ impl Store {
 
     fn loc(&self, (f, l): (usize, usize)) -> String {
         format!("{}:{}", self.files[f].name, l + 1)
+    }
+
+    /// The tasks of a loaded file with their line indexes. An invalid line is
+    /// skipped, with a warning the first time it is seen.
+    fn tasks(&mut self, f: usize) -> Vec<(usize, Task)> {
+        let mut tasks = Vec::new();
+        for l in 0..self.files[f].lines.len() {
+            match self.files[f].task(l) {
+                Ok(task) => tasks.extend(task.map(|t| (l, t))),
+                Err(e) => {
+                    if self.skipped.insert((f, l)) {
+                        eprintln!("tm: skipping {}: {e}", self.loc((f, l)));
+                    }
+                }
+            }
+        }
+        tasks
     }
 
     fn week_spec(&self, spec: &str) -> Result<NaiveDate> {
@@ -306,11 +324,12 @@ impl Store {
                 .parse::<usize>()
                 .ok()
                 .and_then(|n| n.checked_sub(1))
-                .and_then(|l| Some((l, self.files[f].task(l)?)));
+                .map(|l| (l, self.files[f].task(l)));
             return match found {
-                Some((_, task)) if task.done => Err(format!("already done: {reference}")),
-                Some((l, _)) => Ok((f, l)),
-                None => Err(format!("not a task: {reference}")),
+                Some((_, Err(e))) => Err(format!("{reference}: {e}")),
+                Some((_, Ok(Some(t)))) if t.done => Err(format!("already done: {reference}")),
+                Some((l, Ok(Some(_)))) => Ok((f, l)),
+                _ => Err(format!("not a task: {reference}")),
             };
         }
 
@@ -321,7 +340,7 @@ impl Store {
         let mut matches = Vec::new();
         for name in scope {
             let f = self.load(name)?;
-            for (l, task) in self.files[f].tasks() {
+            for (l, task) in self.tasks(f) {
                 let description = task.description.to_lowercase();
                 if !task.done && description.contains(&query) {
                     matches.push((f, l, description == query));
@@ -366,20 +385,13 @@ impl Store {
         Ok(found)
     }
 
-    /// Adds `@created(today)` unless present and lints the result.
+    /// Adds `@created(today)` unless present; the error is the first problem in the line.
     fn new_task(&self, line: &str) -> Result<String> {
-        let has_created = parse_line(line).is_some_and(|t| t.token("created").is_some());
-        let line = if has_created {
-            line.to_string()
-        } else {
-            with_token(line, "created", &self.today.to_string())
-        };
-        let issues = lint_line(&line);
-        if issues.is_empty() {
-            Ok(line)
-        } else {
-            Err(issues.join("\ntm: "))
+        let task = parse_line(line).map_err(|e| e.to_string())?;
+        if task.is_some_and(|t| t.created.is_some()) {
+            return Ok(line.to_string());
         }
+        Ok(with_token(line, "created", &self.today.to_string()))
     }
 
     fn append_to(&mut self, name: &str, line: &str) -> Result<usize> {
@@ -449,39 +461,38 @@ impl Store {
                 && !(open && t.done)
                 && !(done && !t.done)
                 && tags.iter().all(has_tag)
-                && proj.as_deref().is_none_or(|p| t.token("proj") == Some(p))
-                && before.is_none_or(|b| {
-                    t.token("due")
-                        .and_then(parse_date)
-                        .is_some_and(|due| due <= b)
-                })
+                && (proj.is_none() || t.proj == proj)
+                && before.is_none_or(|b| t.due.is_some_and(|d| d <= b))
         };
 
         let mut rows = Vec::new();
         for name in names {
             let f = self.load(&name)?;
+            let tasks = self.tasks(f);
             let file = &self.files[f];
-            for (l, task) in file.tasks().filter(|(_, t)| keep(t)) {
+            for (l, task) in tasks.into_iter().filter(|(_, t)| keep(t)) {
                 rows.push((file.name.clone(), l + 1, file.text(l).to_string(), task));
             }
         }
 
         if json {
-            let items: Vec<_> = rows
+            let items: Vec<serde_json::Value> = rows
                 .into_iter()
                 .map(|(file, line, text, task)| {
-                    let mut tokens = Map::new();
-                    for (name, value) in &task.tokens {
-                        tokens.entry(name.clone()).or_insert(json!(value));
-                    }
                     json!({
                         "file": file,
                         "line": line,
                         "done": task.done,
                         "description": task.description,
                         "tags": task.tags,
-                        "tokens": tokens,
+                        "est": task.est.map(|e| e.to_string()),
                         "est_hours": task.est_hours(),
+                        "due": task.due.map(|d| d.to_string()),
+                        "created": task.created.map(|d| d.to_string()),
+                        "done_on": task.done_on.map(|d| d.to_string()),
+                        "drop": task.drop.map(|w| w.to_string()),
+                        "proj": task.proj,
+                        "step": task.step,
                         "text": text,
                     })
                 })
@@ -501,7 +512,7 @@ impl Store {
         let name = week_file(monday);
         let exists = self.dir.join(&name).exists();
         let f = self.load(&name)?;
-        let s = stats(&self.files[f]);
+        let s = stats(&self.tasks(f));
         let (past_weeks, past_avg) = self.past_weeks()?;
         let status = if end < self.today {
             "past"
@@ -565,7 +576,7 @@ impl Store {
         let mut done_hours = 0.0;
         for &monday in last {
             let f = self.load(&week_file(monday))?;
-            done_hours += stats(&self.files[f]).done_hours;
+            done_hours += stats(&self.tasks(f)).done_hours;
         }
         let average = (!last.is_empty()).then(|| done_hours / last.len() as f64);
         Ok((last.iter().map(|&m| week_id(m)).collect(), average))
@@ -581,14 +592,8 @@ impl Store {
         };
         let found = self.resolve_all(refs, &["backlog.md"], false)?;
         for &at in &found {
-            let task = self.files[at.0].task(at.1);
-            if let Some(est) = task.as_ref().and_then(|t| t.token("est")) {
-                let too_big = match parse_est(est) {
-                    Some((amount, 'd')) => amount > 1.0,
-                    Some((_, unit)) => unit == 'm' || unit == 'y',
-                    None => false,
-                };
-                if too_big {
+            if let Ok(Some(Task { est: Some(est), .. })) = self.files[at.0].task(at.1) {
+                if too_big(&est) {
                     return Err(format!(
                         "too big, split it first: {} @est({est})",
                         self.loc(at)
@@ -616,7 +621,7 @@ impl Store {
         for number in numbers {
             out!("{name}:{number}");
         }
-        let planned = stats(&self.files[dest]).planned;
+        let planned = stats(&self.tasks(dest)).planned;
         let (_, average) = self.past_weeks()?;
         out!(
             "{}: planned {}h, past average done {}",
@@ -642,8 +647,9 @@ impl Store {
         let name = week_file(monday);
         let week = self.load(&name)?;
         let backlog = self.load("backlog.md")?;
-        let open: Vec<String> = self.files[week]
-            .tasks()
+        let open: Vec<String> = self
+            .tasks(week)
+            .into_iter()
             .filter(|(_, t)| !t.done)
             .map(|(l, _)| with_token(self.files[week].text(l), "drop", &id))
             .collect();
@@ -665,18 +671,17 @@ impl Store {
     }
 
     fn lint(&mut self) -> Result<()> {
-        let mut found_issues = false;
+        let mut problems = false;
         for name in self.task_files() {
             let f = self.load(&name)?;
-            let file = &self.files[f];
-            for i in 0..file.lines.len() {
-                for issue in lint_line(file.text(i)) {
-                    out!("{}:{}: {issue}", file.name, i + 1);
-                    found_issues = true;
+            for l in 0..self.files[f].lines.len() {
+                if let Err(e) = self.files[f].task(l) {
+                    out!("{}: {e}", self.loc((f, l)));
+                    problems = true;
                 }
             }
         }
-        if found_issues {
+        if problems {
             process::exit(1);
         }
         Ok(())
@@ -695,9 +700,9 @@ struct Stats {
     no_estimate: usize,
 }
 
-fn stats(file: &TaskFile) -> Stats {
+fn stats(tasks: &[(usize, Task)]) -> Stats {
     let mut s = Stats::default();
-    for (_, task) in file.tasks() {
+    for (_, task) in tasks {
         let est = task.est_hours();
         let h = est.unwrap_or(0.0);
         s.tasks += 1;
@@ -709,13 +714,21 @@ fn stats(file: &TaskFile) -> Stats {
             s.open += 1;
             s.open_hours += h;
         }
-        match task.token("est") {
+        match task.est {
             None => s.no_estimate += 1,
-            Some(value) if est.is_none() => s.other.push(value.to_string()),
+            Some(est) if est.hours().is_none() => s.other.push(est.to_string()),
             Some(_) => {}
         }
     }
     s
+}
+
+fn too_big(est: &Est) -> bool {
+    match est.unit {
+        Unit::Hours => false,
+        Unit::Days => est.amount > 1.0,
+        Unit::Months | Unit::Years => true,
+    }
 }
 
 fn join_text(words: Vec<String>) -> Result<String> {
