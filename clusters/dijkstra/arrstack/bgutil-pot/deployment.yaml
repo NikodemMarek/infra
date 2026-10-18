@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bgutil-pot
+  namespace: arrstack
+  labels:
+    app: bgutil-pot
+spec:
+  selector:
+    matchLabels:
+      app: bgutil-pot
+  template:
+    metadata:
+      labels:
+        app: bgutil-pot
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: regis
+      containers:
+        - name: bgutil-pot
+          image: brainicism/bgutil-ytdlp-pot-provider:latest
+          ports:
+            - name: http
+              containerPort: 4416
+          resources:
+            requests:
+              cpu: "20m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
