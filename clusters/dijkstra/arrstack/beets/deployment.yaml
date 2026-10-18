@@ -16,6 +16,7 @@ spec:
       labels:
         app: beets
     spec:
+      terminationGracePeriodSeconds: 14400
       nodeSelector:
         kubernetes.io/hostname: regis
       volumes:

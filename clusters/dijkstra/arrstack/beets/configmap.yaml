@@ -7,8 +7,10 @@ data:
   config.yaml: |
     directory: /music
     library: /music/library.db
+    timeout: 60
 
     import:
+      log: /music/beets-import.log
       move: yes
       write: yes
       resume: no
@@ -44,6 +46,7 @@ data:
     import logging
     import os
     import queue
+    import signal
     import subprocess
     import sys
     import threading
@@ -57,6 +60,7 @@ data:
     )
 
     import_queue = queue.Queue()
+    stop_event = threading.Event()
 
     def run_beets_import(target_path):
         logging.info(f"Starting beets import for path: {target_path}")
@@ -219,7 +223,17 @@ data:
         def log_message(self, format, *args):
             logging.info(f"HTTP {self.command} {self.path} - {args[1] if len(args) > 1 else ''}")
 
+    def handle_sigterm(signum, frame):
+        stop_event.set()
+
+    def drain():
+        logging.info(f"SIGTERM received, draining {import_queue.unfinished_tasks} unfinished import(s)")
+        import_queue.join()
+        logging.info("Queue drained")
+
     def main():
+        # First thing: as PID 1 without a handler, SIGTERM is ignored.
+        signal.signal(signal.SIGTERM, handle_sigterm)
         port = int(os.environ.get("PORT", "8000"))
 
         t = threading.Thread(target=worker, daemon=True)
@@ -228,10 +242,12 @@ data:
         server_address = ('', port)
         httpd = HTTPServer(server_address, WebhookHandler)
         logging.info(f"Beets Webhook Server running on port {port}...")
-        try:
-            httpd.serve_forever()
-        except KeyboardInterrupt:
-            pass
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        stop_event.wait()
+        drain()
+        httpd.shutdown()
+        # Requests handled between drain() and shutdown() are queued too.
+        drain()
         httpd.server_close()
         logging.info("Server stopped.")
 
