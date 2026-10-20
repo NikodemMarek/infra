@@ -247,6 +247,8 @@ writeShellApplication {
     host=$(jq -r '.host // ""' <<<"$event")
     # the router sets ER_TYPE; sessions started here submit knowledge as untrusted
     origin="event:''${ER_TYPE:-unknown}"
+    # the handler variant `name` is the origin kind that agent-inbox tabs match on
+    claude_origin=$(jq -c --arg kind ${lib.escapeShellArg name} '(.raw.target // .raw.merge_request // {}) as $t | {kind:$kind, iid:.target_iid, target:.target_type, title, url, description:(($t.description // "")[0:8000])} | with_entries(select(.value != null and .value != ""))' <<<"$event")
 
     prepared=0
     perm=default
@@ -283,6 +285,7 @@ writeShellApplication {
         echo "context: $context_dir"
       fi
       echo "session: $name"
+      echo "origin: $claude_origin"
       if [[ -n "$sid" ]]; then
         echo "session: $sid $sdir resume=$resume"
         echo "action: $mode"
@@ -308,6 +311,13 @@ writeShellApplication {
     if [[ -z "''${TERM:-}" || "$TERM" == dumb ]]; then export TERM=xterm-256color; fi
     export COLORTERM=truecolor
     rundir=''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+    mkdir -p "$rundir/claude-origin"
+    chmod 700 "$rundir/claude-origin"
+    # -ignore_readdir_race and || true: a concurrent pruner deleting the same file must not kill the handler
+    find "$rundir/claude-origin" -ignore_readdir_race -name '*.json' -mmin +2880 -delete || true
+    CLAUDE_ORIGIN_FILE=$(mktemp --suffix=.json "$rundir/claude-origin/XXXXXXXX")
+    printf '%s\n' "$claude_origin" >"$CLAUDE_ORIGIN_FILE"
+    export CLAUDE_ORIGIN_FILE
     # concurrent events must not pick the same name; fd 9 is closed for the
     # shpool calls so nothing they start can hold the lock
     exec 9>"$rundir/event-claude.lock"
