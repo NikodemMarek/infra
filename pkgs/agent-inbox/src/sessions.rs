@@ -27,6 +27,8 @@ pub struct Session {
     pub start: Option<u64>,
     /// The shpool session hosting the process (`shpool attach <name>`), "" if there is none.
     pub shpool: String,
+    /// `CLAUDE_ORIGIN_FILE` of the process: the file describing what the session works on.
+    pub origin_file: String,
 }
 
 impl Session {
@@ -62,7 +64,8 @@ pub fn config_dir() -> PathBuf {
 }
 
 /// The live sessions of the registry in `sessions_dir`, newest first. Files that do not parse
-/// and sessions whose process is gone (or whose pid was reused) are skipped; a missing
+/// and sessions whose process is gone (or whose pid was reused) are skipped, as are those
+/// without CLAUDE_ORIGIN_FILE (not started by `jw agent` or the event handler); a missing
 /// directory means no sessions.
 pub fn load(sessions_dir: &Path, proc: &Path) -> Vec<Session> {
     let Ok(entries) = fs::read_dir(sessions_dir) else {
@@ -74,9 +77,11 @@ pub fn load(sessions_dir: &Path, proc: &Path) -> Vec<Session> {
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
         .filter_map(|p| parse(&fs::read_to_string(p).ok()?))
         .filter(|s| alive(proc, s.pid, s.start))
-        .map(|mut s| {
-            s.shpool = shpool_name(proc, s.pid);
-            s
+        .filter_map(|mut s| {
+            let env = fs::read(proc.join(s.pid.to_string()).join("environ")).ok()?;
+            s.origin_file = environ_var(&env, "CLAUDE_ORIGIN_FILE")?;
+            s.shpool = environ_var(&env, "SHPOOL_SESSION_NAME").unwrap_or_default();
+            Some(s)
         })
         .collect();
     sessions.sort_by(|a, b| b.started_at.total_cmp(&a.started_at));
@@ -107,6 +112,7 @@ fn parse(text: &str) -> Option<Session> {
             Some(p) => Some(p.as_str()?.parse().ok()?),
         },
         shpool: String::new(),
+        origin_file: String::new(),
     })
 }
 
@@ -132,17 +138,14 @@ pub fn alive(proc: &Path, pid: u32, start: Option<u64>) -> bool {
         == Some(start)
 }
 
-/// `SHPOOL_SESSION_NAME` of the process, "" if it has none or its environment is unreadable.
-fn shpool_name(proc: &Path, pid: u32) -> String {
-    const VAR: &[u8] = b"SHPOOL_SESSION_NAME=";
-    fs::read(proc.join(pid.to_string()).join("environ"))
-        .ok()
-        .and_then(|env| {
-            env.split(|&b| b == 0)
-                .find_map(|kv| kv.strip_prefix(VAR))
-                .map(|v| String::from_utf8_lossy(v).into_owned())
-        })
-        .unwrap_or_default()
+/// The variable `name` of the environment `env` (`/proc/<pid>/environ`); None if it has none or
+/// an empty one.
+fn environ_var(env: &[u8], name: &str) -> Option<String> {
+    let prefix = format!("{name}=");
+    env.split(|&b| b == 0)
+        .find_map(|kv| kv.strip_prefix(prefix.as_bytes()))
+        .map(|v| String::from_utf8_lossy(v).into_owned())
+        .filter(|v| !v.is_empty())
 }
 
 #[cfg(test)]
@@ -170,14 +173,14 @@ mod tests {
         format!("{pid} ({comm}) S {} {start} 0 0\n", ["0"; 18].join(" "))
     }
 
-    /// `<proc>/<pid>/stat` and, if given, `environ`.
+    /// `<proc>/<pid>/stat` and an `environ` with CLAUDE_ORIGIN_FILE and, if given, `environ`.
     fn process(proc: &Path, pid: u32, stat: &str, environ: Option<&[u8]>) {
         let dir = proc.join(pid.to_string());
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("stat"), stat).unwrap();
-        if let Some(environ) = environ {
-            fs::write(dir.join("environ"), environ).unwrap();
-        }
+        let mut env = b"CLAUDE_ORIGIN_FILE=/o/1\0".to_vec();
+        env.extend_from_slice(environ.unwrap_or_default());
+        fs::write(dir.join("environ"), env).unwrap();
     }
 
     /// `<sessions>/<pid>.json`; `proc_start` is the `procStart` string, None leaves it out.
@@ -205,6 +208,7 @@ mod tests {
             status_at: 0.0,
             start: None,
             shpool: String::new(),
+            origin_file: String::new(),
         }
     }
 
@@ -232,8 +236,25 @@ mod tests {
                 status_at: 7.0,
                 start: Some(100),
                 shpool: "jw-1".into(),
+                origin_file: "/o/1".into(),
             }]
         );
+        cleanup(&sessions);
+    }
+
+    #[test]
+    fn session_without_origin_file_is_skipped() {
+        let (sessions, proc) = fixture("noorigin");
+        for pid in [10, 11, 12, 13] {
+            register(&sessions, pid, 2000, Some("100"));
+            process(&proc, pid, &stat(pid, "claude", 100), None);
+        }
+        // no variable, an empty one, an unreadable environment
+        fs::write(proc.join("10/environ"), b"A=b\0").unwrap();
+        fs::write(proc.join("11/environ"), b"CLAUDE_ORIGIN_FILE=\0").unwrap();
+        fs::remove_file(proc.join("12/environ")).unwrap();
+        let found = load(&sessions, &proc);
+        assert_eq!(found.iter().map(|s| s.pid).collect::<Vec<_>>(), vec![13]);
         cleanup(&sessions);
     }
 
