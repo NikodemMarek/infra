@@ -56,6 +56,10 @@ const CONTEXT_MAX_WIDTH: usize = 32;
 const WAITING: &str = "waiting";
 /// Longest multi-line value (a command, ...) shown in the detail pane.
 const MAX_LINES: usize = 40;
+/// Lines of the last message of a waiting session shown in the session detail.
+const WAIT_BODY_LINES: usize = 5;
+/// Longest line of an origin description or prompt shown in the detail pane.
+const ORIGIN_LINE_CHARS: usize = 500;
 
 /// Decisions for the hook behind a claude.* item (one JSON object line).
 const ALLOW: &str = r#"{"behavior":"allow"}"#;
@@ -1161,6 +1165,11 @@ fn detail_view(app: &App, item: &Item) -> Vec<Line<'static>> {
             )
         }
     });
+    let origin = origin_lines(app, item.origin_file());
+    if !origin.is_empty() {
+        lines.push(Line::default());
+        lines.extend(origin);
+    }
     lines
 }
 
@@ -1239,10 +1248,37 @@ fn question_summary(item: &Item, lines: &mut Vec<Line<'static>>) {
     }
 }
 
+/// What the agent behind the origin `file` works on: its name, link, and the description of the
+/// merge request or issue (or the prompt of the task); empty without an origin.
+fn origin_lines(app: &App, file: &str) -> Vec<Line<'static>> {
+    let Some(origin) = app.origin(file) else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    if let Some(label) = app.origin_label(file) {
+        lines.push(Line::styled(label, bold()));
+    }
+    if !origin.url.is_empty() {
+        lines.push(Line::styled(clean(&origin.url), dim()));
+    }
+    let text = if origin.description.is_empty() {
+        &origin.prompt
+    } else {
+        &origin.description
+    };
+    let text = text
+        .lines()
+        .map(|l| truncate(l, ORIGIN_LINE_CHARS))
+        .collect::<Vec<_>>()
+        .join("\n");
+    lines.extend(lines_of(&text, Style::new()));
+    lines
+}
+
 /// Items of an unknown kind (and questions without any): the title and what else there is.
 fn other_lines(item: &Item, lines: &mut Vec<Line<'static>>) {
     lines.push(Line::styled(clean(item.title()), bold()));
-    for value in [item.command(), item.prompt()] {
+    for value in [item.command(), item.prompt(), item.body()] {
         if !value.is_empty() && value != item.title() {
             lines.extend(lines_of(value, Style::new()));
         }
@@ -1631,7 +1667,7 @@ fn session_row(app: &App, session: &Session, width: usize, context_width: usize)
     ])
 }
 
-/// The detail of `session`: its fields and its pending items.
+/// The detail of `session`: its fields, its pending items and its origin.
 fn session_lines(app: &App, session: &Session) -> Vec<Line<'static>> {
     let (badge_text, badge_style) = status_badge(&session.status);
     let mut head = vec![Span::styled(badge_text, badge_style)];
@@ -1673,6 +1709,18 @@ fn session_lines(app: &App, session: &Session) -> Vec<Line<'static>> {
             Span::raw(" "),
             Span::raw(clean(item.title())),
         ]));
+        if item.kind() == "claude.waiting" {
+            let message = item.body().lines().take(WAIT_BODY_LINES);
+            lines.extend(message.map(|l| Line::styled(clean(l), dim())));
+            if item.body().lines().count() > WAIT_BODY_LINES {
+                lines.push(Line::styled("…", dim()));
+            }
+        }
+    }
+    let origin = origin_lines(app, &session.origin_file);
+    if !origin.is_empty() {
+        lines.push(Line::default());
+        lines.extend(origin);
     }
     lines
 }
@@ -4726,5 +4774,118 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
         load_origins(&mut a, Some(&root));
         assert_eq!(a.origin_label(&file), Some("!7 T".into()));
+    }
+
+    /// `with_origin` with a description for the merge request.
+    fn with_description(mut a: App, description: &str) -> App {
+        let origin = a.origins.get_mut(ORIGIN_FILE).unwrap().as_mut().unwrap();
+        origin.description = description.into();
+        a
+    }
+
+    /// The row of the screen the text `needle` is on.
+    fn row_of(s: &str, needle: &str) -> usize {
+        s.lines()
+            .position(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("no {needle:?} on the screen:\n{s}"))
+    }
+
+    fn waiting(id: &str, body: &str) -> Item {
+        let mut w = claude(id, "claude.waiting", "", None, json!({}));
+        w.event["body"] = json!(body);
+        w
+    }
+
+    #[test]
+    fn detail_shows_the_merge_request_below_the_item() {
+        let a = app(vec![permission("p", Some(HOOK_REPLY))]);
+        let a = with_description(with_origin(a, MR_URL), "Fixes the flaky test\nsecond line");
+        let s = screen(&a);
+        // the label is in the list row too
+        assert_eq!(s.matches("!7 T").count(), 2, "{s}");
+        let command = row_of(&s, "ls -la");
+        let url = row_of(&s, MR_URL);
+        let description = row_of(&s, "Fixes the flaky test");
+        assert!(command < url && url < description, "{s}");
+        assert_eq!(row_of(&s, "second line"), description + 1, "{s}");
+    }
+
+    #[test]
+    fn detail_shows_the_prompt_of_a_task() {
+        let mut a = app(vec![permission("p", Some(HOOK_REPLY))]);
+        let origin = Origin {
+            title: "Tidy up".into(),
+            prompt: "Refactor the parser\nthen run the tests".into(),
+            ..Origin::default()
+        };
+        a.origins.insert(ORIGIN_FILE.into(), Some(origin));
+        let s = screen(&a);
+        for text in ["Tidy up", "Refactor the parser", "then run the tests"] {
+            assert!(s.contains(text), "{text}:\n{s}");
+        }
+        assert!(
+            row_of(&s, "ls -la") < row_of(&s, "Refactor the parser"),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn detail_of_a_waiting_item_shows_its_message() {
+        let a = app(vec![waiting("w", "Done with the change\nPlease review it")]);
+        let s = screen(&with_origin(a, MR_URL));
+        assert!(s.contains("Please review it"), "{s}");
+        assert!(
+            row_of(&s, "Done with the change") < row_of(&s, MR_URL),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn detail_of_an_origin_without_text_shows_the_label_and_the_link_only() {
+        let a = with_origin(app(vec![permission("p", Some(HOOK_REPLY))]), MR_URL);
+        let lines = origin_lines(&a, ORIGIN_FILE);
+        let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
+        assert_eq!(text, ["!7 T", MR_URL]);
+    }
+
+    #[test]
+    fn session_detail_shows_the_waiting_message_and_then_the_origin() {
+        let body = (1..=7)
+            .map(|n| format!("msg line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let a = sessions_app(
+            vec![in_session(waiting("w", &body), "s-a")],
+            vec![session(1, "s-a", "idle")],
+        );
+        let a = with_description(with_origin(a, MR_URL), "Fixes the flaky test");
+        let s = screen(&a);
+        let (url, description) = (row_of(&s, MR_URL), row_of(&s, "Fixes the flaky test"));
+        assert!(row_of(&s, "pid: 1") < row_of(&s, "msg line 1"), "{s}");
+        assert!(row_of(&s, "msg line 5") < url && url < description, "{s}");
+        for n in 1..=5 {
+            assert!(s.contains(&format!("msg line {n}")), "{n}:\n{s}");
+        }
+        assert!(!s.contains("msg line 6"), "{s}");
+        assert!(s.contains('…'), "{s}");
+    }
+
+    #[test]
+    fn long_description_scrolls_to_its_end_in_detail_mode() {
+        let description = (1..=30)
+            .map(|n| format!("desc {n:02}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let a = app(vec![permission("p", Some(HOOK_REPLY))]);
+        let mut a = with_description(with_origin(a, MR_URL), &description);
+        a.on_key(code(KeyCode::Enter));
+        let s = screen(&a);
+        assert!(s.contains("desc 01") && !s.contains("desc 30"), "{s}");
+        assert!(row_of(&s, "allow · n deny") < row_of(&s, "desc 01"), "{s}");
+        for _ in 0..3 {
+            a.on_key(code(KeyCode::PageDown));
+        }
+        let s = screen(&a);
+        assert!(s.contains("desc 30"), "{s}");
     }
 }

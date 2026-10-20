@@ -40,7 +40,7 @@ pub struct Question {
 /// `CLAUDE_ORIGIN_FILE` points to); fields the file does not have are empty.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Origin {
-    // not shown yet
+    /// Not shown: `target` tells what it is.
     #[allow(dead_code)]
     pub kind: String,
     pub iid: Option<u64>,
@@ -48,11 +48,7 @@ pub struct Origin {
     pub target: String,
     pub title: String,
     pub url: String,
-    // not shown yet
-    #[allow(dead_code)]
     pub description: String,
-    // not shown yet
-    #[allow(dead_code)]
     pub prompt: String,
 }
 
@@ -140,6 +136,11 @@ impl Item {
 
     pub fn prompt(&self) -> &str {
         self.field("prompt")
+    }
+
+    /// The text of the event (the last message of Claude for `claude.waiting`).
+    pub fn body(&self) -> &str {
+        self.field("body")
     }
 
     pub fn command(&self) -> &str {
