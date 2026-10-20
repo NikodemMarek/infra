@@ -517,6 +517,36 @@ def agent_env(env):
     return {k: v for k, v in env.items() if k not in drop}
 
 
+def runtime_dir():
+    return os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+
+
+def task_origin(prompt):
+    origin = {"kind": "task"}
+    lines = [l.strip() for l in prompt.splitlines() if l.strip()]
+    if lines:
+        origin["title"] = lines[0][:200]
+        origin["prompt"] = prompt[:32768]
+    return origin
+
+
+def write_origin(origin):
+    """Write the session's origin file (agent-inbox shows only sessions that have one) and return its path."""
+    d = f"{runtime_dir()}/claude-origin"
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    for name in os.listdir(d):  # nothing else removes them
+        p = f"{d}/{name}"
+        try:
+            if name.endswith(".json") and os.stat(p).st_mtime < time.time() - 2 * 86400:
+                os.unlink(p)
+        except OSError:
+            pass
+    fd, path = tempfile.mkstemp(suffix=".json", dir=d)
+    with os.fdopen(fd, "w") as f:
+        json.dump(origin, f)
+    return path
+
+
 def cmd_agent(a):
     # argparse keeps the `--` in REMAINDER; after it everything is the prompt, even a first word naming a repo
     args, literal = (a.args[1:], True) if a.args[:1] == ["--"] else (a.args, False)
@@ -541,7 +571,7 @@ def cmd_agent(a):
     # the default trunk() is resolved in home without a snapshot
     resolve_in = resolve_dir(home) if a.revision else None
     fetch(home)
-    rundir = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    rundir = runtime_dir()
     with open(f"{rundir}/jw-agent.lock", "w") as lock:  # names are picked and taken (session started) under it
         fcntl.flock(lock, fcntl.LOCK_EX)
         taken = set(shpool_status())
@@ -550,11 +580,12 @@ def cmd_agent(a):
         while name in taken or os.path.exists(f"{home}.agents/{name}"):
             name, i = f"{base}-{i}", i + 1
         d = add_workspace(home, a.revision or "trunk()", name, resolve_in)
+        env = agent_env(os.environ) | {"CLAUDE_ORIGIN_FILE": write_origin(task_origin(" ".join(prompt)))}
         # the environment and the prompt go only into this 0600 file: shpool does not pass on the client's
         # environment, and its -c is split like shell words
         fd, job = tempfile.mkstemp(prefix="jw-agent-", dir=rundir)
         with os.fdopen(fd, "w", errors="surrogateescape") as f:
-            for k, v in {**agent_env(os.environ), "SHPOOL_SESSION_NAME": name}.items():
+            for k, v in {**env, "SHPOOL_SESSION_NAME": name}.items():
                 if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k):
                     f.write(f"export {k}={shlex.quote(v)}\n")
             f.write('rm -f -- "$0"\n')  # after the exports: PATH is set now
