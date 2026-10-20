@@ -207,7 +207,7 @@ let
   };
 in
 # event handler: notify, then (with a contextTool) prepare a workspace and the
-# GitLab context, and open a shpool session there (`shpool attach <name>`)
+# GitLab context, and open a shpool session there (`jw attach <name>`)
 # running Claude with edits auto-approved in the workspace (everything else
 # still asks). Without a contextTool the session runs a plain claude in the
 # main checkout, asking for everything.
@@ -302,7 +302,7 @@ writeShellApplication {
       shopt -s nullglob
       queued=("$sdir"/queue/*.md)
       ws=$(cat "$sdir/shpool" 2>/dev/null || true)
-      # notify shows `.shpool` as "shpool attach <name>", if set
+      # notify shows `.shpool` as "jw attach <name>", if set
       jq --arg title "''${#queued[@]} update(s) queued for the running Claude session" --arg ws "$ws" \
         '.title = $title | .shpool = $ws' <<<"$event" | ${lib.getExe notify}
       exit 0
@@ -342,6 +342,6 @@ writeShellApplication {
     if ! shpool --no-daemonize attach -b --ttl 1d -d "$workdir" -c "${runtimeShell} $job" "$name" </dev/null 9>&-; then
       rm -f -- "$job"; echo "shpool attach failed for session $name" >&2; exit 1
     fi
-    echo "started shpool session $name (shpool attach $name)" >&2
+    echo "started shpool session $name (jw attach $name)" >&2
   '';
 }

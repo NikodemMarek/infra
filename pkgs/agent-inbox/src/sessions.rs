@@ -25,7 +25,7 @@ pub struct Session {
     pub status_at: f64,
     /// Start time of the process in clock ticks since boot (`procStart`); None if unknown.
     pub start: Option<u64>,
-    /// The shpool session hosting the process (`shpool attach <name>`), "" if there is none.
+    /// The shpool session hosting the process (`jw attach <name>`), "" if there is none.
     pub shpool: String,
     /// `CLAUDE_ORIGIN_FILE` of the process: the file describing what the session works on.
     pub origin_file: String,

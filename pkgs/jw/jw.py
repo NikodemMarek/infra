@@ -328,16 +328,14 @@ def stat_fields(pid):
         return f.read().rpartition(")")[2].split()
 
 
-def claude_sessions(d):
-    """{pid: (status, shpool session or None, statusUpdatedAt in ms or None)} of the live Claude sessions with their
-    working directory in d."""
-    d = os.path.realpath(d)
+def live_claudes():
+    """[(pid, session file contents, working directory, shpool session or None)] of the live Claude sessions."""
     base = f"{os.environ.get('CLAUDE_CONFIG_DIR') or os.path.expanduser('~/.local/share/claude')}/sessions"
     try:
         files = os.listdir(base)
     except OSError:
-        return {}
-    found = {}
+        return []
+    found = []
     for f in files:
         try:
             with open(f"{base}/{f}") as fh:
@@ -350,11 +348,18 @@ def claude_sessions(d):
                 env = fh.read().split(b"\0")
         except (OSError, ValueError, KeyError, TypeError, IndexError):
             continue
-        if cwd == d or cwd.startswith(d + "/"):
-            prefix = b"SHPOOL_SESSION_NAME="
-            name = next((e[len(prefix):].decode(errors="replace") for e in env if e.startswith(prefix)), None)
-            found[pid] = (s.get("status"), name, s.get("statusUpdatedAt"))
+        prefix = b"SHPOOL_SESSION_NAME="
+        name = next((e[len(prefix):].decode(errors="replace") for e in env if e.startswith(prefix)), None)
+        found.append((pid, s, cwd, name))
     return found
+
+
+def claude_sessions(d):
+    """{pid: (status, shpool session or None, statusUpdatedAt in ms or None)} of the live Claude sessions with their
+    working directory in d."""
+    d = os.path.realpath(d)
+    return {pid: (s.get("status"), name, s.get("statusUpdatedAt")) for pid, s, cwd, name in live_claudes()
+            if cwd == d or cwd.startswith(d + "/")}
 
 
 def descendants(pids):
@@ -603,16 +608,67 @@ def cmd_agent(a):
                 os.unlink(job)
             raise Fail(f"shpool attach failed for session {name}" if status is not None else "")
     if a.detach:
-        sys.stderr.write(f"shpool attach {name}\n")  # agent-inbox parses this line (its `N`)
+        sys.stderr.write(f"jw attach {name}\n")  # agent-inbox parses this line (its `N`)
         return
     # if claude has exited, attach would silently create a plain shell session under this name; checking narrows the
     # race, it doesn't close it
     if name not in shpool_status():
         raise Fail(f"session {name} ended before attaching")
+    attach(name)
+
+
+def match_session(names, prefix):
+    """The session called prefix, else the only one starting with it."""
+    if prefix in names:
+        return prefix
+    matches = [n for n in names if n.startswith(prefix)]
+    if not matches:
+        raise Fail(f"no Claude shpool session {prefix}")
+    if len(matches) > 1:
+        raise Fail(f"{prefix} is ambiguous: {', '.join(sorted(matches))}")
+    return matches[0]
+
+
+def session_rows(found, state, current):
+    """fzf lines name, workspace (repo/name, else the directory), shpool state of the sessions in found ({session:
+    directory of its Claude}) that shpool has (state); those of the repo `current` first."""
+    rows = []
+    for name in sorted(found):
+        if name not in state:
+            continue
+        d = found[name]
+        while d != "/" and not os.path.isdir(f"{d}/.jj"):
+            d = os.path.dirname(d)
+        if os.path.isdir(f"{d}/.jj"):
+            repo, workspace, _ = layout(d)
+            where = f"{repo}/{workspace}"
+        else:
+            repo, where = None, found[name]
+        rows.append((current is None or repo != current, f"{name}\t{where}\t{state[name]}"))
+    return [line for _, line in sorted(rows, key=lambda r: r[0])]  # stable
+
+
+def attach(name):
     try:
         sys.exit(subprocess.run([SHPOOL, "--no-daemonize", "attach", name]).returncode)  # shpool exits with the session's status, e.g. claude's
     except OSError as e:
         raise Fail(f"shpool: {e}")
+
+
+def cmd_attach(a):
+    found = {name: cwd for _, _, cwd, name in live_claudes() if name}
+    state = shpool_status()
+    if a.name in state:  # also right after `jw agent -d`, before claude has registered its session
+        attach(a.name)
+        return
+    if a.name:
+        attach(match_session([n for n in found if n in state], a.name))
+        return
+    try:
+        current = layout(locate()[0])[0]
+    except Fail:
+        current = None  # not in a repo
+    attach(pick(session_rows(found, state, current), empty="no Claude shpool sessions").split("\t")[0])
 
 
 def cmd_info(a):
@@ -674,6 +730,9 @@ def parse_args():
     s.add_argument("-r", "--revision", help="revision, bookmark or bookmark@origin to start the new workspace from (default: trunk()); when given in this repo, it is resolved in the current workspace")
     s.add_argument("args", nargs=argparse.REMAINDER, help=f"[repo under {ROOT}] [prompt...]; after a leading -- everything is the prompt")
     s.set_defaults(func=cmd_agent)
+    s = sub.add_parser("attach", aliases=["at"], help="attach to a Claude shpool session (default: pick one, this repo's first); a unique prefix of the name is enough")
+    s.add_argument("name", nargs="?")
+    s.set_defaults(func=cmd_attach)
     sub.add_parser("ls", help="list the workspaces")
     return p.parse_args()
 

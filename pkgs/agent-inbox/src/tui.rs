@@ -2194,12 +2194,12 @@ fn open_url(app: &mut App, url: &str) {
     }
 }
 
-/// The shpool session name from the last `shpool attach <name>` line of the stderr of
+/// The shpool session name from the last `jw attach <name>` line of the stderr of
 /// `jw agent -d` (which prints it when the session is started).
 fn started_session(stderr: &str) -> Option<String> {
     stderr
         .lines()
-        .filter_map(|l| l.trim().strip_prefix("shpool attach "))
+        .filter_map(|l| l.trim().strip_prefix("jw attach "))
         .map(str::trim)
         .rfind(|name| !name.is_empty())
         .map(String::from)
@@ -2327,7 +2327,7 @@ fn new_agent(terminal: &mut DefaultTerminal, app: &mut App, task: &str) -> io::R
     match outcome(task, success, &stderr) {
         Outcome::Attach(name) if std::env::var_os("ZELLIJ").is_some() => attach(app, &name),
         Outcome::Attach(name) => {
-            app.notify(format!("started {name} (shpool attach {name})"), false);
+            app.notify(format!("started {name} (jw attach {name})"), false);
         }
         Outcome::Started(name) => app.notify(format!("started {name}"), false),
         Outcome::Cancelled => app.notify("cancelled", false), // e.g. Esc in fzf: not an error
@@ -4558,30 +4558,31 @@ mod tests {
     }
 
     #[test]
-    fn started_session_is_the_name_of_the_last_shpool_attach_line() {
-        assert_eq!(started_session("shpool attach jw-1\n"), Some("jw-1".into()));
+    fn started_session_is_the_name_of_the_last_jw_attach_line() {
+        assert_eq!(started_session("jw attach jw-1\n"), Some("jw-1".into()));
         // noise before and after, trailing whitespace and carriage return
         assert_eq!(
-            started_session("jw: fetch failed, continuing\n  shpool attach jw-2 \t\r\nbye\n"),
+            started_session("jw: fetch failed, continuing\n  jw attach jw-2 \t\r\nbye\n"),
             Some("jw-2".into())
         );
         // the last one wins
         assert_eq!(
-            started_session("shpool attach jw-1\nshpool attach jw-3\nnoise\n"),
+            started_session("jw attach jw-1\njw attach jw-3\nnoise\n"),
             Some("jw-3".into())
         );
         assert_eq!(
-            started_session("no newline\nshpool attach jw-4"),
+            started_session("no newline\njw attach jw-4"),
             Some("jw-4".into())
         );
         // not the line: other text around it, another command, no name
         for stderr in [
             "",
             "jw: no match\n",
-            "run shpool attach jw-1\n",
-            "shpool attach\n",
-            "shpool attach  \n",
+            "run jw attach jw-1\n",
+            "jw attach\n",
+            "jw attach  \n",
             "shpool list jw-1\n",
+            "shpool attach jw-1\n",
         ] {
             assert_eq!(started_session(stderr), None, "{stderr:?}");
         }
@@ -4589,14 +4590,14 @@ mod tests {
 
     #[test]
     fn outcome_of_a_started_session() {
-        let stderr = "jw: choosing a repo...\nshpool attach jw-1\n";
+        let stderr = "jw: choosing a repo...\njw attach jw-1\n";
         assert_eq!(
             outcome("fix x", true, stderr),
             Outcome::Started("jw-1".into())
         );
         // without a task the user picked the repo: go to the session
         assert_eq!(
-            outcome("", true, "shpool attach jw-2\n"),
+            outcome("", true, "jw attach jw-2\n"),
             Outcome::Attach("jw-2".into())
         );
         // success must come with a name
@@ -4611,7 +4612,7 @@ mod tests {
         }
         // a name of a failed run is no session
         assert_eq!(
-            outcome("", false, "shpool attach jw-3\njw: boom\n"),
+            outcome("", false, "jw attach jw-3\njw: boom\n"),
             Outcome::Failed("jw: boom".into())
         );
     }
