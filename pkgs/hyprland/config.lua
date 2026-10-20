@@ -130,6 +130,8 @@ hl.bind(mainMod .. " + RETURN", hl.dsp.exec_cmd("uwsm-app -s b -- alacritty"), {
 hl.bind(mainMod .. " + A", hl.dsp.exec_cmd("uwsm-app -s b -- zen"), { locked = false })
 hl.bind(mainMod .. " + E", hl.dsp.exec_cmd("alacritty --command yazi"), { locked = false })
 hl.bind(mainMod .. " + SPACE", hl.dsp.exec_cmd("rofi -show drun"), { locked = false })
+hl.bind(mainMod .. " + C", hl.dsp.exec_cmd("agent-task"), { locked = false })
+hl.bind(mainMod .. " + SHIFT + C", hl.dsp.exec_cmd("agent-task --shot"), { locked = false })
 
 -- Screenshots & Session
 hl.bind("PRINT", hl.dsp.exec_cmd("grim -g '$(slurp)' - | wl-copy"), { locked = false })
