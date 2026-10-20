@@ -3,7 +3,6 @@
   symlinkJoin,
   writeShellApplication,
   jq,
-  curl,
   jw,
   coreutils,
   git,
@@ -74,21 +73,34 @@ let
     ];
   };
 
-  # Posts to the event router with curl: depending on pkgs.event-router would be a dependency cycle
+  # Posts to the event router over plain HTTP: depending on pkgs.event-router would be a dependency cycle
   # (event-router -> handlers -> claude -> claude-hooks). Never fails with exit 2 (blocking code).
-  routeEvent = shellHook {
-    name = "claude-route-event";
-    src = ./route-event.sh;
-    runtimeInputs = [
-      jq
-      curl
-      jw
-      coreutils
-    ];
-    bashOptions = [
-      "nounset"
-      "pipefail"
-    ];
+  routeEvent = stdenvNoCC.mkDerivation {
+    pname = "claude-route-event";
+    version = "0.1.0";
+
+    dontUnpack = true;
+    nativeBuildInputs = [ makeWrapper ];
+
+    doCheck = true;
+    checkPhase = ''
+      runHook preCheck
+      cp ${./route_event.py} route_event.py
+      cp ${./test_route_event.py} test_route_event.py
+      ${python3}/bin/python3 -m unittest
+      runHook postCheck
+    '';
+
+    installPhase = ''
+      runHook preInstall
+      install -Dm755 ${./route_event.py} $out/bin/claude-route-event
+      substituteInPlace $out/bin/claude-route-event \
+        --replace-fail "#!/usr/bin/env python3" "#!${python3}/bin/python3"
+      wrapProgram $out/bin/claude-route-event --suffix PATH : ${lib.makeBinPath [ jw ]}
+      runHook postInstall
+    '';
+
+    meta.mainProgram = "claude-route-event";
   };
 
   # SUDO_ASKPASS helper: asks the user through the event router, answer comes back on a FIFO.

@@ -1,9 +1,12 @@
-# PermissionRequest hook. Always routes the request to the event router (notification + agent-inbox).
+# PermissionRequest hook. Routes the request to the event router (notification + agent-inbox), but only for
+# sessions with an origin (CLAUDE_ORIGIN_FILE: started by `jw agent` or an event); sessions without one
+# (hand-started claude) get only the local dialog.
 # Waits by default (up to CLAUDE_INBOX_WAIT seconds, default and max 600; 0 = notification only) for an
 # answer from agent-inbox on a reply FIFO and returns it as the permission decision. The local dialog is
 # shown meanwhile and whichever answer comes first wins; no answer in time = no output = local dialog.
 # stdout carries only a decision; never exits 2 (blocking code).
 # Deliberately no errexit (the package sets only nounset + pipefail): every failure maps to exit 0.
+[ -n "${CLAUDE_ORIGIN_FILE:-}" ] || { cat >/dev/null; exit 0; }
 w="${CLAUDE_INBOX_WAIT:-600}"
 if ! [[ "$w" =~ ^[1-9][0-9]{0,5}$ ]]; then
   exec claude-route-event
