@@ -1,5 +1,6 @@
 {
   writeShellApplication,
+  coreutils,
   libnotify,
   xdg-utils,
   jq,
@@ -7,13 +8,15 @@
   urgency ? "normal",
 }:
 
-# event handler: desktop notification, "Open" action opens the event URL.
+# event handler: desktop notification, "Open" action opens the event URL
+# (or the url of the session's origin file).
 writeShellApplication {
   name = "event-handler-notify-${urgency}";
   runtimeInputs = [
     libnotify
     xdg-utils
     jq
+    coreutils
   ];
   text = ''
     event=$(cat)
@@ -27,6 +30,14 @@ writeShellApplication {
       | map(select(. != null and . != "") | @html) | join("\n")
     ' <<<"$event")
     url=$(jq -r '.url // ""' <<<"$event")
+    if [[ -z "$url" ]]; then
+      # the path comes from an event: only read files directly in the origin dir
+      origin_file=$(jq -r '.origin_file // ""' <<<"$event" || true)
+      origin_dir=''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/claude-origin
+      if [[ -n "$origin_file" && "''${origin_file%/*}" == "$origin_dir" && -f "$origin_file" ]]; then
+        url=$(jq -r '.url // empty' "$origin_file" 2>/dev/null || true)
+      fi
+    fi
 
     # detach: notify-send -A blocks until the notification is closed
     (

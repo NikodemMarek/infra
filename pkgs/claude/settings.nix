@@ -29,6 +29,8 @@
       }
     ];
     # Covers AskUserQuestion too; `|| true` keeps a failing notification from ever blocking.
+    # Only sessions with an origin (CLAUDE_ORIGIN_FILE: `jw agent`, events) reach the inbox and notifications;
+    # hand-started sessions get only the local dialog.
     # Waits up to CLAUDE_INBOX_WAIT seconds (default and max 600; 0 = notification only) for an answer
     # from agent-inbox while the local dialog is shown; the timeout covers that wait.
     PermissionRequest = [
@@ -42,9 +44,9 @@
         ];
       }
     ];
-    # Event-started sessions only: with CLAUDE_EVENT_SESSION_DIR set it delivers queued event prompts (paths)
-    # by blocking the stop; for KNOWLEDGE_ORIGIN sessions it otherwise posts claude.waiting (tells the user
-    # the session waits).
+    # With CLAUDE_EVENT_SESSION_DIR set it delivers queued event prompts (paths) by blocking the stop;
+    # for sessions with an origin (CLAUDE_ORIGIN_FILE) it otherwise posts claude.waiting (tells the user
+    # the session waits, titled with the first line of the last message).
     # Permission prompts and questions are already routed by PermissionRequest.
     Stop = [
       {
