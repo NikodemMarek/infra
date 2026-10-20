@@ -256,7 +256,7 @@ let
           local main="$__claude_root" base=""
           case "$(${coreutils}/bin/dirname "$__claude_root")" in
             ?*.agents)
-              # only the human's w-* workspaces get a session workspace; agent-*, s-* etc. run as is
+              # only the human's w-* workspaces get a session workspace; a-*, s-* etc. run as is
               case "$(${coreutils}/bin/basename "$__claude_root")" in w-*) ;; *) return 0 ;; esac
               main="$(${coreutils}/bin/dirname "$__claude_root")"; main="''${main%.agents}"
               ;;
