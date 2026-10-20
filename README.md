@@ -219,7 +219,7 @@ Flux is bootstrapped in `clusters/dijkstra/flux-system` (do not edit `gotk-*.yam
 flux reconcile kustomization flux-system --namespace flux-system --with-source
 ```
 
-Each app is a directory: `arrstack` (sonarr, radarr, lidarr, prowlarr, bazarr, qbittorrent, beets, flaresolverr), `cloudflare` (tunnel), `cnpg` (CloudNativePG operator), `cron`, `immich`, `intel-gpu-plugin` (exposes regis's iGPU as `gpu.intel.com/i915`), `jellyfin`, `keda`, `navidrome` (with audiomuse-ai), `ollama`, `omniverse` (git-sync, webdav, radicale), `openebs`, `proxy` (traefik, gateway), `shani`, `tailscale` (operator), `velero`. Shared: `storageclass.yaml`.
+Each app is a directory: `arrstack` (sonarr, radarr, lidarr, prowlarr, bazarr, qbittorrent, beets, flaresolverr), `cloudflare` (tunnel), `cnpg` (CloudNativePG operator), `cron`, `immich`, `intel-gpu-plugin` (exposes regis's iGPU as `gpu.intel.com/i915`), `jellyfin`, `keda`, `navidrome` (with audiomuse-ai), `ollama`, `omniverse` (git-sync, webdav, radicale, tasks), `openebs`, `proxy` (traefik, gateway), `shani`, `tailscale` (operator), `velero`. Shared: `storageclass.yaml`.
 
 AudioMuse-AI (`navidrome/audiomuse-ai`) keeps its settings (Navidrome login, auth/API token, AI provider) in its own database, set in its web UI at `http://audiomuse-ai/` (Tailscale). Navidrome's `audiomuseai` plugin is configured in Navidrome's UI with that token.
 
@@ -230,6 +230,8 @@ Calendar subscriptions are listed in the secret `CALENDAR_SUBSCRIPTIONS` (profil
 ```bash
 kubectl -n omniverse create job --from=cronjob/calendar-subscriptions refresh-now
 ```
+
+`tm` on the cluster: the image is built into triss (`services.k3s.images`) and k3s imports it. When `nix eval --raw .#nixosConfigurations.triss.pkgs.tm-image.imageTag` differs from the tag in `clusters/dijkstra/omniverse/tasks/deployment.yaml` (also after flake updates), put the new tag there, `host-deploy triss`, then push. If the pod is stuck in `ErrImageNeverPull`, run `sudo k3s ctr -n k8s.io images import /var/lib/rancher/k3s/agent/images/nixos/*-docker-image-tm.tar` on triss, then `kubectl -n omniverse rollout restart deploy/tasks`.
 
 To remove a subscription, delete its line, then delete the calendar (read-only over CalDAV):
 
