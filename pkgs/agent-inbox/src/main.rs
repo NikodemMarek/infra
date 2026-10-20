@@ -3,7 +3,9 @@
 //! questions (ADR-025); the last tab (Tab cycles them) shows the live Claude sessions (attach, kill, start a
 //! new one; `jw` must be on PATH, the Nix package adds it). Only agents started by `jw agent` or the
 //! GitLab event handler (those with CLAUDE_ORIGIN_FILE) are listed, `o` opens their merge
-//! request or issue (`xdg-open`, also added by the Nix package).
+//! request or issue (`xdg-open`, also added by the Nix package). `N` posts a `task.new` to the
+//! router to start an agent (an empty task: pick the repo with `jw pick` first); `task.failed`
+//! items show in every tab and `p` picks a repo and sends their task again.
 //!
 //!   agent-inbox              interactive UI; $AGENT_INBOX_TABS (JSON, set by the Nix package)
 //!                            lists its filter tabs: [{"name":"Review","kinds":["review"]},
