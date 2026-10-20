@@ -578,9 +578,13 @@ impl App {
             KeyCode::Char('q') => return Effect::Quit,
             KeyCode::Char('j') | KeyCode::Down => self.selected = (self.selected + 1).min(last),
             KeyCode::Char('k') | KeyCode::Up => self.selected = self.selected.saturating_sub(1),
+            KeyCode::Char('g') => self.selected = 0,
+            KeyCode::Char('G') => self.selected = last,
             KeyCode::Char('N') => self.mode = Mode::Task { buf: String::new() },
             KeyCode::Char('f') if self.session.is_none() => self.next_tab(),
-            KeyCode::Esc | KeyCode::Char('s') if self.session.is_some() => self.set_session(None),
+            KeyCode::Esc | KeyCode::Char('h' | 's') if self.session.is_some() => {
+                self.set_session(None)
+            }
             KeyCode::Char('s') => {
                 let session = self.selected_item().map(|i| i.session_id().to_string());
                 match session.filter(|s| !s.is_empty()) {
@@ -588,7 +592,7 @@ impl App {
                     None => self.notify("no Claude session on this item", false),
                 }
             }
-            KeyCode::Enter | KeyCode::Tab => {
+            KeyCode::Enter | KeyCode::Tab | KeyCode::Char('l') => {
                 if let Some(id) = self.selected_item().map(|i| i.id.clone()) {
                     self.open(id, code);
                 }
@@ -625,7 +629,9 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => {
                 self.session_sel = self.session_sel.saturating_sub(1)
             }
-            KeyCode::Enter | KeyCode::Tab => {
+            KeyCode::Char('g') => self.session_sel = 0,
+            KeyCode::Char('G') => self.session_sel = last,
+            KeyCode::Enter | KeyCode::Tab | KeyCode::Char('l') => {
                 if let Some(pid) = self.selected_session().map(|s| s.pid) {
                     self.mode = Mode::SessionDetail { pid, scroll: 0 };
                 }
@@ -702,7 +708,7 @@ impl App {
         let scroll = scroll_key(scroll, max, code).unwrap_or(scroll);
         self.mode = Mode::SessionDetail { pid, scroll };
         match code {
-            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Backspace | KeyCode::Tab => {
+            KeyCode::Esc | KeyCode::Char('q' | 'h') | KeyCode::Backspace | KeyCode::Tab => {
                 self.mode = Mode::List
             }
             KeyCode::Char('a' | 'x' | 'o') => return self.session_key(Some(pid), code),
@@ -804,7 +810,7 @@ impl App {
             return Effect::None;
         }
         match code {
-            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Backspace | KeyCode::Tab => {
+            KeyCode::Esc | KeyCode::Char('q' | 'h') | KeyCode::Backspace | KeyCode::Tab => {
                 self.mode = Mode::List
             }
             code => {
@@ -911,7 +917,7 @@ impl App {
             }
         } else {
             match code {
-                KeyCode::Esc | KeyCode::Char('h') => {
+                KeyCode::Esc | KeyCode::Char('q' | 'h') => {
                     self.mode = Mode::List;
                     return Effect::None;
                 }
@@ -1175,6 +1181,8 @@ fn scroll_key(scroll: u16, max: u16, code: KeyCode) -> Option<u16> {
         KeyCode::Char('k') | KeyCode::Up => Some(step(-1)),
         KeyCode::PageDown => Some(step(10)),
         KeyCode::PageUp => Some(step(-10)),
+        KeyCode::Char('g') => Some(0),
+        KeyCode::Char('G') => Some(max),
         _ => None,
     }
 }
@@ -3474,25 +3482,6 @@ mod tests {
             assert!(s.contains("Question 1/2"));
             assert!(!s.contains("✓"));
         }
-    }
-
-    #[test]
-    fn answer_mode_ignores_other_command_and_ctrl_keys() {
-        let mut a = app(vec![ask("q", Some(HOOK_REPLY))]);
-        a.on_key(code(KeyCode::Enter));
-        a.now += 1.0;
-        for c in "qDyp0".chars() {
-            assert_eq!(a.on_key(key(c)), Effect::None);
-        }
-        for modifier in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
-            assert_eq!(
-                a.on_key(KeyEvent::new(KeyCode::Char('j'), modifier)),
-                Effect::None
-            );
-        }
-        let s = screen(&a);
-        assert!(s.contains("Question 1/2"));
-        assert!(s.contains("> 1 Postgres"));
     }
 
     #[test]
@@ -5964,5 +5953,337 @@ mod tests {
         let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
         open_session(&mut a);
         assert_eq!(a.hints(), vec![("j/k", "scroll"), ("esc", "back")]);
+    }
+
+    // --- slice D: one set of navigation keys
+
+    #[test]
+    fn answer_mode_ignores_other_command_and_ctrl_keys() {
+        let mut a = app(vec![ask("q", Some(HOOK_REPLY))]);
+        a.on_key(code(KeyCode::Enter));
+        a.now += 1.0;
+        for c in "Dyp0".chars() {
+            assert_eq!(a.on_key(key(c)), Effect::None);
+        }
+        for modifier in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+            assert_eq!(
+                a.on_key(KeyEvent::new(KeyCode::Char('j'), modifier)),
+                Effect::None
+            );
+        }
+        let s = screen(&a);
+        assert!(s.contains("Question 1/2"));
+        assert!(s.contains("> 1 Postgres"));
+    }
+
+    fn three_questions() -> App {
+        app(vec![
+            question("old", 900.0),
+            question("mid", 950.0),
+            question("new", 990.0),
+        ])
+    }
+
+    #[test]
+    fn g_and_capital_g_jump_to_the_first_and_last_item_row() {
+        let mut a = three_questions();
+        assert_eq!(selected_id(&a), Some("new"));
+        assert_eq!(a.on_key(key('G')), Effect::None);
+        assert_eq!(selected_id(&a), Some("old"));
+        assert_eq!(a.on_key(key('G')), Effect::None);
+        assert_eq!(selected_id(&a), Some("old"));
+        assert_eq!(a.on_key(key('g')), Effect::None);
+        assert_eq!(selected_id(&a), Some("new"));
+        assert!(matches!(a.mode, Mode::List));
+        // on a filter tab: the rows of that tab
+        let mut a = tabbed_app();
+        a.on_key(key('f'));
+        let ids: Vec<String> = visible_ids(&a).iter().map(|s| s.to_string()).collect();
+        assert!(!ids.is_empty());
+        a.on_key(key('G'));
+        assert_eq!(selected_id(&a), Some(ids[ids.len() - 1].as_str()));
+        a.on_key(key('g'));
+        assert_eq!(selected_id(&a), Some(ids[0].as_str()));
+        // empty list: nothing happens
+        let mut a = app(vec![]);
+        assert_eq!(a.on_key(key('G')), Effect::None);
+        assert_eq!(a.on_key(key('g')), Effect::None);
+    }
+
+    #[test]
+    fn g_and_capital_g_jump_in_the_sessions_list() {
+        let mut a = sessions_app(
+            vec![],
+            vec![
+                session(1, "s-a", "idle"),
+                session(2, "s-b", "idle"),
+                session(3, "s-c", "idle"),
+            ],
+        );
+        let pids: Vec<u32> = visible_pids(&a);
+        let (first, last) = (pids[0], pids[pids.len() - 1]);
+        assert_eq!(a.on_key(key('G')), Effect::None);
+        assert_eq!(selected_pid(&a), Some(last));
+        assert_eq!(a.on_key(key('g')), Effect::None);
+        assert_eq!(selected_pid(&a), Some(first));
+        assert_eq!(current_tab(&a), "Sessions");
+    }
+
+    #[test]
+    fn g_and_capital_g_jump_in_a_session_drill_down() {
+        let mut a = sessions_app(
+            vec![
+                in_session(question("a1", 960.0), "s-a"),
+                in_session(question("a2", 970.0), "s-a"),
+                in_session(question("a3", 980.0), "s-a"),
+                in_session(question("b", 990.0), "s-b"),
+            ],
+            vec![session(1, "s-a", "idle"), session(2, "s-b", "idle")],
+        );
+        a.on_key(key('s'));
+        assert_eq!(a.session.as_deref(), Some("s-a"));
+        let ids: Vec<String> = visible_ids(&a).iter().map(|s| s.to_string()).collect();
+        assert_eq!(ids.len(), 3);
+        a.on_key(key('G'));
+        assert_eq!(selected_id(&a), Some(ids[2].as_str()));
+        a.on_key(key('g'));
+        assert_eq!(selected_id(&a), Some(ids[0].as_str()));
+        assert_eq!(a.session.as_deref(), Some("s-a"));
+    }
+
+    #[test]
+    fn l_opens_like_enter_from_the_lists() {
+        // item list: the detail
+        let mut a = app(vec![question("a", 990.0)]);
+        assert_eq!(a.on_key(key('l')), Effect::None);
+        assert!(matches!(&a.mode, Mode::Detail { id, .. } if id == "a"));
+        // sessions list: the session detail
+        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        assert_eq!(a.on_key(key('l')), Effect::None);
+        assert!(matches!(a.mode, Mode::SessionDetail { pid: 1, .. }));
+        // drill-down list: the item detail
+        let mut a = sessions_app(
+            vec![in_session(question("a", 960.0), "s-a")],
+            vec![session(1, "s-a", "idle")],
+        );
+        a.on_key(key('s'));
+        a.now += 1.1;
+        assert_eq!(a.on_key(key('l')), Effect::None);
+        assert!(matches!(&a.mode, Mode::Detail { id, .. } if id == "a"));
+    }
+
+    #[test]
+    fn l_opens_a_question_and_a_held_l_does_not_pick() {
+        let mut a = app(vec![ask("q", Some(HOOK_REPLY))]);
+        assert_eq!(a.on_key(key('l')), Effect::None);
+        assert!(matches!(a.mode, Mode::Answer { .. }));
+        assert!(screen(&a).contains("Question 1/2"));
+        a.now += 0.6;
+        assert_eq!(a.on_key(key('l')), Effect::None);
+        for _ in 0..50 {
+            a.now += 0.03;
+            assert_eq!(a.on_key(key('l')), Effect::None);
+        }
+        assert!(matches!(&a.mode, Mode::Answer { st, .. } if st.idx == 0 && st.done.is_empty()));
+        // released: the next `l` picks the first option
+        a.now += 1.1;
+        a.on_key(key('l'));
+        assert!(screen(&a).contains("✓ Which db? → Postgres"));
+    }
+
+    #[test]
+    fn h_does_nothing_in_a_top_level_list() {
+        let mut a = three_questions();
+        a.on_key(key('j'));
+        assert_eq!(a.on_key(key('h')), Effect::None);
+        assert!(matches!(a.mode, Mode::List));
+        assert_eq!(selected_id(&a), Some("mid"));
+        // on the Sessions tab it stays there
+        let mut a = sessions_app(
+            vec![],
+            vec![session(1, "s-a", "idle"), session(2, "s-b", "idle")],
+        );
+        a.on_key(key('j'));
+        let pid = selected_pid(&a);
+        assert_eq!(a.on_key(key('h')), Effect::None);
+        assert!(matches!(a.mode, Mode::List));
+        assert_eq!(current_tab(&a), "Sessions");
+        assert_eq!(selected_pid(&a), pid);
+        assert!(a.session.is_none());
+    }
+
+    #[test]
+    fn h_leaves_a_drill_down_like_esc() {
+        let mk = || {
+            sessions_app(
+                vec![in_session(question("a", 960.0), "s-a")],
+                vec![session(1, "s-a", "idle"), session(2, "s-b", "idle")],
+            )
+        };
+        let mut a = mk();
+        a.on_key(key('s'));
+        assert!(a.session.is_some());
+        a.now += 1.1;
+        assert_eq!(a.on_key(key('h')), Effect::None);
+        assert!(a.session.is_none());
+        assert!(matches!(a.mode, Mode::List));
+        assert_eq!(current_tab(&a), "Sessions");
+        // same result as Esc
+        let mut b = mk();
+        b.on_key(key('s'));
+        b.now += 1.1;
+        b.on_key(code(KeyCode::Esc));
+        assert_eq!(a.session, b.session);
+        assert_eq!(selected_pid(&a), selected_pid(&b));
+        // from an item tab's drill-down
+        let mut a = app(vec![
+            in_session(question("x", 960.0), "s-1"),
+            in_session(question("y", 970.0), "s-1"),
+        ]);
+        a.on_key(key('s'));
+        assert_eq!(a.session.as_deref(), Some("s-1"));
+        a.now += 1.1;
+        a.on_key(key('h'));
+        assert!(a.session.is_none());
+        assert_eq!(selected_id(&a), Some("y"));
+    }
+
+    fn long_permission_app() -> App {
+        let cmd = (0..60)
+            .map(|i| format!("cmd-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app(vec![claude(
+            "p",
+            "claude.permission_request",
+            "Bash",
+            Some(HOOK_REPLY),
+            json!({"command": cmd}),
+        )])
+    }
+
+    #[test]
+    fn g_and_capital_g_scroll_the_item_detail_to_the_top_and_the_end() {
+        let mut a = long_permission_app();
+        a.on_key(code(KeyCode::Enter));
+        assert!(screen(&a).contains("cmd-0"));
+        assert_eq!(a.on_key(key('G')), Effect::None);
+        // the end of the detail: the (cut) command, then the options
+        let s = screen(&a);
+        assert!(
+            s.contains("y allow · n deny") && !s.contains("cmd-0"),
+            "{s}"
+        );
+        let Mode::Detail { scroll: end, .. } = a.mode else {
+            panic!("left the detail");
+        };
+        assert!(end > 0);
+        // G is the same end as paging down as far as it goes
+        let mut b = long_permission_app();
+        b.on_key(code(KeyCode::Enter));
+        for _ in 0..20 {
+            b.on_key(code(KeyCode::PageDown));
+        }
+        assert!(matches!(b.mode, Mode::Detail { scroll, .. } if scroll == end));
+        assert_eq!(a.on_key(key('g')), Effect::None);
+        assert!(matches!(a.mode, Mode::Detail { scroll: 0, .. }));
+        assert!(screen(&a).contains("cmd-0"));
+    }
+
+    #[test]
+    fn h_leaves_the_item_detail() {
+        let mut a = app(vec![question("a", 990.0), question("b", 995.0)]);
+        a.on_key(key('j'));
+        a.on_key(code(KeyCode::Enter));
+        assert!(matches!(a.mode, Mode::Detail { .. }));
+        assert_eq!(a.on_key(key('h')), Effect::None);
+        assert!(matches!(a.mode, Mode::List));
+        assert_eq!(selected_id(&a), Some("a"));
+    }
+
+    #[test]
+    fn g_and_capital_g_scroll_the_session_detail() {
+        let mut a = long_session_app(60);
+        open_session(&mut a);
+        assert_eq!(a.on_key(key('G')), Effect::None);
+        let end = scroll_of(&a);
+        assert!(end > 12, "{end}");
+        // the same end as paging down as far as it goes
+        let mut b = long_session_app(60);
+        open_session(&mut b);
+        for _ in 0..20 {
+            b.on_key(code(KeyCode::PageDown));
+        }
+        assert_eq!(scroll_of(&b), end);
+        a.on_key(key('G'));
+        assert_eq!(scroll_of(&a), end);
+        assert_eq!(a.on_key(key('g')), Effect::None);
+        assert_eq!(scroll_of(&a), 0);
+        // a short detail has nothing to scroll
+        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        open_session(&mut a);
+        a.on_key(key('G'));
+        assert_eq!(scroll_of(&a), 0);
+        a.on_key(key('g'));
+        assert_eq!(scroll_of(&a), 0);
+    }
+
+    #[test]
+    fn h_leaves_the_session_detail_with_the_session_selected() {
+        let mut a = sessions_app(
+            vec![],
+            vec![
+                session(1, "s-a", "idle"),
+                session(2, "s-b", "idle"),
+                session(3, "s-c", "idle"),
+            ],
+        );
+        a.on_key(key('j'));
+        a.on_key(key('j'));
+        open_session(&mut a);
+        assert_eq!(a.on_key(key('h')), Effect::None);
+        assert!(matches!(a.mode, Mode::List));
+        assert_eq!(selected_pid(&a), Some(3));
+        assert_eq!(current_tab(&a), "Sessions");
+    }
+
+    #[test]
+    fn q_leaves_answering_to_the_list_like_esc_and_h() {
+        let mut a = app(vec![ask("q", Some(HOOK_REPLY))]);
+        a.on_key(code(KeyCode::Enter));
+        a.now += 1.0;
+        a.on_key(code(KeyCode::Enter));
+        assert!(screen(&a).contains("Question 2/2"));
+        assert_eq!(a.on_key(key('q')), Effect::None);
+        assert!(matches!(a.mode, Mode::List));
+        // it starts over
+        a.on_key(code(KeyCode::Enter));
+        let s = screen(&a);
+        assert!(s.contains("Question 1/2") && !s.contains("✓"), "{s}");
+    }
+
+    #[test]
+    fn q_h_g_and_l_are_text_in_the_other_input_and_the_other_inputs() {
+        let mut a = app(vec![ask("q", Some(HOOK_REPLY))]);
+        a.on_key(code(KeyCode::Enter));
+        a.now += 1.0;
+        a.on_key(key('G'));
+        a.on_key(code(KeyCode::Enter));
+        type_text(&mut a, "qhgl");
+        assert!(matches!(a.mode, Mode::Answer { .. }));
+        assert!(screen(&a).contains("Other: qhgl"));
+        // password
+        let mut a = app(vec![sudo("s")]);
+        a.on_key(code(KeyCode::Enter));
+        a.on_key(key('p'));
+        for c in "qhgl".chars() {
+            assert_eq!(a.on_key(key(c)), Effect::None);
+        }
+        assert!(matches!(&a.mode, Mode::Password { buf, .. } if buf == "qhgl"));
+        // task
+        let mut a = app(vec![question("a", 990.0)]);
+        a.on_key(key('N'));
+        type_text(&mut a, "qhgl");
+        assert!(matches!(&a.mode, Mode::Task { buf } if buf == "qhgl"));
     }
 }
