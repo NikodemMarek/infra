@@ -3,9 +3,12 @@
 
 new, cd, rm and clone print the directory to go to on stdout; the `jw` fish function cds there.
 Everything else goes to stderr.
+
+agent always starts Claude in a new workspace (s-*, like `jw new`) in a shpool session of the same name.
 """
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -176,17 +179,20 @@ def add_workspace(home, revision, name, resolve_in):
     return d
 
 
+def resolve_dir(home):
+    """The current workspace's root if it belongs to the repo at home (a revision resolves there), else None."""
+    try:
+        root, current_home = locate()
+    except Fail:
+        return None  # not in a repo
+    return root if os.path.realpath(current_home) == os.path.realpath(home) else None
+
+
 def cmd_new(a):
     home = repo_home(a.repo)
     fetch(home)
-    resolve_in = None
-    if a.revision:  # the default trunk() is resolved in home without a snapshot
-        try:
-            root, current_home = locate()
-            if os.path.realpath(current_home) == os.path.realpath(home):
-                resolve_in = root
-        except Fail:
-            pass  # not in a repo
+    # the default trunk() is resolved in home without a snapshot
+    resolve_in = resolve_dir(home) if a.revision else None
     print(add_workspace(home, a.revision or "trunk()", time.strftime("w-%m%d-%H%M%S"), resolve_in))
 
 
@@ -504,62 +510,78 @@ def cmd_prune(a):
         rmdir_agents(home)
 
 
-def session_name(base):
-    """base, or base-2, base-3, ...: the first not taken by a shpool session."""
-    taken = set(shpool_status())
-    name, i = base, 2
-    while name in taken:
-        name, i = f"{base}-{i}", i + 1
-    return name
+def agent_env(env):
+    """env without the variables that tie a session to the caller's own (repo key, event queue, nested-claude marker)."""
+    drop = {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_PROJECT_DIR_NAME", "CLAUDE_EVENT_SESSION_DIR",
+            "KNOWLEDGE_ORIGIN", "CLAUDE_WORKSPACE_BASE", "CLAUDE_ORIGIN_FILE"}
+    return {k: v for k, v in env.items() if k not in drop}
 
 
 def cmd_agent(a):
     # argparse keeps the `--` in REMAINDER; after it everything is the prompt, even a first word naming a repo
     args, literal = (a.args[1:], True) if a.args[:1] == ["--"] else (a.args, False)
-    repo = args[0] if args and not literal and os.path.isdir(f"{ROOT}/{args[0]}/.jj") else None
-    prompt = args[1:] if repo else args
-    if repo:
-        workdir = f"{ROOT}/{repo}"
+    first = args[0] if args and not literal else None
+    if first in repos():
+        home, prompt = f"{ROOT}/{first}", args[1:]
+        if prompt[:1] == ["--"]:
+            prompt = prompt[1:]
+        elif prompt[:1] and prompt[0] in ("-r", "--revision", "-d", "--detach"):
+            raise Fail("options go before the repo")
     else:
-        try:  # the claude wrapper gives a session of its own to the main checkout and the w-* workspaces
-            root, home = locate()
-            workdir = root if root == home or layout(root)[1].startswith("w-") else home
+        if first and os.path.exists(f"{ROOT}/{first}"):
+            raise Fail(f"{first}: not a jj repo")
+        prompt = args
+        try:
+            home = locate()[1]
         except Fail:  # not in a repo: the prompt says which, else pick one
+            if not sys.stdin.isatty():
+                raise Fail("no repo: pass one (no terminal to pick or route)")
             guess = route(" ".join(prompt)) if prompt else None
-            workdir = f"{ROOT}/{guess}" if guess else repo_home(None)
-    name = session_name(layout(workdir)[0])
-    # the environment and the prompt go only into this 0600 file: shpool does not pass on the client's
-    # environment, and its -c is split like shell words
+            home = f"{ROOT}/{guess}" if guess else repo_home(None)
+    # the default trunk() is resolved in home without a snapshot
+    resolve_in = resolve_dir(home) if a.revision else None
+    fetch(home)
     rundir = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-    fd, job = tempfile.mkstemp(prefix="jw-agent-", dir=rundir)
-    with os.fdopen(fd, "w", errors="surrogateescape") as f:
-        for k, v in os.environ.items():
-            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k):
-                f.write(f"export {k}={shlex.quote(v)}\n")
-        f.write(f"export SHPOOL_SESSION_NAME={shlex.quote(name)}\n")
-        f.write('rm -f -- "$0"\n')  # after the exports: PATH is set now
-        f.write(f"cd -- {shlex.quote(workdir)} || exit 1\n")
-        # one argument: claude takes a single prompt, and a first word like `update` is no subcommand then
-        f.write(f"exec {shlex.join(['claude', ' '.join(prompt)] if prompt else ['claude'])}\n")
-    cmd = [SHPOOL, "--no-daemonize", "attach", "--ttl", "1d", "-d", workdir,
-           "-c", shlex.join([BASH, job]), name]
+    with open(f"{rundir}/jw-agent.lock", "w") as lock:  # names are picked and taken (session started) under it
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        taken = set(shpool_status())
+        base = time.strftime("s-%m%d-%H%M%S")
+        name, i = base, 2
+        while name in taken or os.path.exists(f"{home}.agents/{name}"):
+            name, i = f"{base}-{i}", i + 1
+        d = add_workspace(home, a.revision or "trunk()", name, resolve_in)
+        # the environment and the prompt go only into this 0600 file: shpool does not pass on the client's
+        # environment, and its -c is split like shell words
+        fd, job = tempfile.mkstemp(prefix="jw-agent-", dir=rundir)
+        with os.fdopen(fd, "w", errors="surrogateescape") as f:
+            for k, v in {**agent_env(os.environ), "SHPOOL_SESSION_NAME": name}.items():
+                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k):
+                    f.write(f"export {k}={shlex.quote(v)}\n")
+            f.write('rm -f -- "$0"\n')  # after the exports: PATH is set now
+            f.write(f"cd -- {shlex.quote(d)} || exit 1\n")
+            # one argument: claude takes a single prompt, and a first word like `update` is no subcommand then
+            f.write(f"exec {shlex.join(['claude', ' '.join(prompt)] if prompt else ['claude'])}\n")
+        try:
+            status = subprocess.run([SHPOOL, "--no-daemonize", "attach", "-b", "--ttl", "1d", "-d", d,
+                                     "-c", shlex.join([BASH, job]), name]).returncode
+        except OSError as e:
+            sys.stderr.write(f"jw: shpool: {e}\n")
+            status = None
+        if status != 0:  # the script removes the file when it starts; the empty workspace is left for `jw prune`
+            if os.path.exists(job):
+                os.unlink(job)
+            raise Fail(f"shpool attach failed for session {name}" if status is not None else "")
     if a.detach:
-        cmd.insert(3, "-b")
+        sys.stderr.write(f"shpool attach {name}\n")  # agent-inbox parses this line (its `N`)
+        return
+    # if claude has exited, attach would silently create a plain shell session under this name; checking narrows the
+    # race, it doesn't close it
+    if name not in shpool_status():
+        raise Fail(f"session {name} ended before attaching")
     try:
-        status = subprocess.run(cmd).returncode
+        sys.exit(subprocess.run([SHPOOL, "--no-daemonize", "attach", name]).returncode)  # shpool exits with the session's status, e.g. claude's
     except OSError as e:
-        status = None
-        sys.stderr.write(f"jw: shpool: {e}\n")
-    # the script removes it when it starts; a detached one may not have started yet
-    if (status != 0 or not a.detach) and os.path.exists(job):
-        os.unlink(job)
-    if status is None:
-        raise Fail("")
-    if not a.detach:
-        sys.exit(status)  # attached: shpool exits with the session's status, e.g. claude's
-    if status != 0:
-        raise Fail(f"shpool attach failed for session {name}")
-    sys.stderr.write(f"shpool attach {name}\n")  # agent-inbox parses this line (its `N`)
+        raise Fail(f"shpool: {e}")
 
 
 def cmd_info(a):
@@ -616,9 +638,10 @@ def parse_args():
     s.set_defaults(func=cmd_prune)
     s = sub.add_parser("info", help="print the jj workspace and stack of the current directory as JSON")
     s.set_defaults(func=cmd_info)
-    s = sub.add_parser("agent", aliases=["a"], help="run Claude in a shpool session in a repo (default: this one; outside a repo the one the prompt fits, else pick one)")
+    s = sub.add_parser("agent", aliases=["a"], help="run Claude in a shpool session in a new workspace of a repo (default: this one; outside a repo the one the prompt fits, else pick one)")
     s.add_argument("-d", "--detach", action="store_true", help="start the session in the background")
-    s.add_argument("args", nargs=argparse.REMAINDER, help=f"[repo under {ROOT}] [prompt...]")
+    s.add_argument("-r", "--revision", help="revision, bookmark or bookmark@origin to start the new workspace from (default: trunk()); when given in this repo, it is resolved in the current workspace")
+    s.add_argument("args", nargs=argparse.REMAINDER, help=f"[repo under {ROOT}] [prompt...]; after a leading -- everything is the prompt")
     s.set_defaults(func=cmd_agent)
     sub.add_parser("ls", help="list the workspaces")
     return p.parse_args()
