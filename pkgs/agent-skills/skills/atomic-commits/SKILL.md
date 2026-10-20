@@ -31,7 +31,7 @@ In jj repos this pairs with the user's `jj upload` (one commit = one MR), so **e
 
 ## How to slice: ordering
 
-Each commit may depend only on commits below it. Typical order (bottom first):
+Each commit may depend only on commits below it, and should sit on the lowest change it needs. A change that doesn't need the one before it starts a separate stack (on trunk, or on the shared base it needs); don't chain unrelated changes just because they were made in sequence. Typical order (bottom first):
 
 1. **Preparatory refactors** that make the change easy: extract, rename, move. These are behaviour-neutral and covered by existing tests. "Make the change easy, then make the easy change."
 2. **Missing tests** for code you're about to change (characterization).
@@ -52,6 +52,7 @@ Techniques that keep every step non-breaking:
 ### 1. Plan the stack before writing code
 Write the slice list first: one line per commit with
 - a Conventional Commit title (`feat(scope): …`, `fix: …`, `refactor: …`, `test: …`, `chore: …`)
+- its parent: trunk or another slice (the lowest it needs)
 - what's in it and how it is tested.
 
 Check each slice against the four properties. In coordinator mode, the architect produces this plan. Bring it to the user when the slicing involves a real trade-off, such as a feature flag versus a long-lived stack, or migration ordering.
@@ -60,7 +61,7 @@ In jj you can create the stack skeleton up front and fill it in:
 ```
 jj new 'trunk()' -m "refactor(x): extract Foo from Bar"
 jj new -m "feat(x): add Baz with tests"
-jj new -m "feat(x): expose Baz via /api/baz"
+jj new <extract-change> -m "feat(x): expose Foo via /api/foo"   # needs only the extract: a second stack on the shared base
 ```
 
 ### 2. Implement one slice at a time, in its own change
@@ -88,7 +89,7 @@ for c in $CHANGES; do
 done
 ```
 
-- `default@` is the main workspace's working copy, so the loop checks your stack from inside the `check` workspace.
+- `default@` is the main workspace's working copy, so the loop checks your stack from inside the `check` workspace. It lists only the line under that `@`: run it once per stack (with `@` at that stack's tip), or replace `default@` with the tip.
 - Use the project's real commands (see its README / CLAUDE.md / CI config). Run the **full** suite, not only tests near the change.
 - A failure at commit N means N is broken, even if N+1 "fixes" it. Fix it in N: move the missing piece down with `jj squash --from <N+1> --into <N> <paths> -u`, or reorder. Then re-run the loop from N. If `--from` ends up empty, jj abandons that change; that's intended if it was only a fix-up.
 - In coordinator mode, the verifier runs this loop and the coder does not commit "fixes" on top.
@@ -104,7 +105,7 @@ For each change run `jj show <change> --stat`, then `jj diff -r <change> --git`,
 Fix with `jj split`, `jj squash`, `jj rebase -r` or `jj describe` (non-interactive forms are in the `jj` skill).
 
 ### 5. Hand off
-Report the stack (`jj stack`): change ID, title, size and verification result per commit. Upload (`jj upload`) only when the user asks.
+Report the stack (`jj stack`): change ID, title, size and verification result per commit. Upload (`jj upload`, each stack from its tip) only when the user asks.
 
 ## Commit message
 
