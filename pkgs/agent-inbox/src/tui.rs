@@ -2,13 +2,13 @@
 //! to carry out), `render` draws it, `run` is the loop around the router client.
 //!
 //! Layout: a header line, the list of items next to (below, on narrow terminals) a detail pane
-//! for the selected item, and a footer with key hints or the last status message. `S` switches
-//! to the same layout over the live Claude sessions (list and detail of the selected session).
-//! `N` (in both views) asks for a task in a popup (Ctrl+J adds a line) and starts a new agent
-//! for it (`jw agent -d`). Only the events and sessions of agents with an origin (a merge
-//! request, an issue or a task, see `Origin`) are shown, with it as their context; `o` opens its
-//! link (`xdg-open`). With filter tabs (`Tab`) configured, `f` cycles through All and the tabs,
-//! which filter both views by the kind of the origin.
+//! for the selected item, and a footer with key hints or the last status message. `f` cycles
+//! through All, the configured filter tabs (`Tab`, which filter the items by the kind of their
+//! origin) and the Sessions tab: the same layout over the live Claude sessions (list and detail
+//! of the selected session), all of them whatever their origin. `N` (everywhere) asks for a task
+//! in a popup (Ctrl+J adds a line) and starts a new agent for it (`jw agent -d`). Only the events
+//! and sessions of agents with an origin (a merge request, an issue or a task, see `Origin`) are
+//! shown, with it as their context; `o` opens its link (`xdg-open`).
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
@@ -129,17 +129,8 @@ struct Status {
     at: f64,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-enum View {
-    /// The inbox items.
-    #[default]
-    Inbox,
-    /// The live Claude sessions (the mode is `List`).
-    Sessions,
-}
-
-/// A filter tab: shows the items and sessions whose origin kind is in `kinds`; without `kinds`,
-/// those whose kind no tab lists.
+/// A filter tab: shows the items whose origin kind is in `kinds`; without `kinds`, those whose
+/// kind no tab lists.
 #[derive(Debug, PartialEq)]
 pub struct Tab {
     pub name: String,
@@ -148,18 +139,15 @@ pub struct Tab {
 
 #[derive(Default)]
 struct App {
-    view: View,
     /// Newest first.
     items: Vec<Item>,
     /// Index into `visible()`.
     selected: usize,
     tabs: Vec<Tab>,
-    /// The active tab: 0 = all, else the `tabs` index + 1.
+    /// The active tab: 0 = all, the `tabs` index + 1, and after those the Sessions tab.
     tab: usize,
-    /// Show only the items of this Claude session.
+    /// Show only the items of this Claude session (the tab stays the one it was entered from).
     session: Option<String>,
-    /// The session view was entered from the sessions list: leaving it returns there.
-    from_sessions: bool,
     /// Newest first.
     sessions: Vec<Session>,
     /// Index into `visible_sessions()`.
@@ -239,11 +227,10 @@ impl App {
         items.reverse();
         let followed = self.selected_item().map(|i| i.id.clone());
         self.items = items;
-        // A session without items is over (but not under the dismiss-all prompt: it would
-        // widen to all items; the next refresh ends it).
-        if self.visible().is_empty() && !matches!(self.mode, Mode::ConfirmDismissAll) {
+        // A session without items is over (but not while one of its items is open: the next
+        // refresh after the list is back ends it).
+        if self.visible().is_empty() && matches!(self.mode, Mode::List) {
             self.session = None;
-            self.session_ended();
         }
         self.select_id(followed);
         // The mode is kept even if the open item is gone: switching to the list would turn the
@@ -285,24 +272,30 @@ impl App {
         item.kind().starts_with("sudo.") || self.in_tab(tab, kind)
     }
 
-    /// The sessions in the active tab.
+    /// All sessions: the origin tabs filter items only.
     fn visible_sessions(&self) -> Vec<&Session> {
-        self.sessions_in(self.tab)
+        self.sessions.iter().collect()
     }
 
-    fn sessions_in(&self, tab: usize) -> Vec<&Session> {
-        self.sessions
-            .iter()
-            .filter(|s| self.in_tab(tab, self.origin_kind(&s.origin_file)))
-            .collect()
+    /// The Sessions tab: after All and the configured tabs.
+    fn sessions_tab(&self) -> usize {
+        self.tabs.len() + 1
     }
 
-    /// The tab `tab` (0 = all); None for all.
+    /// Whether the sessions list is shown: the Sessions tab, not an item list of one session.
+    fn sessions_shown(&self) -> bool {
+        self.tab == self.sessions_tab() && self.session.is_none()
+    }
+
+    /// The tab `tab` (0 = all); None for all and the Sessions tab.
     fn tab_def(&self, tab: usize) -> Option<&Tab> {
         self.tabs.get(tab.checked_sub(1)?)
     }
 
     fn tab_name(&self, tab: usize) -> &str {
+        if tab == self.sessions_tab() {
+            return "Sessions";
+        }
         self.tab_def(tab).map_or("All", |t| t.name.as_str())
     }
 
@@ -316,17 +309,20 @@ impl App {
         }
     }
 
-    /// `All N · Review N · …` with the active tab in bold; None without tabs.
-    fn tabs_title(&self, count: impl Fn(usize) -> usize) -> Option<Line<'static>> {
-        if self.tabs.is_empty() {
-            return None;
-        }
+    /// `All N · Review N · … · Sessions N` with the active tab in bold, the row below the header.
+    fn tabs_title(&self) -> Line<'static> {
         let mut spans = vec![Span::raw(" ")];
-        for tab in 0..=self.tabs.len() {
+        for tab in 0..=self.sessions_tab() {
             if tab > 0 {
                 spans.push(Span::styled(" · ", dim()));
             }
-            let text = format!("{} {}", self.tab_name(tab), count(tab));
+            let count = if tab == self.sessions_tab() {
+                self.sessions.len()
+            } else {
+                // not items_in: the bar counts every tab, also inside a session
+                self.shown().filter(|i| self.item_in_tab(tab, i)).count()
+            };
+            let text = format!("{} {count}", self.tab_name(tab));
             spans.push(if tab == self.tab {
                 Span::styled(text, bold())
             } else {
@@ -334,14 +330,11 @@ impl App {
             });
         }
         spans.push(Span::raw(" "));
-        Some(Line::from(spans))
+        Line::from(spans)
     }
 
-    /// Switches to the next tab (after the last: all); the selection follows its item or pid.
+    /// Switches to the next tab (after Sessions: all); the selection follows its item or pid.
     fn next_tab(&mut self) {
-        if self.tabs.is_empty() {
-            return;
-        }
         let item = self.selected_item().map(|i| i.id.clone());
         let pid = self.selected_session().map(|s| s.pid);
         self.tab = self.following_tab();
@@ -350,7 +343,7 @@ impl App {
     }
 
     fn following_tab(&self) -> usize {
-        (self.tab + 1) % (self.tabs.len() + 1)
+        (self.tab + 1) % (self.sessions_tab() + 1)
     }
 
     /// The origin that was read from `file`.
@@ -413,17 +406,6 @@ impl App {
         let followed = self.selected_item().map(|i| i.id.clone());
         self.session = session;
         self.select_id(followed);
-        if self.session.is_none() {
-            self.session_ended();
-        }
-    }
-
-    /// After the session view ended: back to the sessions list if it was entered from there
-    /// (not while an item is open: the list is not in focus).
-    fn session_ended(&mut self) {
-        if std::mem::take(&mut self.from_sessions) && matches!(self.mode, Mode::List) {
-            self.view = View::Sessions;
-        }
     }
 
     /// The live sessions as `sessions::load` returns them. The selection follows its pid.
@@ -506,7 +488,7 @@ impl App {
         }
         let from_list = matches!(self.mode, Mode::List | Mode::ConfirmDismissAll);
         let effect = match std::mem::take(&mut self.mode) {
-            Mode::List if self.view == View::Sessions => self.sessions_key(code),
+            Mode::List if self.sessions_shown() => self.sessions_key(code),
             Mode::List => self.list_key(code),
             Mode::Detail { id, scroll } => self.detail_key(id, scroll, code),
             Mode::Password { id, buf } => self.password_key(id, buf, code),
@@ -587,7 +569,6 @@ impl App {
             KeyCode::Char('q') => return Effect::Quit,
             KeyCode::Char('j') | KeyCode::Down => self.selected = (self.selected + 1).min(last),
             KeyCode::Char('k') | KeyCode::Up => self.selected = self.selected.saturating_sub(1),
-            KeyCode::Char('S') => self.view = View::Sessions,
             KeyCode::Char('N') => self.mode = Mode::Task { buf: String::new() },
             KeyCode::Char('f') if self.session.is_none() => self.next_tab(),
             KeyCode::Esc | KeyCode::Char('s') if self.session.is_some() => self.set_session(None),
@@ -635,7 +616,6 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => {
                 self.session_sel = self.session_sel.saturating_sub(1)
             }
-            KeyCode::Esc | KeyCode::Char('S') => self.view = View::Inbox,
             KeyCode::Enter => {
                 let Some(session) = self.selected_session() else {
                     return Effect::None;
@@ -651,10 +631,8 @@ impl App {
                     self.notify(text, false);
                 } else {
                     self.guard = Some((self.now, code)); // a held Enter must not open an item too
-                    self.view = View::Inbox;
                     self.set_session(Some(id));
                     self.selected = 0;
-                    self.from_sessions = true;
                 }
             }
             KeyCode::Char('a') => {
@@ -977,17 +955,14 @@ impl App {
         )
     }
 
-    /// The hint for `f`, which names the tab it switches to; None without tabs.
-    fn tab_hint(&self) -> Option<(&str, &str)> {
-        if self.tabs.is_empty() {
-            return None;
-        }
-        Some(("f", self.tab_name(self.following_tab())))
+    /// The hint for `f`, which names the tab it switches to.
+    fn tab_hint(&self) -> (&str, &str) {
+        ("f", self.tab_name(self.following_tab()))
     }
 
     /// Key hints for the footer (key, label).
     fn hints(&self) -> Vec<(&str, &str)> {
-        if self.view == View::Sessions {
+        if self.sessions_shown() && matches!(self.mode, Mode::List) {
             let mut h = vec![("j/k", "move")];
             if let Some(session) = self.selected_session() {
                 if !self.session_items(session).is_empty() {
@@ -1003,9 +978,8 @@ impl App {
                     h.push(("x", "kill"));
                 }
             }
-            h.extend(self.tab_hint());
+            h.push(self.tab_hint());
             h.push(("N", "new"));
-            h.push(("S", "inbox"));
             h.push(("q", "quit"));
             return h;
         }
@@ -1030,17 +1004,11 @@ impl App {
                     }
                 }
                 if self.session.is_some() {
-                    let back = if self.from_sessions {
-                        "sessions"
-                    } else {
-                        "all items"
-                    };
-                    h.push(("esc", back));
+                    h.push(("esc", self.tab_name(self.tab)));
                 } else {
-                    h.extend(self.tab_hint());
+                    h.push(self.tab_hint());
                 }
                 h.push(("N", "new"));
-                h.push(("S", "sessions"));
                 h.push(("q", "quit"));
                 h
             }
@@ -1502,13 +1470,15 @@ fn input_line(mode: &Mode, width: u16) -> Option<Line<'static>> {
 
 struct Panes {
     header: Rect,
+    tabs: Rect,
     list: Rect,
     detail: Rect,
     footer: Rect,
 }
 
 fn panes(area: Rect) -> Panes {
-    let [header, body, footer] = Layout::vertical([
+    let [header, tabs, body, footer] = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(1),
@@ -1525,6 +1495,7 @@ fn panes(area: Rect) -> Panes {
     };
     Panes {
         header,
+        tabs,
         list,
         detail,
         footer,
@@ -1542,7 +1513,8 @@ fn border_style(focused: bool) -> Style {
 fn render(f: &mut Frame, app: &App) {
     let p = panes(f.area());
     render_header(f, app, p.header);
-    if app.view == View::Sessions {
+    f.render_widget(Paragraph::new(app.tabs_title()), p.tabs);
+    if app.sessions_shown() {
         render_sessions(f, app, p.list);
         render_session_detail(f, app, p.detail);
     } else {
@@ -1596,10 +1568,8 @@ fn render_task(f: &mut Frame, p: &Panes, buf: &str) {
 
 /// The only row of a list with nothing in it.
 fn empty_row(app: &App) -> ListItem<'static> {
-    let sessions = app.view == View::Sessions;
-    let text = match (app.tab_def(app.tab), sessions) {
-        (Some(tab), true) => format!("No sessions in {}", clean(&tab.name)),
-        (None, true) => "No Claude sessions".to_string(),
+    let text = match (app.tab_def(app.tab), app.sessions_shown()) {
+        (_, true) => "No Claude sessions".to_string(),
         (Some(tab), false) => format!("No pending items in {}", clean(&tab.name)),
         (None, false) => "No pending requests".to_string(),
     };
@@ -1648,19 +1618,12 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
 fn render_list(f: &mut Frame, app: &App, area: Rect) {
     let focused = matches!(app.mode, Mode::List | Mode::ConfirmDismissAll);
     let visible = app.visible();
-    let title = match &app.session {
-        Some(session) => {
-            let place = visible.first().map(|i| i.place()).unwrap_or_default();
-            let short: String = session.chars().take(8).collect();
-            Line::from(clean(&format!(" Session {place} · {short} ")))
-        }
-        None => app
-            .tabs_title(|tab| app.items_in(tab).len())
-            .unwrap_or_else(|| Line::from(" Inbox ")),
-    };
-    let block = Block::bordered()
-        .title(title)
-        .border_style(border_style(focused));
+    let mut block = Block::bordered().border_style(border_style(focused));
+    if let Some(session) = &app.session {
+        let place = visible.first().map(|i| i.place()).unwrap_or_default();
+        let short: String = session.chars().take(8).collect();
+        block = block.title(Line::from(clean(&format!(" Session {place} · {short} "))));
+    }
     let width = usize::from(block.inner(area).width);
     let context_width = visible
         .iter()
@@ -1728,12 +1691,7 @@ fn status_badge(status: &str) -> (String, Style) {
 }
 
 fn render_sessions(f: &mut Frame, app: &App, area: Rect) {
-    let title = app
-        .tabs_title(|tab| app.sessions_in(tab).len())
-        .unwrap_or_else(|| Line::from(" Sessions "));
-    let block = Block::bordered()
-        .title(title)
-        .border_style(border_style(true));
+    let block = Block::bordered().border_style(border_style(true));
     let width = usize::from(block.inner(area).width);
     let sessions = app.visible_sessions();
     let context_width = sessions
@@ -2565,15 +2523,21 @@ mod tests {
         let s = screen(&app(vec![]));
         assert!(s.contains("No pending requests"), "{s}");
         assert!(s.contains("0 pending"), "{s}");
-        assert!(s.contains(" Inbox ") && s.contains(" Detail "), "{s}");
+        assert!(
+            s.contains("All 0 · Sessions 0") && s.contains(" Detail "),
+            "{s}"
+        );
         assert!(s.matches('┌').count() >= 2, "{s}");
     }
 
     #[test]
-    fn empty_sessions_view_keeps_the_panes() {
+    fn empty_sessions_tab_keeps_the_panes_and_the_tab_bar() {
         let s = screen(&sessions_app(vec![], vec![]));
         assert!(s.contains("No Claude sessions"), "{s}");
-        assert!(s.contains(" Sessions ") && s.contains(" Detail "), "{s}");
+        assert!(
+            s.contains("All 0 · Sessions 0") && s.contains(" Detail "),
+            "{s}"
+        );
         assert!(s.matches('┌').count() >= 2, "{s}");
     }
 
@@ -2771,7 +2735,9 @@ mod tests {
                 ],
             ),
             (vec![question("a", 990.0)], vec![key('D')]),
-            (vec![sudo("s")], vec![key('S')]),
+            (vec![sudo("s")], vec![key('f'), key('x'), key('a')]),
+            (vec![sudo("s")], vec![key('f'), code(KeyCode::Enter)]),
+            (vec![sudo("s")], vec![key('f'), key('f'), key('f')]),
             (vec![], vec![key('N'), key('a'), ctrl_j(), key('b')]),
         ];
         for (w, h) in [(20, 5), (1, 1), (2, 2)] {
@@ -3514,13 +3480,14 @@ mod tests {
             in_session(question("mine1", 960.0), "s-mine-0123456789"),
             in_session(question("mine2", 970.0), "s-mine-0123456789"),
         ]);
-        assert!(screen(&a).contains("Inbox"));
+        assert!(screen(&a).contains("All 4 · Sessions 0"));
         a.on_key(key('s'));
         let s = screen(&a);
         assert!(s.contains("Session infra · s-mine-0 "));
         assert!(s.contains("title-mine1") && s.contains("title-mine2"));
         assert!(!s.contains("title-other") && !s.contains("sudo ls"));
-        assert!(s.contains("esc all items"));
+        assert!(s.contains("esc All"));
+        assert!(a.hints().contains(&("esc", "All")), "{:?}", a.hints());
         // the header keeps counting everything
         assert!(s.contains("4 pending"));
         // navigation stays within the session
@@ -3918,11 +3885,26 @@ mod tests {
         s
     }
 
-    /// The app on the sessions view.
+    fn current_tab(a: &App) -> &str {
+        a.tab_name(a.tab)
+    }
+
+    /// Presses `f` until the Sessions tab is reached.
+    fn to_sessions_tab(a: &mut App) {
+        for _ in 0..8 {
+            if current_tab(a) == "Sessions" {
+                return;
+            }
+            assert_eq!(a.on_key(key('f')), Effect::None);
+        }
+        panic!("no Sessions tab");
+    }
+
+    /// The app on the Sessions tab.
     fn sessions_app(items: Vec<Item>, sessions: Vec<Session>) -> App {
         let mut a = app(items);
         a.set_sessions(sessions);
-        assert_eq!(a.on_key(key('S')), Effect::None);
+        to_sessions_tab(&mut a);
         a
     }
 
@@ -3931,23 +3913,25 @@ mod tests {
     }
 
     #[test]
-    fn capital_s_toggles_the_sessions_view_both_ways() {
+    fn capital_s_does_nothing_and_is_not_offered() {
         let mut a = app(vec![question("a", 990.0)]);
         a.set_sessions(vec![session(1, "s-a", "idle")]);
-        assert!(screen(&a).contains(" Inbox "));
-        assert!(screen(&a).contains("S sessions"));
-        a.on_key(key('S'));
         let s = screen(&a);
-        assert!(s.contains(" Sessions ") && !s.contains(" Inbox "), "{s}");
-        assert!(s.contains("S inbox"), "{s}");
-        a.on_key(key('S'));
-        assert!(screen(&a).contains(" Inbox "));
-        a.on_key(key('S'));
-        a.on_key(code(KeyCode::Esc));
-        assert!(screen(&a).contains(" Inbox "));
-        // the inbox keys do nothing in the sessions view, q quits from both
-        a.on_key(key('S'));
+        assert!(!s.contains("S sessions") && !s.contains("S inbox"), "{s}");
+        assert_eq!(a.on_key(key('S')), Effect::None);
+        assert_eq!((a.tab, current_tab(&a)), (0, "All"));
+        assert!(matches!(a.mode, Mode::List));
+        assert!(a.hints().iter().all(|(k, _)| *k != "S"), "{:?}", a.hints());
+        a.on_key(key('f'));
+        assert_eq!(current_tab(&a), "Sessions");
+        assert_eq!(a.on_key(key('S')), Effect::None);
+        assert_eq!(current_tab(&a), "Sessions");
+        assert!(matches!(a.mode, Mode::List));
+        assert!(a.hints().iter().all(|(k, _)| *k != "S"), "{:?}", a.hints());
+        // the inbox keys do nothing on the sessions tab, q quits from every tab
         assert_eq!(a.on_key(key('d')), Effect::None);
+        assert_eq!(a.on_key(key('q')), Effect::Quit);
+        a.on_key(key('f'));
         assert_eq!(a.on_key(key('q')), Effect::Quit);
     }
 
@@ -3988,7 +3972,7 @@ mod tests {
         assert!(row(&s, "BUSY").contains("│   BUSY"), "{s}");
         // an unknown status is shown as text
         assert!(row(&s, "star…").contains("│   star…"), "{s}");
-        // the header counts sessions in both views
+        // the header counts sessions on every tab
         assert!(
             s.contains("3 pending · 0 answerable · 4 sessions (1 waiting)"),
             "{s}"
@@ -4015,7 +3999,9 @@ mod tests {
             "{s}"
         );
         assert!(!s.contains("title-a"));
-        a.on_key(key('S'));
+        // the header counts sessions on every tab
+        a.on_key(key('f'));
+        assert_eq!(current_tab(&a), "All");
         assert!(screen(&a).contains("4 sessions (1 waiting)"));
     }
 
@@ -4038,30 +4024,64 @@ mod tests {
         );
         a.on_key(key('j'));
         a.on_key(code(KeyCode::Enter));
-        assert_eq!(a.view, View::Inbox);
+        assert_eq!(current_tab(&a), "Sessions");
         assert_eq!(a.session.as_deref(), Some("s-b"));
+        assert_eq!(a.selected, 0);
         assert_eq!(selected_id(&a), Some("b"));
         let s = screen(&a);
+        assert!(s.contains(" Session ") && !s.contains("IDLE"), "{s}");
         assert!(s.contains("title-b") && !s.contains("title-a"), "{s}");
-        assert!(s.contains("esc sessions"), "{s}");
+        assert!(a.hints().contains(&("esc", "Sessions")), "{:?}", a.hints());
+        assert!(s.contains("esc Sessions"), "{s}");
         a.on_key(code(KeyCode::Esc));
-        assert_eq!(a.view, View::Sessions);
-        assert!(a.session.is_none() && !a.from_sessions);
+        assert!(a.session.is_none());
+        assert_eq!(current_tab(&a), "Sessions");
         assert_eq!(selected_pid(&a), Some(2));
-        // `s` leaves the filter the same way
+        assert!(screen(&a).contains("IDLE"));
+        // `s` leaves the drill-down the same way
         a.on_key(code(KeyCode::Enter));
+        assert_eq!(a.session.as_deref(), Some("s-b"));
         a.on_key(key('s'));
-        assert_eq!(a.view, View::Sessions);
-        // a filter entered from the inbox does not
-        a.on_key(key('S'));
+        assert!(a.session.is_none());
+        assert_eq!(current_tab(&a), "Sessions");
+        assert_eq!(selected_pid(&a), Some(2));
+        assert!(screen(&a).contains("IDLE"));
+    }
+
+    #[test]
+    fn s_on_an_item_returns_to_the_tab_it_was_opened_on() {
+        let mut a = app(vec![
+            in_session(question("a", 960.0), "s-a"),
+            in_session(question("b", 970.0), "s-b"),
+        ]);
+        a.set_sessions(vec![session(1, "s-a", "idle")]);
         a.on_key(key('s'));
-        assert!(screen(&a).contains("esc all items"));
+        assert_eq!(a.session.as_deref(), Some("s-b"));
+        assert!(a.hints().contains(&("esc", "All")), "{:?}", a.hints());
+        assert!(screen(&a).contains("esc All"));
+        // `f` is ignored inside the drill-down
+        assert_eq!(a.on_key(key('f')), Effect::None);
+        assert_eq!(current_tab(&a), "All");
+        assert_eq!(a.session.as_deref(), Some("s-b"));
         a.on_key(code(KeyCode::Esc));
-        assert_eq!(a.view, View::Inbox);
-        // Esc in the sessions view goes to the inbox
-        a.on_key(key('S'));
-        a.on_key(code(KeyCode::Esc));
-        assert_eq!(a.view, View::Inbox);
+        assert!(a.session.is_none());
+        assert_eq!(current_tab(&a), "All");
+        let s = screen(&a);
+        assert!(s.contains("title-a") && s.contains("title-b"), "{s}");
+    }
+
+    #[test]
+    fn f_is_ignored_in_a_drill_down_from_the_sessions_tab() {
+        let mut a = sessions_app(
+            vec![in_session(question("a", 960.0), "s-a")],
+            vec![session(1, "s-a", "idle")],
+        );
+        a.on_key(code(KeyCode::Enter));
+        assert!(a.session.is_some());
+        assert_eq!(a.on_key(key('f')), Effect::None);
+        assert_eq!(current_tab(&a), "Sessions");
+        assert!(a.session.is_some());
+        assert!(a.hints().iter().all(|(k, _)| *k != "f"));
     }
 
     #[test]
@@ -4071,30 +4091,66 @@ mod tests {
             vec![session(1, "s-a", WAITING)],
         );
         a.on_key(code(KeyCode::Enter));
-        a.now += 1.0;
+        a.now += 1.1;
         a.on_key(code(KeyCode::Enter));
         assert_eq!(a.on_key(key('y')), allow("p"));
-        assert_eq!(a.view, View::Inbox);
+        assert_eq!(a.session.as_deref(), Some("s-a"));
         // the router has dismissed it
         a.set_items(vec![]);
-        assert_eq!(a.view, View::Sessions);
-        assert!(a.session.is_none() && !a.from_sessions);
-        assert!(screen(&a).contains(" Sessions "));
+        assert!(a.session.is_none());
+        assert_eq!(current_tab(&a), "Sessions");
+        let s = screen(&a);
+        assert!(s.contains("WAIT") && !s.contains(" Session "), "{s}");
     }
 
     #[test]
-    fn a_session_ending_under_an_open_item_stays_in_the_inbox() {
+    fn an_item_vanishing_under_an_open_detail_keeps_the_drill_down_until_esc() {
         let mut a = sessions_app(
             vec![in_session(permission("p", Some(HOOK_REPLY)), "s-a")],
             vec![session(1, "s-a", WAITING)],
         );
         a.on_key(code(KeyCode::Enter));
-        a.now += 1.0;
+        a.now += 1.1;
         a.on_key(code(KeyCode::Enter));
-        a.set_items(vec![]);
-        assert!(a.session.is_none() && !a.from_sessions);
-        assert_eq!(a.view, View::Inbox);
         assert!(matches!(a.mode, Mode::Detail { .. }));
+        a.set_items(vec![]);
+        assert_eq!(a.session.as_deref(), Some("s-a"));
+        assert!(matches!(a.mode, Mode::Detail { .. }));
+        assert!(screen(&a).contains("item is gone"));
+        a.on_key(code(KeyCode::Esc));
+        assert!(matches!(a.mode, Mode::List));
+        a.set_items(vec![]);
+        assert!(a.session.is_none());
+        assert_eq!(current_tab(&a), "Sessions");
+        assert!(screen(&a).contains("WAIT"));
+    }
+
+    #[test]
+    fn a_drill_down_from_an_item_tab_ends_on_that_tab() {
+        let mut a = tabbed_app();
+        let r = || {
+            in_session(
+                from_file(permission("p", Some(HOOK_REPLY)), REVIEW_FILE),
+                "s-r",
+            )
+        };
+        a.set_items(vec![r()]);
+        a.on_key(key('f'));
+        assert_eq!(current_tab(&a), "Review");
+        a.on_key(key('s'));
+        assert_eq!(a.session.as_deref(), Some("s-r"));
+        assert!(a.hints().contains(&("esc", "Review")), "{:?}", a.hints());
+        a.now += 1.1;
+        a.on_key(code(KeyCode::Enter));
+        assert!(matches!(a.mode, Mode::Detail { .. }));
+        a.set_items(vec![]);
+        assert_eq!(a.session.as_deref(), Some("s-r"));
+        assert!(matches!(a.mode, Mode::Detail { .. }));
+        assert!(screen(&a).contains("item is gone"));
+        a.on_key(code(KeyCode::Esc));
+        a.set_items(vec![]);
+        assert!(a.session.is_none());
+        assert_eq!(current_tab(&a), "Review");
     }
 
     #[test]
@@ -4104,7 +4160,7 @@ mod tests {
             vec![session(1, "s-a", "idle")],
         );
         assert_eq!(a.on_key(code(KeyCode::Enter)), Effect::None);
-        assert_eq!(a.view, View::Sessions);
+        assert_eq!(current_tab(&a), "Sessions");
         assert!(a.session.is_none());
         let s = screen(&a);
         assert!(
@@ -4126,7 +4182,8 @@ mod tests {
         assert!(screen(&a).contains("enter items"));
         a.offline = Some("down".into());
         a.on_key(code(KeyCode::Enter));
-        assert_eq!(a.view, View::Sessions);
+        assert_eq!(current_tab(&a), "Sessions");
+        assert!(a.session.is_none());
         assert!(screen(&a).contains("no pending items — a to attach"));
     }
 
@@ -4137,7 +4194,8 @@ mod tests {
             vec![session(1, "s-a", "idle")],
         );
         a.on_key(code(KeyCode::Enter));
-        assert_eq!(a.view, View::Inbox);
+        assert_eq!(a.session.as_deref(), Some("s-a"));
+        assert_eq!(current_tab(&a), "Sessions");
         // the repeats are swallowed
         a.now += 0.6;
         assert_eq!(a.on_key(code(KeyCode::Enter)), Effect::None);
@@ -4263,12 +4321,12 @@ mod tests {
     }
 
     #[test]
-    fn x_needs_a_selected_session_in_the_sessions_view() {
+    fn x_needs_a_selected_session_on_the_sessions_tab() {
         let mut a = sessions_app(vec![], vec![]);
         assert!(!screen(&a).contains("x kill"));
         assert_eq!(a.on_key(key('x')), Effect::None);
         assert!(matches!(a.mode, Mode::List));
-        // the inbox view ignores it
+        // the All tab ignores it
         let mut a = app(vec![question("a", 990.0)]);
         a.set_sessions(vec![session(7, "s-a", "idle")]);
         assert_eq!(a.on_key(key('x')), Effect::None);
@@ -4363,7 +4421,7 @@ mod tests {
     // --- new agent
 
     #[test]
-    fn capital_n_asks_for_a_task_in_both_views() {
+    fn capital_n_asks_for_a_task_on_every_tab() {
         let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
         assert!(screen(&a).contains("N new"));
         assert_eq!(a.on_key(key('N')), Effect::None);
@@ -4373,7 +4431,12 @@ mod tests {
         assert!(screen(&a).contains("N new"));
         assert_eq!(a.on_key(key('N')), Effect::None);
         assert!(matches!(a.mode, Mode::Task { .. }));
-        // the inbox view, with and without items
+        // the item tabs, with and without items
+        let mut a = tabbed_sessions_app();
+        a.on_key(key('f'));
+        assert!(screen(&a).contains("N new"));
+        assert_eq!(a.on_key(key('N')), Effect::None);
+        assert!(matches!(a.mode, Mode::Task { .. }));
         let mut a = app(vec![question("a", 990.0)]);
         assert!(screen(&a).contains("N new"));
         assert_eq!(a.on_key(key('N')), Effect::None);
@@ -4431,24 +4494,24 @@ mod tests {
         a.on_key(key('N'));
         let s = screen(&a);
         assert!(s.contains(" New agent "), "{s}");
-        for shown in [" Inbox ", " Detail ", "No pending requests"] {
+        for shown in ["All 0 · Sessions 0", " Detail ", "No pending requests"] {
             assert!(s.contains(shown), "{shown:?}:\n{s}");
         }
     }
 
     #[test]
-    fn esc_cancels_the_task_and_keeps_the_view() {
+    fn esc_cancels_the_task_and_keeps_the_tab() {
         let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
         a.on_key(key('N'));
         type_text(&mut a, "fix");
         assert_eq!(a.on_key(code(KeyCode::Esc)), Effect::None);
         assert!(matches!(a.mode, Mode::List));
-        assert_eq!(a.view, View::Sessions);
+        assert_eq!(current_tab(&a), "Sessions");
         let mut a = app(vec![question("a", 990.0)]);
         a.on_key(key('N'));
         assert_eq!(a.on_key(code(KeyCode::Esc)), Effect::None);
         assert!(matches!(a.mode, Mode::List));
-        assert_eq!(a.view, View::Inbox);
+        assert_eq!(current_tab(&a), "All");
     }
 
     #[test]
@@ -5043,7 +5106,7 @@ mod tests {
         a
     }
 
-    /// `tabbed_app` on the sessions view, with the sessions 1 (review), 2 (task), 3 (unknown).
+    /// `tabbed_app` on the Sessions tab, with the sessions 1 (review), 2 (task), 3 (unknown).
     fn tabbed_sessions_app() -> App {
         let mut a = tabbed_app();
         a.set_sessions(vec![
@@ -5051,7 +5114,7 @@ mod tests {
             session_from(session(2, "s-t", "idle"), TASK_FILE),
             session(3, "s-u", "idle"),
         ]);
-        assert_eq!(a.on_key(key('S')), Effect::None);
+        to_sessions_tab(&mut a);
         a
     }
 
@@ -5064,35 +5127,62 @@ mod tests {
     }
 
     #[test]
-    fn f_does_nothing_without_tabs() {
-        let mut a = app(vec![question("a", 990.0)]);
-        a.set_sessions(vec![session(1, "s-a", "idle")]);
-        for inbox in [true, false] {
-            assert_eq!(a.on_key(key('f')), Effect::None);
-            assert_eq!(a.tab, 0);
-            assert!(a.hints().iter().all(|(k, _)| *k != "f"));
-            let s = screen(&a);
-            let title = if inbox { " Inbox " } else { " Sessions " };
-            assert!(s.contains(title) && !s.contains("All 1"), "{s}");
-            a.on_key(key('S'));
-        }
+    fn without_tabs_sessions_is_the_second_tab() {
+        let mut a = app(vec![question("a", 990.0), question("b", 980.0)]);
+        a.set_sessions(vec![
+            session(1, "s-a", "idle"),
+            session(2, "s-b", "idle"),
+            session(3, "s-c", "idle"),
+        ]);
+        assert_eq!(current_tab(&a), "All");
+        // the tab bar is the same on both tabs
+        let s = screen(&a);
+        assert!(s.contains("All 2 · Sessions 3"), "{s}");
+        assert!(s.contains("title-a") && !s.contains("IDLE"), "{s}");
+        assert!(a.hints().contains(&("f", "Sessions")), "{:?}", a.hints());
+        assert!(screen(&a).contains("f Sessions"));
+        assert_eq!(a.on_key(key('f')), Effect::None);
+        assert_eq!(current_tab(&a), "Sessions");
+        assert_eq!(visible_pids(&a), vec![1, 2, 3]);
+        let s = screen(&a);
+        assert!(s.contains("All 2 · Sessions 3"), "{s}");
+        assert!(s.contains("IDLE") && !s.contains("title-a"), "{s}");
+        assert!(a.hints().contains(&("f", "All")), "{:?}", a.hints());
+        assert!(screen(&a).contains("f All"));
+        assert_eq!(a.on_key(key('f')), Effect::None);
+        assert_eq!(current_tab(&a), "All");
+        assert!(screen(&a).contains("title-a"));
     }
 
     #[test]
     fn f_cycles_through_the_tabs_and_back() {
         let mut a = tabbed_app();
+        a.set_sessions(vec![
+            session_from(session(1, "s-r", "idle"), REVIEW_FILE),
+            session_from(session(2, "s-t", "idle"), TASK_FILE),
+            session(3, "s-u", "idle"),
+        ]);
         assert_eq!(visible_ids(&a), vec!["s", "r", "t", "u"]);
         let s = screen(&a);
-        assert!(s.contains("All 4 · Review 2 · Coding 3"), "{s}");
+        assert!(
+            s.contains("All 4 · Review 2 · Coding 3 · Sessions 3"),
+            "{s}"
+        );
         assert!(!s.contains(" Inbox "), "{s}");
-        for (name, next, ids) in [
-            ("Review", "Coding", vec!["s", "r"]),
-            ("Coding", "All", vec!["s", "t", "u"]),
-            ("All", "Review", vec!["s", "r", "t", "u"]),
+        for (name, next) in [
+            ("Review", "Coding"),
+            ("Coding", "Sessions"),
+            ("Sessions", "All"),
+            ("All", "Review"),
         ] {
             assert_eq!(a.on_key(key('f')), Effect::None);
             assert_eq!(a.tab_name(a.tab), name);
-            assert_eq!(visible_ids(&a), ids);
+            match name {
+                "Review" => assert_eq!(visible_ids(&a), vec!["s", "r"]),
+                "Coding" => assert_eq!(visible_ids(&a), vec!["s", "t", "u"]),
+                "Sessions" => assert_eq!(visible_pids(&a), vec![1, 2, 3]),
+                _ => assert_eq!(visible_ids(&a), vec!["s", "r", "t", "u"]),
+            }
             assert!(a.hints().contains(&("f", next)), "{:?}", a.hints());
             assert!(screen(&a).contains(&format!("f {next}")));
         }
@@ -5100,20 +5190,44 @@ mod tests {
 
     #[test]
     fn the_active_tab_is_bold_in_the_title() {
-        let mut a = tabbed_app();
+        let mut a = tabbed_sessions_app();
         let bold_tabs = |a: &App| -> Vec<String> {
-            let title = a.tabs_title(|tab| tab).unwrap();
+            let title = a.tabs_title();
             let bold_spans = title
                 .spans
                 .iter()
                 .filter(|s| s.style.add_modifier.contains(Modifier::BOLD));
             bold_spans.map(|s| s.content.to_string()).collect()
         };
-        assert_eq!(bold_tabs(&a), vec!["All 0"]);
+        assert_eq!(bold_tabs(&a), vec!["Sessions 3"]);
         a.on_key(key('f'));
-        assert_eq!(bold_tabs(&a), vec!["Review 1"]);
+        assert_eq!(bold_tabs(&a), vec!["All 4"]);
         a.on_key(key('f'));
-        assert_eq!(bold_tabs(&a), vec!["Coding 2"]);
+        assert_eq!(bold_tabs(&a), vec!["Review 2"]);
+        a.on_key(key('f'));
+        assert_eq!(bold_tabs(&a), vec!["Coding 3"]);
+    }
+
+    #[test]
+    fn capital_s_does_nothing_on_any_tab() {
+        let mut a = tabbed_sessions_app();
+        for _ in 0..4 {
+            let (tab, name) = (a.tab, current_tab(&a).to_string());
+            assert_eq!(a.on_key(key('S')), Effect::None);
+            assert_eq!((a.tab, current_tab(&a)), (tab, name.as_str()));
+            assert!(matches!(a.mode, Mode::List));
+            assert!(a.hints().iter().all(|(k, _)| *k != "S"), "{:?}", a.hints());
+            a.on_key(key('f'));
+        }
+    }
+
+    #[test]
+    fn esc_on_the_sessions_tab_stays_there() {
+        let mut a = tabbed_sessions_app();
+        assert_eq!(a.on_key(code(KeyCode::Esc)), Effect::None);
+        assert_eq!(current_tab(&a), "Sessions");
+        assert!(a.session.is_none());
+        assert!(screen(&a).contains("IDLE"));
     }
 
     #[test]
@@ -5124,7 +5238,11 @@ mod tests {
         a.on_key(key('j'));
         a.on_key(key('j'));
         assert_eq!(selected_id(&a), Some("u"));
+        // through the sessions tab
         a.on_key(key('f'));
+        assert_eq!(current_tab(&a), "Sessions");
+        a.on_key(key('f'));
+        assert_eq!(current_tab(&a), "All");
         assert_eq!(selected_id(&a), Some("u"));
         assert_eq!(a.selected, 3);
         // not in Review: the position, within the shorter list
@@ -5177,31 +5295,37 @@ mod tests {
         assert_eq!(a.on_key(key('f')), Effect::None);
         assert_eq!(a.tab, 0);
         let s = screen(&a);
-        assert!(s.contains(" Session ") && !s.contains("Review 0"), "{s}");
+        assert!(s.contains(" Session "), "{s}");
+        assert!(
+            s.contains("All 2 · Review 0 · Coding 2 · Sessions 0"),
+            "{s}"
+        );
         assert!(a.hints().iter().all(|(k, _)| *k != "f"));
+        assert!(a.hints().contains(&("esc", "All")), "{:?}", a.hints());
         a.on_key(code(KeyCode::Esc));
         a.on_key(key('f'));
         assert_eq!(a.tab, 1);
     }
 
     #[test]
-    fn f_in_the_sessions_view_keeps_the_session_filter_of_the_inbox() {
+    fn a_session_opened_on_a_tab_returns_to_that_tab() {
         let mut a = tabbed_app();
         a.set_items(vec![
             in_session(from_file(question("a", 950.0), TASK_FILE), "s-x"),
             in_session(from_file(question("b", 960.0), TASK_FILE), "s-y"),
         ]);
-        a.on_key(key('s'));
-        a.on_key(key('S'));
         a.on_key(key('f'));
-        assert_eq!(a.tab, 1);
-        assert_eq!(visible_ids(&a), vec!["b"]);
-        a.set_items(vec![in_session(
-            from_file(question("b", 960.0), TASK_FILE),
-            "s-y",
-        )]);
+        a.on_key(key('f'));
+        assert_eq!(current_tab(&a), "Coding");
+        a.on_key(key('s'));
         assert_eq!(a.session.as_deref(), Some("s-y"));
-        assert!(matches!(a.view, View::Sessions));
+        assert!(a.hints().contains(&("esc", "Coding")), "{:?}", a.hints());
+        assert_eq!(a.on_key(key('f')), Effect::None);
+        assert_eq!(current_tab(&a), "Coding");
+        a.on_key(code(KeyCode::Esc));
+        assert!(a.session.is_none());
+        assert_eq!(current_tab(&a), "Coding");
+        assert_eq!(visible_ids(&a), vec!["b", "a"]);
     }
 
     #[test]
@@ -5214,9 +5338,9 @@ mod tests {
         let new = dir.join("new.json");
         std::fs::write(&new, r#"{"kind":"review"}"#).unwrap();
         let new = new.to_string_lossy().into_owned();
-        // the new item (newest) and session (first) have an origin that is not read yet: until
-        // it is, they show in Coding, afterwards in Review
-        for (tab, old) in [(1, REVIEW_FILE), (2, TASK_FILE)] {
+        // the new item (newest) has an origin that is not read yet: until it is, it shows in
+        // Coding, afterwards in Review. Sessions are not filtered by tab; tab 3 is Sessions.
+        for (tab, old) in [(1, REVIEW_FILE), (2, TASK_FILE), (3, TASK_FILE)] {
             let items = |ids: &[&str]| -> Vec<Item> {
                 let file = |id: &str| if id == "n" { new.as_str() } else { old };
                 let item = |id: &str| from_file(question(id, 900.0), file(id));
@@ -5235,45 +5359,44 @@ mod tests {
             a.set_sessions(sessions(&[1, 2, 3]));
             a.selected = 1;
             a.session_sel = 1;
-            assert_eq!(selected_id(&a), Some("i2"));
             assert_eq!(selected_pid(&a), Some(2));
+            if tab < 3 {
+                assert_eq!(selected_id(&a), Some("i2"));
+            }
             let new_items = items(&["i1", "i2", "i3", "n"]);
             update(&mut a, sessions(&[4, 1, 2, 3]), Ok(new_items), Some(&root));
-            assert_eq!(selected_id(&a), Some("i2"), "tab {tab}");
             assert_eq!(selected_pid(&a), Some(2), "tab {tab}");
-            let in_review = tab == 1;
-            assert_eq!(visible_ids(&a).contains(&"n"), in_review);
-            assert_eq!(visible_pids(&a).contains(&4), in_review);
+            assert_eq!(visible_pids(&a), vec![4, 1, 2, 3], "tab {tab}");
+            if tab < 3 {
+                assert_eq!(selected_id(&a), Some("i2"), "tab {tab}");
+                assert_eq!(visible_ids(&a).contains(&"n"), tab == 1);
+            }
         }
         std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
-    fn sessions_are_filtered_and_the_selection_follows_its_pid() {
+    fn the_sessions_tab_shows_every_session_and_the_selection_follows_its_pid() {
         let mut a = tabbed_sessions_app();
+        // whatever the kind of the origin
         assert_eq!(visible_pids(&a), vec![1, 2, 3]);
         let s = screen(&a);
-        assert!(s.contains("All 3 · Review 1 · Coding 2"), "{s}");
-        assert!(!s.contains(" Sessions "), "{s}");
-        assert!(a.hints().contains(&("f", "Review")));
-        a.on_key(key('f'));
-        assert_eq!(visible_pids(&a), vec![1]);
+        assert!(
+            s.contains("All 4 · Review 2 · Coding 3 · Sessions 3"),
+            "{s}"
+        );
+        assert!(a.hints().contains(&("f", "All")), "{:?}", a.hints());
         a.on_key(key('j'));
-        assert_eq!(selected_pid(&a), Some(1));
-        a.on_key(key('f'));
-        assert_eq!(visible_pids(&a), vec![2, 3]);
+        a.on_key(key('j'));
         a.on_key(key('j'));
         assert_eq!(selected_pid(&a), Some(3));
-        a.on_key(key('j'));
+        // All, Review, Coding, and round to the sessions again
+        for _ in 0..4 {
+            a.on_key(key('f'));
+        }
+        assert_eq!(current_tab(&a), "Sessions");
         assert_eq!(selected_pid(&a), Some(3));
-        a.on_key(key('f'));
-        assert_eq!(selected_pid(&a), Some(3));
-        assert_eq!(a.session_sel, 2);
-        // refreshes follow the pid within the tab
-        a.on_key(key('f'));
-        a.on_key(key('f'));
-        a.on_key(key('j'));
-        assert_eq!(selected_pid(&a), Some(3));
+        // refreshes follow the pid
         a.set_sessions(vec![
             session(4, "s-4", "idle"),
             session_from(session(2, "s-t", "idle"), TASK_FILE),
@@ -5284,38 +5407,39 @@ mod tests {
     }
 
     #[test]
-    fn a_tab_without_sessions_says_so() {
+    fn an_empty_sessions_tab_says_so_and_keeps_the_tab_bar_and_the_panes() {
         let mut a = tabbed_sessions_app();
-        a.set_sessions(vec![session_from(session(2, "s-t", "idle"), TASK_FILE)]);
-        a.on_key(key('f'));
+        a.set_sessions(vec![]);
         let s = screen(&a);
-        assert!(s.contains("No sessions in Review"), "{s}");
-        // the empty state still switches
-        a.on_key(key('f'));
-        assert!(screen(&a).contains("IDLE"));
-    }
-
-    #[test]
-    fn an_empty_tab_keeps_the_panes() {
-        let mut a = tabbed_sessions_app();
-        a.set_sessions(vec![session_from(session(2, "s-t", "idle"), TASK_FILE)]);
-        assert_eq!(a.on_key(key('f')), Effect::None);
-        let s = screen(&a);
-        assert!(s.contains("No sessions in Review"), "{s}");
+        assert!(s.contains("No Claude sessions"), "{s}");
+        assert!(!s.contains("No sessions in"), "{s}");
+        assert!(
+            s.contains("All 4 · Review 2 · Coding 3 · Sessions 0"),
+            "{s}"
+        );
         assert!(s.contains(" Detail "), "{s}");
         assert!(s.matches('┌').count() >= 2, "{s}");
+        // the empty state still switches
+        assert_eq!(a.on_key(key('f')), Effect::None);
+        assert_eq!(current_tab(&a), "All");
     }
 
     #[test]
-    fn items_of_a_session_view_entered_from_a_tab_stay_visible() {
+    fn items_of_a_session_entered_from_the_sessions_tab_stay_visible() {
         let mut a = tabbed_sessions_app();
         let item = in_session(from_file(question("r", 950.0), REVIEW_FILE), "s-r");
-        a.set_items(vec![item]);
-        a.on_key(key('f'));
+        let task = in_session(from_file(question("t", 940.0), TASK_FILE), "s-t");
+        a.set_items(vec![item, task]);
         assert_eq!(selected_pid(&a), Some(1));
         a.on_key(code(KeyCode::Enter));
         assert_eq!(a.session.as_deref(), Some("s-r"));
+        assert_eq!(current_tab(&a), "Sessions");
         assert_eq!(visible_ids(&a), vec!["r"]);
+        a.on_key(code(KeyCode::Esc));
+        a.on_key(key('j'));
+        a.on_key(code(KeyCode::Enter));
+        assert_eq!(a.session.as_deref(), Some("s-t"));
+        assert_eq!(visible_ids(&a), vec!["t"]);
     }
 
     // --- titles repeated by their text
