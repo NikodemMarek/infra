@@ -18,6 +18,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 
 ROOT = os.path.expanduser("~/projects")
 FZF = "fzf"  # the nix package pins the store paths
@@ -695,6 +697,42 @@ def cmd_pick(a):
     print(os.path.basename(home))
 
 
+def post_event(event):
+    """POST event to the event router; Fail says why not."""
+    url = os.environ.get("EVENT_ROUTER_URL", "http://127.0.0.1:7531") + "/events"
+    req = urllib.request.Request(url, data=json.dumps(event).encode(), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never through $http_proxy
+    try:
+        opener.open(req, timeout=5).close()
+    except urllib.error.HTTPError as e:
+        raise Fail(f"event router: {e.code} {e.read().decode(errors='replace').strip()}")
+    except OSError as e:  # URLError and timeouts
+        raise Fail(f"event router: {e}")
+
+
+def sender():
+    """Who a message is from: the shpool session, else the workspace, else the user at a terminal."""
+    if os.environ.get("SHPOOL_SESSION_NAME"):
+        return os.environ["SHPOOL_SESSION_NAME"]
+    project = os.environ.get("CLAUDE_PROJECT_DIR", "")
+    if re.search(r".\.agents$", os.path.dirname(project)):
+        return os.path.basename(project)
+    return "user" if "CLAUDECODE" not in os.environ else "unknown"
+
+
+def cmd_msg(a):
+    # event sessions run on untrusted text (GitLab); their messages would become instructions elsewhere
+    if os.environ.get("KNOWLEDGE_ORIGIN", "").startswith("event:"):
+        raise Fail("event sessions cannot send messages")
+    words = a.text[1:] if a.text[:1] == ["--"] else a.text
+    text = " ".join(words) if words else sys.stdin.read()
+    if not text.strip():
+        raise Fail("empty message")
+    post_event({"type": "session.message", "to": a.name, "from": sender(), "text": text})
+    sys.stderr.write(f"jw: queued for {a.name}\n")
+
+
 def cmd_info(a):
     """Print the workspace and stack of the current directory as JSON (the prompt runs this, so keep it fast)."""
     root = os.getcwd()
@@ -759,6 +797,10 @@ def parse_args():
     s = sub.add_parser("attach", aliases=["at"], help="attach to a Claude shpool session (default: pick one, this repo's first); a unique prefix of the name is enough")
     s.add_argument("name", nargs="?")
     s.set_defaults(func=cmd_attach)
+    s = sub.add_parser("msg", help="queue a message for a session started with jw; it arrives at the session's next turn end or user prompt, even if the session has not started yet")
+    s.add_argument("name", help="the session name (as in `shpool list`)")
+    s.add_argument("text", nargs=argparse.REMAINDER, help="words of the message (default: read stdin); a leading -- is dropped")
+    s.set_defaults(func=cmd_msg)
     sub.add_parser("ls", help="list the workspaces")
     return p.parse_args()
 

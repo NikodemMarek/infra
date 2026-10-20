@@ -16,6 +16,7 @@
     "Bash(jj rebase:*)"
     "Bash(jj upload:*)"
     "Bash(jw agent -d:*)"
+    "Bash(jw msg:*)"
 
     # Images attached to tasks by the capture tool.
     "Read(//run/user/*/agent-task/**)"
