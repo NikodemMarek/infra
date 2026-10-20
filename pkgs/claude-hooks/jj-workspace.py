@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Claude Code hooks: run isolated subagents in their own jj workspace.
 
-  create  (WorktreeCreate)  jj repo: `jj workspace add` at <repo>.agents/<name> (repo = the main
+  create  (WorktreeCreate)  jj repo: `jj workspace add` at <repo>.agents/<workspace> (repo = the main
                             workspace, even when called from a secondary one), whose @ is a new
                             change on top of the caller's current change (the "base"); sessions
                             (non-agent names) start on trunk() instead, or on the change in
@@ -13,7 +13,8 @@
   title   (statusline)      a session (s-MMDD-HHMMSS-N) that has a title: rename its jj workspace
                             to s-<title>, once. The directory keeps its name. Prints nothing.
 
-Agent worktrees are named `agent-<agent_id>`; SubagentStop's agent_id finds them again. Other
+Claude names agent worktrees `agent-<agent_id>`; their workspaces (and directories) are `a-<agent_id>`,
+but the registry is still keyed by Claude's name, so SubagentStop's agent_id finds them again. Other
 names (`claude --worktree foo`) get a jj workspace too, but are never squashed automatically.
 The registry lives in $CLAUDE_CONFIG_DIR/jj-agents/<repo-hash>/<name>.json (default
 ~/.claude/jj-agents), written only by `create` (which runs with the caller's cwd), so an agent
@@ -22,7 +23,7 @@ worktrees, so `create` and `stop` garbage-collect all repos' registries: idle ag
 are deleted after GC_AGE unless they hold changes (`stop` reports those once), entries whose
 directory is gone are forgotten. A failed or conflicted squash keeps the
 workspace and is reported. `ws` holds the current jj workspace name when it differs from the
-registry key (the directory name).
+registry key (agents: `a-<id>`, sessions after `title`). Older agent entries have no `ws`.
 """
 
 import fcntl
@@ -228,7 +229,7 @@ def integrate(st):
         raise Fail(f"base change {base[:8]} became divergent while squashing (a concurrent jj command?); "
                    f"check `jj log -r 'change_id({base})'`")
     cid, title = info[0].split("\x1f")
-    msg = f"jj: squashed {len(files)} file(s) from agent workspace {st['name']} into {cid} {title or '(no description)'}"
+    msg = f"jj: squashed {len(files)} file(s) from agent workspace {st.get('ws') or st['name']} into {cid} {title or '(no description)'}"
     conflicts = jj(root, "log", "--no-graph", "-r", f"change_id({base}):: & conflicts() ~ empty()",
                    "-T", 'change_id.short(8) ++ " "').split()
     if conflicts:
@@ -268,7 +269,7 @@ def has_work(st):
     d = st["dir"]
     if not os.path.isdir(d):
         return False
-    if st["name"] not in jj(d, "--ignore-working-copy", "workspace", "list", "-T", 'name ++ "\\n"').split():
+    if (st.get("ws") or st["name"]) not in jj(d, "--ignore-working-copy", "workspace", "list", "-T", 'name ++ "\\n"').split():
         return False  # already forgotten: jj tracks nothing there any more
     refresh(d)
     if len(jj(d, "log", "--no-graph", "-r", f"change_id({st['base']})", "-T", 'change_id ++ "\\n"',
@@ -319,6 +320,7 @@ def create(inp):
     if not root:
         return create_git(cwd, name, inp)
     reg = registry_of(store_of(root))
+    wsname = "a-" + name[len("agent-"):] if AGENT_NAME.match(name) else name
     with Lock(reg):
         st = load(reg_path(reg, name))
         if st and os.path.isdir(st["dir"]):
@@ -328,10 +330,10 @@ def create(inp):
         if st:  # registered, but its directory is gone
             jj(st["root"], "--ignore-working-copy", "workspace", "forget", st.get("ws") or name, check=False)
             drop(reg, name)
-        elif name in jj(root, "workspace", "list", "-T", 'name ++ "\\n"').split():
-            raise Fail(f"a jj workspace named {name!r} already exists and isn't managed by this hook")
+        elif wsname in jj(root, "workspace", "list", "-T", 'name ++ "\\n"').split():
+            raise Fail(f"a jj workspace named {wsname!r} already exists and isn't managed by this hook")
         agents = f"{home_of(root)}.agents"  # flat, even when the caller is itself in a workspace
-        d = f"{agents}/{name}"
+        d = f"{agents}/{wsname}"
         if os.path.lexists(d):
             raise Fail(f"{d} already exists")
         kind = "agent" if AGENT_NAME.match(name) else "session"
@@ -350,16 +352,19 @@ def create(inp):
         if not base:
             base = jj(root, "log", "--no-graph", "-r", "@", "-T", "change_id").strip()  # snapshots
         os.makedirs(os.path.dirname(d), exist_ok=True)
-        jj(root, "workspace", "add", f"--name={name}", "-r", f"change_id({base})", d)
+        jj(root, "workspace", "add", f"--name={wsname}", "-r", f"change_id({base})", d)
         try:
-            save(reg, {"name": name, "root": root, "dir": d, "agents": agents, "base": base,
-                       "kind": kind,
-                       "touched": time.time()})
+            st = {"name": name, "root": root, "dir": d, "agents": agents, "base": base,
+                  "kind": kind,
+                  "touched": time.time()}
+            if wsname != name:
+                st["ws"] = wsname
+            save(reg, st)
         except Exception:
-            jj(root, "--ignore-working-copy", "workspace", "forget", name, check=False)
+            jj(root, "--ignore-working-copy", "workspace", "forget", wsname, check=False)
             shutil.rmtree(d, ignore_errors=True)
             raise
-        log(f"created jj workspace {name} at {d} on top of {base[:8]}")
+        log(f"created jj workspace {wsname} at {d} on top of {base[:8]}")
     gc()
     return d
 
