@@ -51,7 +51,7 @@ python3Packages.buildPythonApplication {
     "${handlersDir}"
     "--set"
     "EVENT_ROUTER_INBOX"
-    (lib.escapeShellArg (lib.concatStringsSep " " inbox))
+    (lib.concatStringsSep "," inbox)
     "--set"
     "EVENT_ROUTER_PORT"
     (toString port)

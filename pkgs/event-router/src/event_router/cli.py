@@ -83,7 +83,7 @@ def main() -> None:
 
     handlers = os.environ.get("EVENT_ROUTER_HANDLERS")
     try:
-        inbox = Inbox(os.environ.get("EVENT_ROUTER_INBOX", "").split())
+        inbox = Inbox([t for t in os.environ.get("EVENT_ROUTER_INBOX", "").split(",") if t])
         serve(_port(), Dispatcher(Path(handlers) if handlers else None), inbox)
     except KeyboardInterrupt:
         pass
