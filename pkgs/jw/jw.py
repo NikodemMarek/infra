@@ -626,7 +626,11 @@ def cmd_agent(a):
         return
     # if claude has exited, attach would silently create a plain shell session under this name; checking narrows the
     # race, it doesn't close it
-    if name not in shpool_status():
+    # the daemon can still count the exited `attach -b` client as attached for a moment, and refuses a second one then
+    deadline = time.monotonic() + 5
+    while (state := shpool_status().get(name)) == "attached" and time.monotonic() < deadline:
+        time.sleep(0.1)
+    if state is None:
         raise Fail(f"session {name} ended before attaching")
     attach(name)
 
