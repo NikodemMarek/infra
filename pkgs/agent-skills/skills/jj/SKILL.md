@@ -102,6 +102,8 @@ Useful template fields: `change_id`, `commit_id`, `description`, `bookmarks`, `l
 | `jj upload --draft` | new MRs open as Draft |
 | `jj sync` | fetches, cleans up commits the fetch revived, rebases the stack onto trunk (dropping merged changes), and reconciles each MR branch: commits that exist only on the remote are squashed into the change if it is unchanged locally since the last push; if both changed, a `remote changes on <branch>` change is put after it and sync fails; if it succeeds, pulls the title/description of open MRs into the changes |
 
+Independent changes are separate stacks, each based on what it needs (possibly a shared base change, whose MR both stacks share). `jj upload` uploads the line through `@`, so run it with `@` at each stack's tip (or `-r` per stack).
+
 Script: the `jj-upload` package, with the jj aliases `upload` and `sync`. It is configured under `[upload]` in the jj config.
 
 Rules:
