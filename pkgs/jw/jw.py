@@ -599,6 +599,10 @@ def cmd_agent(a):
             name, i = f"{base}-{i}", i + 1
         d = add_workspace(home, a.revision or "trunk()", name, resolve_in)
         env = agent_env(os.environ) | {"CLAUDE_ORIGIN_FILE": write_origin(task_origin(" ".join(prompt)))}
+        # started from a service (task.new) there is no terminal env, and claude falls back to no colors
+        if env.get("TERM", "dumb") == "dumb":
+            env["TERM"] = "xterm-256color"
+        env.setdefault("COLORTERM", "truecolor")
         # the environment and the prompt go only into this 0600 file: shpool does not pass on the client's
         # environment, and its -c is split like shell words
         fd, job = tempfile.mkstemp(prefix="jw-agent-", dir=rundir)
