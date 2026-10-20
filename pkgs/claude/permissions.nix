@@ -17,6 +17,9 @@
     "Bash(jj upload:*)"
     "Bash(jw agent -d:*)"
 
+    # Images attached to tasks by the capture tool.
+    "Read(//run/user/*/agent-task/**)"
+
     # Read-only glab. Not `glab api` (can POST/PUT), `glab ci view` or
     # `glab issue board view` (interactive TUIs that can run/retry jobs).
     "Bash(glab mr list:*)"
