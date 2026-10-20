@@ -126,6 +126,20 @@ impl Out {
     }
 }
 
+#[test]
+fn help_shows_flag_and_arg_names() {
+    let e = Env::empty();
+    let help = |args: &[&str]| e.tm(args).ok().stdout.clone();
+    let h = help(&["list", "--help"]);
+    assert!(h.contains("--tag <TAG>"), "{h}");
+    assert!(h.contains("--due-before <DATE>"), "{h}");
+    let h = help(&["week", "--help"]);
+    assert!(h.contains("[WEEK]"), "{h}");
+    let h = help(&["take", "--help"]);
+    assert!(h.contains("<REF>..."), "{h}");
+    assert!(h.contains("--week <WEEK>"), "{h}");
+}
+
 fn with_line(base: &str, line: &str) -> String {
     format!("{base}{line}\n")
 }
