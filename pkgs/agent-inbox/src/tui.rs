@@ -1373,13 +1373,6 @@ fn origin_lines(app: &App, file: &str) -> Vec<Line<'static>> {
     let Some(origin) = app.origin(file) else {
         return Vec::new();
     };
-    let mut lines = Vec::new();
-    if let Some(label) = app.origin_label(file) {
-        lines.push(Line::styled(label, bold()));
-    }
-    if !origin.url.is_empty() {
-        lines.push(Line::styled(clean(&origin.url), dim()));
-    }
     let text = if origin.description.is_empty() {
         &origin.prompt
     } else {
@@ -1390,17 +1383,47 @@ fn origin_lines(app: &App, file: &str) -> Vec<Line<'static>> {
         .map(|l| truncate(l, ORIGIN_LINE_CHARS))
         .collect::<Vec<_>>()
         .join("\n");
+    let mut lines = Vec::new();
+    if let Some(label) = app
+        .origin_label(file)
+        .filter(|label| !starts_with_loosely(&text, label))
+    {
+        lines.push(Line::styled(label, bold()));
+    }
+    if !origin.url.is_empty() {
+        lines.push(Line::styled(clean(&origin.url), dim()));
+    }
     lines.extend(lines_of(&text, Style::new()));
     lines
 }
 
+/// Whether `text` starts with `head`, comparing only letters and digits, ignoring case: a title
+/// cut from the text (and stripped of markdown) is not worth repeating above it.
+fn starts_with_loosely(text: &str, head: &str) -> bool {
+    let norm = |s: &str| -> String {
+        s.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    norm(text).starts_with(&norm(head))
+}
+
 /// Items of an unknown kind (and questions without any): the title and what else there is.
 fn other_lines(item: &Item, lines: &mut Vec<Line<'static>>) {
-    lines.push(Line::styled(clean(item.title()), bold()));
-    for value in [item.command(), item.prompt(), item.body()] {
-        if !value.is_empty() && value != item.title() {
-            lines.extend(lines_of(value, Style::new()));
-        }
+    let title = item.title();
+    let values: Vec<&str> = [item.command(), item.prompt(), item.body()]
+        .into_iter()
+        .filter(|v| !v.is_empty() && *v != title)
+        .collect();
+    if !values
+        .first()
+        .is_some_and(|v| starts_with_loosely(v, title))
+    {
+        lines.push(Line::styled(clean(title), bold()));
+    }
+    for value in values {
+        lines.extend(lines_of(value, Style::new()));
     }
 }
 
@@ -1539,27 +1562,9 @@ fn border_style(focused: bool) -> Style {
 fn render(f: &mut Frame, app: &App) {
     let p = panes(f.area());
     render_header(f, app, p.header);
-    let list_shown = matches!(
-        app.mode,
-        Mode::List | Mode::ConfirmDismissAll | Mode::Task { .. }
-    );
     if app.view == View::Sessions {
-        if app.visible_sessions().is_empty() {
-            let text = match app.tab_def(app.tab) {
-                Some(tab) => format!("No sessions in {}", tab.name),
-                None => "No Claude sessions".to_string(),
-            };
-            render_empty(f, &p, &text);
-        } else {
-            render_sessions(f, app, p.list);
-            render_session_detail(f, app, p.detail);
-        }
-    } else if app.visible().is_empty() && list_shown {
-        let text = match app.tab_def(app.tab) {
-            Some(tab) => format!("No pending items in {}", tab.name),
-            None => "No pending requests".to_string(),
-        };
-        render_empty(f, &p, &text);
+        render_sessions(f, app, p.list);
+        render_session_detail(f, app, p.detail);
     } else {
         render_list(f, app, p.list);
         render_detail(f, app, p.detail);
@@ -1609,16 +1614,16 @@ fn render_task(f: &mut Frame, p: &Panes, buf: &str) {
     );
 }
 
-/// `text` in the middle of the body.
-fn render_empty(f: &mut Frame, p: &Panes, text: &str) {
-    let body = p.list.union(p.detail);
-    let row = Rect::new(body.x, body.y + body.height / 2, body.width, 1).intersection(body);
-    f.render_widget(
-        Paragraph::new(text)
-            .style(dim())
-            .alignment(Alignment::Center),
-        row,
-    );
+/// The only row of a list with nothing in it.
+fn empty_row(app: &App) -> ListItem<'static> {
+    let sessions = app.view == View::Sessions;
+    let text = match (app.tab_def(app.tab), sessions) {
+        (Some(tab), true) => format!("No sessions in {}", clean(&tab.name)),
+        (None, true) => "No Claude sessions".to_string(),
+        (Some(tab), false) => format!("No pending items in {}", clean(&tab.name)),
+        (None, false) => "No pending requests".to_string(),
+    };
+    ListItem::new(Line::styled(text, dim()))
 }
 
 fn render_header(f: &mut Frame, app: &App, area: Rect) {
@@ -1684,10 +1689,13 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
         .unwrap_or(0)
         .min(CONTEXT_MAX_WIDTH)
         .min(width / 3);
-    let rows: Vec<ListItem> = visible
+    let mut rows: Vec<ListItem> = visible
         .iter()
         .map(|i| ListItem::new(row(app, i, width, context_width)))
         .collect();
+    if rows.is_empty() {
+        rows.push(empty_row(app));
+    }
     let list = List::new(rows)
         .block(block)
         .highlight_style(Style::new().add_modifier(Modifier::REVERSED));
@@ -1755,14 +1763,18 @@ fn render_sessions(f: &mut Frame, app: &App, area: Rect) {
         .unwrap_or(0)
         .min(CONTEXT_MAX_WIDTH)
         .min(width / 3);
-    let rows: Vec<ListItem> = sessions
+    let mut rows: Vec<ListItem> = sessions
         .iter()
         .map(|s| ListItem::new(session_row(app, s, width, context_width)))
         .collect();
+    if rows.is_empty() {
+        rows.push(empty_row(app));
+    }
     let list = List::new(rows)
         .block(block)
         .highlight_style(Style::new().add_modifier(Modifier::REVERSED));
-    let mut state = ListState::default().with_selected(Some(app.session_sel));
+    let mut state =
+        ListState::default().with_selected((!sessions.is_empty()).then_some(app.session_sel));
     f.render_stateful_widget(list, area, &mut state);
 }
 
@@ -1899,6 +1911,7 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
         [inner, Rect::default()]
     };
     let (lines, cursor) = match (item, &app.mode) {
+        (None, Mode::List | Mode::ConfirmDismissAll | Mode::Task { .. }) => (Vec::new(), None),
         (None, _) => (vec![Line::styled("item is gone", dim())], None),
         (Some(item), Mode::Answer { st, .. }) if !app.raw => answer_view(item, st),
         (Some(item), _) => (detail_view(app, item), None),
@@ -2588,10 +2601,20 @@ mod tests {
     }
 
     #[test]
-    fn empty_state_is_centred_text() {
+    fn empty_inbox_keeps_the_panes() {
         let s = screen(&app(vec![]));
-        assert!(s.contains("No pending requests"));
-        assert!(s.contains("0 pending"));
+        assert!(s.contains("No pending requests"), "{s}");
+        assert!(s.contains("0 pending"), "{s}");
+        assert!(s.contains(" Inbox ") && s.contains(" Detail "), "{s}");
+        assert!(s.matches('┌').count() >= 2, "{s}");
+    }
+
+    #[test]
+    fn empty_sessions_view_keeps_the_panes() {
+        let s = screen(&sessions_app(vec![], vec![]));
+        assert!(s.contains("No Claude sessions"), "{s}");
+        assert!(s.contains(" Sessions ") && s.contains(" Detail "), "{s}");
+        assert!(s.matches('┌').count() >= 2, "{s}");
     }
 
     #[test]
@@ -4492,7 +4515,9 @@ mod tests {
         a.on_key(key('N'));
         let s = screen(&a);
         assert!(s.contains(" New agent "), "{s}");
-        assert!(!s.contains(" Detail "), "{s}");
+        for shown in [" Inbox ", " Detail ", "No pending requests"] {
+            assert!(s.contains(shown), "{shown:?}:\n{s}");
+        }
     }
 
     #[test]
@@ -5355,6 +5380,17 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_tab_keeps_the_panes() {
+        let mut a = tabbed_sessions_app();
+        a.set_sessions(vec![session_from(session(2, "s-t", "idle"), TASK_FILE)]);
+        assert_eq!(a.on_key(key('f')), Effect::None);
+        let s = screen(&a);
+        assert!(s.contains("No sessions in Review"), "{s}");
+        assert!(s.contains(" Detail "), "{s}");
+        assert!(s.matches('┌').count() >= 2, "{s}");
+    }
+
+    #[test]
     fn items_of_a_session_view_entered_from_a_tab_stay_visible() {
         let mut a = tabbed_sessions_app();
         let item = in_session(from_file(question("r", 950.0), REVIEW_FILE), "s-r");
@@ -5364,5 +5400,93 @@ mod tests {
         a.on_key(code(KeyCode::Enter));
         assert_eq!(a.session.as_deref(), Some("s-r"));
         assert_eq!(visible_ids(&a), vec!["r"]);
+    }
+
+    // --- titles repeated by their text
+
+    fn plain(lines: &[Line]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| &*s.content).collect::<String>())
+            .collect()
+    }
+
+    fn waiting_titled(title: &str, body: &str) -> Item {
+        let mut w = waiting("w", body);
+        w.event["title"] = json!(title);
+        w
+    }
+
+    #[test]
+    fn starts_with_loosely_compares_letters_and_digits_only() {
+        for (text, head) in [
+            ("On why: `jw` was set", "On why jw was"),
+            ("Hello, World", "hello world"),
+            ("anything", ""),
+        ] {
+            assert!(starts_with_loosely(text, head), "{text:?} {head:?}");
+        }
+        for (text, head) in [("Hello", "Hello world"), ("Other text", "Title"), ("", "x")] {
+            assert!(!starts_with_loosely(text, head), "{text:?} {head:?}");
+        }
+    }
+
+    #[test]
+    fn other_lines_skip_a_title_the_body_starts_with() {
+        let title = "On why Shift+N skips: jw was set";
+        let body = "On why Shift+N skips: `jw` was set to write the thing";
+        let mut lines = Vec::new();
+        other_lines(&waiting_titled(title, body), &mut lines);
+        assert_eq!(plain(&lines), vec![body.to_string()]);
+
+        let mut lines = Vec::new();
+        other_lines(
+            &waiting_titled("Build finished", "Something else entirely"),
+            &mut lines,
+        );
+        assert_eq!(
+            plain(&lines),
+            vec![
+                "Build finished".to_string(),
+                "Something else entirely".into()
+            ]
+        );
+    }
+
+    #[test]
+    fn detail_shows_a_title_the_body_starts_with_once() {
+        let item = waiting_titled("Fix the *bug* now", "Fix the bug now, then more");
+        let a = app(vec![item.clone()]);
+        let text = plain(&detail_view(&a, &item)).join("\n");
+        assert_eq!(text.matches("Fix the").count(), 1, "{text}");
+        assert!(text.contains("then more"), "{text}");
+    }
+
+    #[test]
+    fn origin_lines_skip_a_label_the_description_starts_with() {
+        let origin = |description: &str| Origin {
+            target: "MergeRequest".into(),
+            iid: Some(12),
+            title: "Fix foo".into(),
+            description: description.into(),
+            ..Origin::default()
+        };
+        let mut a = app(vec![]);
+        a.origins.insert(
+            ORIGIN_FILE.into(),
+            Some(origin("!12 Fix foo\n\nMore details")),
+        );
+        let text = plain(&origin_lines(&a, ORIGIN_FILE)).join("\n");
+        assert_eq!(text.matches("Fix foo").count(), 1, "{text}");
+        assert!(text.contains("More details"), "{text}");
+
+        a.origins
+            .insert(ORIGIN_FILE.into(), Some(origin("Something different")));
+        let lines = plain(&origin_lines(&a, ORIGIN_FILE));
+        assert_eq!(lines.first().map(String::as_str), Some("!12 Fix foo"));
+        assert!(
+            lines.contains(&"Something different".to_string()),
+            "{lines:?}"
+        );
     }
 }
