@@ -2,7 +2,7 @@
 """jw: quick jj workspaces for the repos under one root (~/projects unless the package sets another), at <repo>.agents/<name> (the layout the claude wrapper uses too).
 
 new, cd, rm and clone print the directory to go to on stdout; the `jw` fish function cds there.
-Everything else goes to stderr.
+pick prints the chosen repo's name on stdout. Everything else goes to stderr.
 
 agent always starts Claude in a new workspace (s-*, like `jw new`) in a shpool session of the same name.
 """
@@ -112,10 +112,10 @@ def repo_home(arg):
 
 
 def route(task):
-    """Guess the repo for the task with `knowledge route`; None = no confident guess."""
+    """Guess the repo for the task with `knowledge route`: (repo, reason), repo None = no confident guess."""
     names = repos()
     if not names:
-        return None
+        return None, f"no jj repos under {ROOT}"
     sys.stderr.write("jw: choosing a repo...\n")
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}  # a nested claude refuses to start otherwise
     try:
@@ -126,18 +126,16 @@ def route(task):
             raise OSError(last or f"exit {p.returncode}")
     except (OSError, subprocess.TimeoutExpired) as e:
         why = "timed out" if isinstance(e, subprocess.TimeoutExpired) else e
-        sys.stderr.write(f"jw: could not choose a repo ({why}), pick one\n")
-        return None
+        return None, f"routing failed: {why}"
     try:
         answer = json.loads(p.stdout)
         repo, reason = answer["repo"], answer.get("reason", "")
     except (ValueError, TypeError, KeyError):  # not JSON, not an object, or no repo key
         repo, reason = None, "bad answer"
     if repo not in names:
-        sys.stderr.write(f"jw: no repo fits clearly ({reason}), pick one\n")
-        return None
+        return None, reason or "no clear match"
     sys.stderr.write(f"jw: {repo}: {reason}\n")
-    return repo
+    return repo, reason
 
 
 def in_use(d, ignore=()):
@@ -553,6 +551,8 @@ def write_origin(origin):
 
 
 def cmd_agent(a):
+    if os.environ.get("KNOWLEDGE_ORIGIN", "").startswith("event:"):  # untrusted comment text must not hand off
+        raise Fail("event sessions cannot start agents")
     # argparse keeps the `--` in REMAINDER; after it everything is the prompt, even a first word naming a repo
     args, literal = (a.args[1:], True) if a.args[:1] == ["--"] else (a.args, False)
     first = args[0] if args and not literal else None
@@ -563,16 +563,27 @@ def cmd_agent(a):
         elif prompt[:1] and prompt[0] in ("-r", "--revision", "-d", "--detach"):
             raise Fail("options go before the repo")
     else:
+        if first and args[1:2] == ["--"]:  # `X -- prompt`: X can only be meant as the repo
+            raise Fail(f"{first}: not a repo")
         if first and os.path.exists(f"{ROOT}/{first}"):
             raise Fail(f"{first}: not a jj repo")
         prompt = args
         try:
             home = locate()[1]
         except Fail:  # not in a repo: the prompt says which, else pick one
-            if not sys.stdin.isatty():
-                raise Fail("no repo: pass one (no terminal to pick or route)")
-            guess = route(" ".join(prompt)) if prompt else None
-            home = f"{ROOT}/{guess}" if guess else repo_home(None)
+            task = " ".join(prompt)
+            tty = sys.stdin.isatty()
+            if not tty and not task.strip():
+                raise Fail("no repo: pass one (no terminal to pick)")
+            guess, why = route(task) if task.strip() else (None, "")
+            if guess:
+                home = f"{ROOT}/{guess}"
+            elif not tty:
+                raise Fail(f"no repo chosen ({why})")
+            else:
+                if why:
+                    sys.stderr.write(f"jw: no repo chosen ({why}), pick one\n")
+                home = repo_home(None)
     # the default trunk() is resolved in home without a snapshot
     resolve_in = resolve_dir(home) if a.revision else None
     fetch(home)
@@ -608,6 +619,7 @@ def cmd_agent(a):
                 os.unlink(job)
             raise Fail(f"shpool attach failed for session {name}" if status is not None else "")
     if a.detach:
+        sys.stderr.write(f"jw: started {name} in {os.path.basename(home)}\n")
         sys.stderr.write(f"jw attach {name}\n")  # agent-inbox parses this line (its `N`)
         return
     # if claude has exited, attach would silently create a plain shell session under this name; checking narrows the
@@ -671,6 +683,18 @@ def cmd_attach(a):
     attach(pick(session_rows(found, state, current), empty="no Claude shpool sessions").split("\t")[0])
 
 
+def cmd_pick(a):
+    if not sys.stdin.isatty():
+        raise Fail("no terminal to pick a repo")
+    try:
+        home = repo_home(None)
+    except Fail as e:
+        if str(e) == "cancelled":
+            raise KeyboardInterrupt  # exit 130
+        raise
+    print(os.path.basename(home))
+
+
 def cmd_info(a):
     """Print the workspace and stack of the current directory as JSON (the prompt runs this, so keep it fast)."""
     root = os.getcwd()
@@ -725,6 +749,8 @@ def parse_args():
     s.set_defaults(func=cmd_prune)
     s = sub.add_parser("info", help="print the jj workspace and stack of the current directory as JSON")
     s.set_defaults(func=cmd_info)
+    s = sub.add_parser("pick", help="pick a repo (the current one first) and print its name")
+    s.set_defaults(func=cmd_pick)
     s = sub.add_parser("agent", aliases=["a"], help="run Claude in a shpool session in a new workspace of a repo (default: this one; outside a repo the one the prompt fits, else pick one)")
     s.add_argument("-d", "--detach", action="store_true", help="start the session in the background")
     s.add_argument("-r", "--revision", help="revision, bookmark or bookmark@origin to start the new workspace from (default: trunk()); when given in this repo, it is resolved in the current workspace")
