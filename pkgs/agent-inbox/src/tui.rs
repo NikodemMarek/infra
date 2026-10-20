@@ -2,10 +2,10 @@
 //! to carry out), `render` draws it, `run` is the loop around the router client.
 //!
 //! Layout: a header line, the list of items next to (below, on narrow terminals) a detail pane
-//! for the selected item, and a footer with key hints or the last status message. `f` cycles
+//! for the selected item, and a footer with key hints or the last status message. Tab cycles
 //! through All, the configured filter tabs (`Tab`, which filter the items by the kind of their
 //! origin) and the Sessions tab: the same layout over the live Claude sessions (list and detail
-//! of the selected session; Enter focuses the detail like an item's), all of them whatever
+//! of the selected session; Enter opens the detail like an item's), all of them whatever
 //! their origin. `N` (everywhere) asks for a task
 //! in a popup (Ctrl+J adds a line) and starts a new agent for it (`jw agent -d`). Only the events
 //! and sessions of agents with an origin (a merge request, an issue or a task, see `Origin`) are
@@ -530,8 +530,8 @@ impl App {
             KeyCode::Char('g') => self.selected = 0,
             KeyCode::Char('G') => self.selected = last,
             KeyCode::Char('N') => self.mode = Mode::Task { buf: String::new() },
-            KeyCode::Char('f') => self.next_tab(),
-            KeyCode::Enter | KeyCode::Tab | KeyCode::Char('l') => {
+            KeyCode::Tab => self.next_tab(),
+            KeyCode::Enter | KeyCode::Char('l') => {
                 if let Some(id) = self.selected_item().map(|i| i.id.clone()) {
                     self.open(id, code);
                 }
@@ -561,7 +561,7 @@ impl App {
         let last = self.visible_sessions().len().saturating_sub(1);
         match code {
             KeyCode::Char('q') => return Effect::Quit,
-            KeyCode::Char('f') => self.next_tab(),
+            KeyCode::Tab => self.next_tab(),
             KeyCode::Char('j') | KeyCode::Down => {
                 self.session_sel = (self.session_sel + 1).min(last)
             }
@@ -570,7 +570,7 @@ impl App {
             }
             KeyCode::Char('g') => self.session_sel = 0,
             KeyCode::Char('G') => self.session_sel = last,
-            KeyCode::Enter | KeyCode::Tab | KeyCode::Char('l') => {
+            KeyCode::Enter | KeyCode::Char('l') => {
                 if let Some(pid) = self.selected_session().map(|s| s.pid) {
                     self.mode = Mode::SessionDetail { pid, scroll: 0 };
                 }
@@ -628,8 +628,10 @@ impl App {
         let scroll = scroll_key(scroll, max, code).unwrap_or(scroll);
         self.mode = Mode::SessionDetail { pid, scroll };
         match code {
-            KeyCode::Esc | KeyCode::Char('q' | 'h') | KeyCode::Backspace | KeyCode::Tab => {
-                self.mode = Mode::List
+            KeyCode::Esc | KeyCode::Char('q' | 'h') | KeyCode::Backspace => self.mode = Mode::List,
+            KeyCode::Tab => {
+                self.mode = Mode::List;
+                self.next_tab();
             }
             KeyCode::Char('a' | 'x' | 'o') => return self.session_key(Some(pid), code),
             _ => {}
@@ -730,8 +732,10 @@ impl App {
             return Effect::None;
         }
         match code {
-            KeyCode::Esc | KeyCode::Char('q' | 'h') | KeyCode::Backspace | KeyCode::Tab => {
-                self.mode = Mode::List
+            KeyCode::Esc | KeyCode::Char('q' | 'h') | KeyCode::Backspace => self.mode = Mode::List,
+            KeyCode::Tab => {
+                self.mode = Mode::List;
+                self.next_tab();
             }
             code => {
                 if let Some(effect) = self.item_key(id, code) {
@@ -929,9 +933,9 @@ impl App {
         )
     }
 
-    /// The hint for `f`, which names the tab it switches to.
+    /// The hint for Tab, which names the tab it switches to.
     fn tab_hint(&self) -> (&str, &str) {
-        ("f", self.tab_name(self.following_tab()))
+        ("tab", self.tab_name(self.following_tab()))
     }
 
     /// The hints of the keys of `session_key` that `session` allows.
@@ -999,6 +1003,7 @@ impl App {
                     h.push(("o", "open"));
                 }
                 h.push(("?", "raw"));
+                h.push(self.tab_hint());
                 h.push(("esc", "back"));
                 h
             }
@@ -1008,6 +1013,7 @@ impl App {
                 };
                 let mut h = vec![("j/k", "scroll")];
                 h.extend(self.session_hints(session));
+                h.push(self.tab_hint());
                 h.push(("esc", "back"));
                 h
             }
@@ -2742,9 +2748,18 @@ mod tests {
                 ],
             ),
             (vec![question("a", 990.0)], vec![key('D')]),
-            (vec![sudo("s")], vec![key('f'), key('x'), key('a')]),
-            (vec![sudo("s")], vec![key('f'), code(KeyCode::Enter)]),
-            (vec![sudo("s")], vec![key('f'), key('f'), key('f')]),
+            (
+                vec![sudo("s")],
+                vec![code(KeyCode::Tab), key('x'), key('a')],
+            ),
+            (
+                vec![sudo("s")],
+                vec![code(KeyCode::Tab), code(KeyCode::Enter)],
+            ),
+            (
+                vec![sudo("s")],
+                vec![code(KeyCode::Tab), code(KeyCode::Tab), code(KeyCode::Tab)],
+            ),
             (vec![], vec![key('N'), key('a'), ctrl_j(), key('b')]),
         ];
         for (w, h) in [(20, 5), (1, 1), (2, 2)] {
@@ -2893,16 +2908,32 @@ mod tests {
     }
 
     #[test]
-    fn tab_moves_focus_between_list_and_detail() {
+    fn tab_in_a_detail_closes_it_and_switches_the_tab() {
         let mut a = app(vec![question("a", 990.0)]);
-        a.on_key(code(KeyCode::Tab));
+        a.on_key(code(KeyCode::Enter));
         assert!(matches!(a.mode, Mode::Detail { .. }));
-        a.on_key(code(KeyCode::Tab));
+        assert_eq!(a.on_key(code(KeyCode::Tab)), Effect::None);
         assert!(matches!(a.mode, Mode::List));
-        // nothing to focus
+        assert_eq!(current_tab(&a), "Sessions");
+        a.set_sessions(vec![session(1, "s-a", "idle")]);
+        open_session(&mut a);
+        assert_eq!(a.on_key(code(KeyCode::Tab)), Effect::None);
+        assert!(matches!(a.mode, Mode::List));
+        assert_eq!(current_tab(&a), "All");
+        assert_eq!(selected_id(&a), Some("a"));
+        // nothing to open
         let mut a = app(vec![]);
         a.on_key(code(KeyCode::Enter));
         assert!(matches!(a.mode, Mode::List));
+    }
+
+    #[test]
+    fn f_does_nothing() {
+        let mut a = tabbed_sessions_app();
+        let tab = a.tab;
+        assert_eq!(a.on_key(key('f')), Effect::None);
+        assert_eq!(a.tab, tab);
+        assert!(a.hints().iter().all(|(k, _)| *k != "f"));
     }
 
     #[test]
@@ -3642,13 +3673,13 @@ mod tests {
         a.tab_name(a.tab)
     }
 
-    /// Presses `f` until the Sessions tab is reached.
+    /// Presses Tab until the Sessions tab is reached.
     fn to_sessions_tab(a: &mut App) {
         for _ in 0..8 {
             if current_tab(a) == "Sessions" {
                 return;
             }
-            assert_eq!(a.on_key(key('f')), Effect::None);
+            assert_eq!(a.on_key(code(KeyCode::Tab)), Effect::None);
         }
         panic!("no Sessions tab");
     }
@@ -3675,7 +3706,7 @@ mod tests {
         assert_eq!((a.tab, current_tab(&a)), (0, "All"));
         assert!(matches!(a.mode, Mode::List));
         assert!(a.hints().iter().all(|(k, _)| *k != "S"), "{:?}", a.hints());
-        a.on_key(key('f'));
+        a.on_key(code(KeyCode::Tab));
         assert_eq!(current_tab(&a), "Sessions");
         assert_eq!(a.on_key(key('S')), Effect::None);
         assert_eq!(current_tab(&a), "Sessions");
@@ -3684,7 +3715,7 @@ mod tests {
         // the inbox keys do nothing on the sessions tab, q quits from every tab
         assert_eq!(a.on_key(key('d')), Effect::None);
         assert_eq!(a.on_key(key('q')), Effect::Quit);
-        a.on_key(key('f'));
+        a.on_key(code(KeyCode::Tab));
         assert_eq!(a.on_key(key('q')), Effect::Quit);
     }
 
@@ -3753,7 +3784,7 @@ mod tests {
         );
         assert!(!s.contains("title-a"));
         // the header counts sessions on every tab
-        a.on_key(key('f'));
+        a.on_key(code(KeyCode::Tab));
         assert_eq!(current_tab(&a), "All");
         assert!(screen(&a).contains("4 sessions (1 waiting)"));
     }
@@ -3993,7 +4024,7 @@ mod tests {
         assert!(matches!(a.mode, Mode::Task { .. }));
         // the item tabs, with and without items
         let mut a = tabbed_sessions_app();
-        a.on_key(key('f'));
+        a.on_key(code(KeyCode::Tab));
         assert!(screen(&a).contains("N new"));
         assert_eq!(a.on_key(key('N')), Effect::None);
         assert!(matches!(a.mode, Mode::Task { .. }));
@@ -4700,23 +4731,23 @@ mod tests {
         let s = screen(&a);
         assert!(s.contains("All 2 · Sessions 3"), "{s}");
         assert!(s.contains("title-a") && !s.contains("IDLE"), "{s}");
-        assert!(a.hints().contains(&("f", "Sessions")), "{:?}", a.hints());
-        assert!(screen(&a).contains("f Sessions"));
-        assert_eq!(a.on_key(key('f')), Effect::None);
+        assert!(a.hints().contains(&("tab", "Sessions")), "{:?}", a.hints());
+        assert!(screen(&a).contains("tab Sessions"));
+        assert_eq!(a.on_key(code(KeyCode::Tab)), Effect::None);
         assert_eq!(current_tab(&a), "Sessions");
         assert_eq!(visible_pids(&a), vec![1, 2, 3]);
         let s = screen(&a);
         assert!(s.contains("All 2 · Sessions 3"), "{s}");
         assert!(s.contains("IDLE") && !s.contains("title-a"), "{s}");
-        assert!(a.hints().contains(&("f", "All")), "{:?}", a.hints());
-        assert!(screen(&a).contains("f All"));
-        assert_eq!(a.on_key(key('f')), Effect::None);
+        assert!(a.hints().contains(&("tab", "All")), "{:?}", a.hints());
+        assert!(screen(&a).contains("tab All"));
+        assert_eq!(a.on_key(code(KeyCode::Tab)), Effect::None);
         assert_eq!(current_tab(&a), "All");
         assert!(screen(&a).contains("title-a"));
     }
 
     #[test]
-    fn f_cycles_through_the_tabs_and_back() {
+    fn tab_cycles_through_the_tabs_and_back() {
         let mut a = tabbed_app();
         a.set_sessions(vec![
             session_from(session(1, "s-r", "idle"), REVIEW_FILE),
@@ -4736,7 +4767,7 @@ mod tests {
             ("Sessions", "All"),
             ("All", "Review"),
         ] {
-            assert_eq!(a.on_key(key('f')), Effect::None);
+            assert_eq!(a.on_key(code(KeyCode::Tab)), Effect::None);
             assert_eq!(a.tab_name(a.tab), name);
             match name {
                 "Review" => assert_eq!(visible_ids(&a), vec!["s", "r"]),
@@ -4744,8 +4775,8 @@ mod tests {
                 "Sessions" => assert_eq!(visible_pids(&a), vec![1, 2, 3]),
                 _ => assert_eq!(visible_ids(&a), vec!["s", "r", "t", "u"]),
             }
-            assert!(a.hints().contains(&("f", next)), "{:?}", a.hints());
-            assert!(screen(&a).contains(&format!("f {next}")));
+            assert!(a.hints().contains(&("tab", next)), "{:?}", a.hints());
+            assert!(screen(&a).contains(&format!("tab {next}")));
         }
     }
 
@@ -4761,11 +4792,11 @@ mod tests {
             bold_spans.map(|s| s.content.to_string()).collect()
         };
         assert_eq!(bold_tabs(&a), vec!["Sessions 3"]);
-        a.on_key(key('f'));
+        a.on_key(code(KeyCode::Tab));
         assert_eq!(bold_tabs(&a), vec!["All 4"]);
-        a.on_key(key('f'));
+        a.on_key(code(KeyCode::Tab));
         assert_eq!(bold_tabs(&a), vec!["Review 2"]);
-        a.on_key(key('f'));
+        a.on_key(code(KeyCode::Tab));
         assert_eq!(bold_tabs(&a), vec!["Coding 3"]);
     }
 
@@ -4778,7 +4809,7 @@ mod tests {
             assert_eq!((a.tab, current_tab(&a)), (tab, name.as_str()));
             assert!(matches!(a.mode, Mode::List));
             assert!(a.hints().iter().all(|(k, _)| *k != "S"), "{:?}", a.hints());
-            a.on_key(key('f'));
+            a.on_key(code(KeyCode::Tab));
         }
     }
 
@@ -4793,20 +4824,20 @@ mod tests {
     #[test]
     fn the_selection_follows_its_item_across_tabs_else_clamps() {
         let mut a = tabbed_app();
-        a.on_key(key('f'));
-        a.on_key(key('f'));
+        a.on_key(code(KeyCode::Tab));
+        a.on_key(code(KeyCode::Tab));
         a.on_key(key('j'));
         a.on_key(key('j'));
         assert_eq!(selected_id(&a), Some("u"));
         // through the sessions tab
-        a.on_key(key('f'));
+        a.on_key(code(KeyCode::Tab));
         assert_eq!(current_tab(&a), "Sessions");
-        a.on_key(key('f'));
+        a.on_key(code(KeyCode::Tab));
         assert_eq!(current_tab(&a), "All");
         assert_eq!(selected_id(&a), Some("u"));
         assert_eq!(a.selected, 3);
         // not in Review: the position, within the shorter list
-        a.on_key(key('f'));
+        a.on_key(code(KeyCode::Tab));
         assert_eq!(selected_id(&a), Some("r"));
         assert_eq!(a.selected, 1);
     }
@@ -4815,10 +4846,10 @@ mod tests {
     fn an_empty_tab_says_so() {
         let mut a = tabbed_app();
         a.set_items(vec![from_file(question("t", 910.0), TASK_FILE)]);
-        a.on_key(key('f'));
+        a.on_key(code(KeyCode::Tab));
         let s = screen(&a);
         assert!(s.contains("No pending items in Review"), "{s}");
-        a.on_key(key('f'));
+        a.on_key(code(KeyCode::Tab));
         assert!(screen(&a).contains("title-t"));
     }
 
@@ -4839,7 +4870,7 @@ mod tests {
             let mut without_reply = a.without_reply();
             without_reply.sort();
             assert_eq!(without_reply, ids);
-            a.on_key(key('f'));
+            a.on_key(code(KeyCode::Tab));
         }
     }
 
@@ -4900,14 +4931,14 @@ mod tests {
             s.contains("All 4 · Review 2 · Coding 3 · Sessions 3"),
             "{s}"
         );
-        assert!(a.hints().contains(&("f", "All")), "{:?}", a.hints());
+        assert!(a.hints().contains(&("tab", "All")), "{:?}", a.hints());
         a.on_key(key('j'));
         a.on_key(key('j'));
         a.on_key(key('j'));
         assert_eq!(selected_pid(&a), Some(3));
         // All, Review, Coding, and round to the sessions again
         for _ in 0..4 {
-            a.on_key(key('f'));
+            a.on_key(code(KeyCode::Tab));
         }
         assert_eq!(current_tab(&a), "Sessions");
         assert_eq!(selected_pid(&a), Some(3));
@@ -4935,7 +4966,7 @@ mod tests {
         assert!(s.contains(" Detail "), "{s}");
         assert!(s.matches('┌').count() >= 2, "{s}");
         // the empty state still switches
-        assert_eq!(a.on_key(key('f')), Effect::None);
+        assert_eq!(a.on_key(code(KeyCode::Tab)), Effect::None);
         assert_eq!(current_tab(&a), "All");
     }
 
@@ -5058,8 +5089,8 @@ mod tests {
     }
 
     #[test]
-    fn enter_and_tab_open_the_session_detail() {
-        for open in [KeyCode::Enter, KeyCode::Tab] {
+    fn enter_and_l_open_the_session_detail() {
+        for open in [KeyCode::Enter, KeyCode::Char('l')] {
             let mut a = sessions_app(
                 vec![],
                 vec![session(1, "s-a", "idle"), session(2, "s-b", "idle")],
@@ -5088,7 +5119,7 @@ mod tests {
 
     #[test]
     fn enter_without_sessions_does_nothing() {
-        for open in [KeyCode::Enter, KeyCode::Tab] {
+        for open in [KeyCode::Enter, KeyCode::Char('l')] {
             let mut a = sessions_app(vec![], vec![]);
             assert_eq!(a.on_key(code(open)), Effect::None);
             assert!(matches!(a.mode, Mode::List));
@@ -5148,13 +5179,8 @@ mod tests {
     }
 
     #[test]
-    fn esc_q_backspace_and_tab_leave_the_session_detail_with_the_session_selected() {
-        for leave in [
-            KeyCode::Esc,
-            KeyCode::Char('q'),
-            KeyCode::Backspace,
-            KeyCode::Tab,
-        ] {
+    fn esc_q_and_backspace_leave_the_session_detail_with_the_session_selected() {
+        for leave in [KeyCode::Esc, KeyCode::Char('q'), KeyCode::Backspace] {
             let mut a = sessions_app(
                 vec![],
                 vec![
@@ -5308,7 +5334,7 @@ mod tests {
                 ("a", "attach"),
                 ("o", "open"),
                 ("x", "kill"),
-                ("f", "All"),
+                ("tab", "All"),
                 ("N", "new"),
                 ("q", "quit"),
             ]
@@ -5319,11 +5345,16 @@ mod tests {
         let a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
         assert_eq!(
             a.hints(),
-            vec![("enter", "open"), ("f", "All"), ("N", "new"), ("q", "quit")]
+            vec![
+                ("enter", "open"),
+                ("tab", "All"),
+                ("N", "new"),
+                ("q", "quit")
+            ]
         );
         // no sessions
         let a = sessions_app(vec![], vec![]);
-        assert_eq!(a.hints(), vec![("f", "All"), ("N", "new"), ("q", "quit")]);
+        assert_eq!(a.hints(), vec![("tab", "All"), ("N", "new"), ("q", "quit")]);
     }
 
     #[test]
@@ -5341,6 +5372,7 @@ mod tests {
                 ("a", "attach"),
                 ("o", "open"),
                 ("x", "kill"),
+                ("tab", "All"),
                 ("esc", "back"),
             ]
         );
@@ -5348,7 +5380,10 @@ mod tests {
         assert!(s.contains("j/k scroll") && s.contains("esc back"), "{s}");
         let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
         open_session(&mut a);
-        assert_eq!(a.hints(), vec![("j/k", "scroll"), ("esc", "back")]);
+        assert_eq!(
+            a.hints(),
+            vec![("j/k", "scroll"), ("tab", "All"), ("esc", "back")]
+        );
     }
 
     // --- slice D: one set of navigation keys
@@ -5393,7 +5428,7 @@ mod tests {
         assert!(matches!(a.mode, Mode::List));
         // on a filter tab: the rows of that tab
         let mut a = tabbed_app();
-        a.on_key(key('f'));
+        a.on_key(code(KeyCode::Tab));
         let ids: Vec<String> = visible_ids(&a).iter().map(|s| s.to_string()).collect();
         assert!(!ids.is_empty());
         a.on_key(key('G'));

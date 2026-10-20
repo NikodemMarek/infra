@@ -4,7 +4,7 @@
   makeWrapper,
   jw,
   xdg-utils,
-  # Filter tabs, `f` cycles through them: a list of `{ name; kinds ? null; }`. `kinds` are the
+  # Filter tabs, Tab cycles through them: a list of `{ name; kinds ? null; }`. `kinds` are the
   # origin kinds the tab shows (`review`, `note`, `task`, ...); null or absent = every kind no
   # other tab lists. Read from $AGENT_INBOX_TABS (JSON), which a value in the environment overrides.
   tabs ? [ ],
