@@ -30,6 +30,7 @@ in {
 
       pkgs.claude
       pkgs.agent-inbox
+      pkgs.agent-task
       pkgs.jj-upload
       (pkgs.gh.override {dataDir = "${generated}/gh";})
       (pkgs.jw.override {projectsRoot = projects;})
