@@ -5,7 +5,8 @@
 //! for the selected item, and a footer with key hints or the last status message. `f` cycles
 //! through All, the configured filter tabs (`Tab`, which filter the items by the kind of their
 //! origin) and the Sessions tab: the same layout over the live Claude sessions (list and detail
-//! of the selected session), all of them whatever their origin. `N` (everywhere) asks for a task
+//! of the selected session; Enter focuses the detail like an item's, `s` lists the session's
+//! items), all of them whatever their origin. `N` (everywhere) asks for a task
 //! in a popup (Ctrl+J adds a line) and starts a new agent for it (`jw agent -d`). Only the events
 //! and sessions of agents with an origin (a merge request, an issue or a task, see `Origin`) are
 //! shown, with it as their context; `o` opens its link (`xdg-open`).
@@ -97,6 +98,8 @@ enum Mode {
     List,
     /// Focus in the detail pane (scrolling).
     Detail { id: String, scroll: u16 },
+    /// Focus in the detail pane of the session of process `pid` (scrolling).
+    SessionDetail { pid: u32, scroll: u16 },
     /// Masked input; the buffer is moved out into `Effect::Send` on Enter.
     Password { id: String, buf: String },
     /// Choosing the answers of a claude.question item.
@@ -425,6 +428,11 @@ impl App {
             .min(visible.len().saturating_sub(1));
     }
 
+    /// The session of process `pid`.
+    fn session_of(&self, pid: u32) -> Option<&Session> {
+        self.sessions.iter().find(|s| s.pid == pid)
+    }
+
     fn selected_session(&self) -> Option<&Session> {
         self.visible_sessions().get(self.session_sel).copied()
     }
@@ -491,6 +499,7 @@ impl App {
             Mode::List if self.sessions_shown() => self.sessions_key(code),
             Mode::List => self.list_key(code),
             Mode::Detail { id, scroll } => self.detail_key(id, scroll, code),
+            Mode::SessionDetail { pid, scroll } => self.session_detail_key(pid, scroll, code),
             Mode::Password { id, buf } => self.password_key(id, buf, code),
             Mode::Answer { id, st } => self.answer_key(id, st, code),
             Mode::ConfirmDismissAll if code == KeyCode::Char('y') => Effect::DismissAll,
@@ -616,7 +625,12 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => {
                 self.session_sel = self.session_sel.saturating_sub(1)
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
+                if let Some(pid) = self.selected_session().map(|s| s.pid) {
+                    self.mode = Mode::SessionDetail { pid, scroll: 0 };
+                }
+            }
+            KeyCode::Char('s') => {
                 let Some(session) = self.selected_session() else {
                     return Effect::None;
                 };
@@ -630,20 +644,35 @@ impl App {
                     };
                     self.notify(text, false);
                 } else {
-                    self.guard = Some((self.now, code)); // a held Enter must not open an item too
+                    self.guard = Some((self.now, code)); // a held s would leave the items again
                     self.set_session(Some(id));
                     self.selected = 0;
                 }
             }
+            KeyCode::Char('a' | 'x' | 'o') => {
+                let pid = self.selected_session().map(|s| s.pid);
+                return self.session_key(pid, code);
+            }
+            KeyCode::Char('N') => self.mode = Mode::Task { buf: String::new() },
+            _ => {}
+        }
+        Effect::None
+    }
+
+    /// Attach (`a`), kill (`x`) and open (`o`) for the session of process `pid`, from the list
+    /// and from its detail pane; the mode is left alone.
+    fn session_key(&mut self, pid: Option<u32>, code: KeyCode) -> Effect {
+        let session = self.sessions.iter().find(|s| Some(s.pid) == pid);
+        match code {
             KeyCode::Char('a') => {
-                let name = self.selected_session().map(|s| s.shpool.clone());
+                let name = session.map(|s| s.shpool.clone());
                 match name.filter(|n| !n.is_empty()) {
                     Some(name) => return Effect::Attach(name),
                     None => self.notify("not in a shpool session", true),
                 }
             }
             // Without a start time the pid cannot be told from a reused one.
-            KeyCode::Char('x') => match self.selected_session().map(|s| (s.pid, s.start)) {
+            KeyCode::Char('x') => match session.map(|s| (s.pid, s.start)) {
                 Some((pid, Some(start))) => return Effect::Kill { pid, start },
                 Some((pid, None)) => self.notify(
                     format!("pid {pid} not killed: the registry has no start time"),
@@ -652,10 +681,31 @@ impl App {
                 None => {}
             },
             KeyCode::Char('o') => {
-                let file = self.selected_session().map(|s| s.origin_file.clone());
+                let file = session.map(|s| s.origin_file.clone());
                 return self.open_link(&file.unwrap_or_default());
             }
-            KeyCode::Char('N') => self.mode = Mode::Task { buf: String::new() },
+            _ => {}
+        }
+        Effect::None
+    }
+
+    /// The session detail pane: scrolling, and the keys of `session_key`. A vanished session:
+    /// only Esc/q leave, every other key is swallowed.
+    fn session_detail_key(&mut self, pid: u32, scroll: u16, code: KeyCode) -> Effect {
+        let Some(session) = self.session_of(pid) else {
+            if !matches!(code, KeyCode::Esc | KeyCode::Char('q')) {
+                self.mode = Mode::SessionDetail { pid, scroll };
+            }
+            return Effect::None;
+        };
+        let max = self.max_scroll_of(&session_lines(self, session));
+        let scroll = scroll_key(scroll, max, code).unwrap_or(scroll);
+        self.mode = Mode::SessionDetail { pid, scroll };
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Backspace | KeyCode::Tab => {
+                self.mode = Mode::List
+            }
+            KeyCode::Char('a' | 'x' | 'o') => return self.session_key(Some(pid), code),
             _ => {}
         }
         Effect::None
@@ -663,7 +713,7 @@ impl App {
 
     /// The ids of the pending items of the session of process `pid`.
     fn session_item_ids(&self, pid: u32) -> Vec<String> {
-        let Some(session) = self.sessions.iter().find(|s| s.pid == pid) else {
+        let Some(session) = self.session_of(pid) else {
             return Vec::new();
         };
         self.session_items(session)
@@ -745,14 +795,7 @@ impl App {
             return Effect::None;
         };
         let max = self.max_scroll(item);
-        let step = |delta: i32| (i32::from(scroll) + delta).clamp(0, i32::from(max)) as u16;
-        let scrolled = match code {
-            KeyCode::Char('j') | KeyCode::Down => Some(step(1)),
-            KeyCode::Char('k') | KeyCode::Up => Some(step(-1)),
-            KeyCode::PageDown => Some(step(10)),
-            KeyCode::PageUp => Some(step(-10)),
-            _ => None,
-        };
+        let scrolled = scroll_key(scroll, max, code);
         self.mode = Mode::Detail {
             id: id.clone(),
             scroll: scrolled.unwrap_or(scroll),
@@ -775,8 +818,13 @@ impl App {
 
     /// How far the summary (or raw event) of `item` can be scrolled.
     fn max_scroll(&self, item: &Item) -> u16 {
+        self.max_scroll_of(&detail_view(self, item))
+    }
+
+    /// How far `lines` can be scrolled in the detail pane.
+    fn max_scroll_of(&self, lines: &[Line<'_>]) -> u16 {
         let inner = Block::bordered().inner(panes(self.area).detail);
-        let rows = wrapped_height(&detail_view(self, item), inner.width);
+        let rows = wrapped_height(lines, inner.width);
         rows.saturating_sub(usize::from(inner.height))
             .min(usize::from(u16::MAX)) as u16
     }
@@ -960,23 +1008,31 @@ impl App {
         ("f", self.tab_name(self.following_tab()))
     }
 
+    /// The hints of the keys of `session_key` that `session` allows.
+    fn session_hints(&self, session: &Session) -> Vec<(&'static str, &'static str)> {
+        let mut h = Vec::new();
+        if !session.shpool.is_empty() {
+            h.push(("a", "attach"));
+        }
+        if self.link(&session.origin_file).is_some() {
+            h.push(("o", "open"));
+        }
+        if session.start.is_some() {
+            h.push(("x", "kill"));
+        }
+        h
+    }
+
     /// Key hints for the footer (key, label).
     fn hints(&self) -> Vec<(&str, &str)> {
         if self.sessions_shown() && matches!(self.mode, Mode::List) {
-            let mut h = vec![("j/k", "move")];
+            let mut h = Vec::new();
             if let Some(session) = self.selected_session() {
+                h.push(("enter", "open"));
                 if !self.session_items(session).is_empty() {
-                    h.push(("enter", "items"));
+                    h.push(("s", "items"));
                 }
-                if !session.shpool.is_empty() {
-                    h.push(("a", "attach"));
-                }
-                if self.link(&session.origin_file).is_some() {
-                    h.push(("o", "open"));
-                }
-                if session.start.is_some() {
-                    h.push(("x", "kill"));
-                }
+                h.extend(self.session_hints(session));
             }
             h.push(self.tab_hint());
             h.push(("N", "new"));
@@ -1013,18 +1069,29 @@ impl App {
                 h
             }
             Mode::Detail { id, .. } => {
+                // A vanished item swallows every key but Esc/q
+                let Some(item) = self.find(id) else {
+                    return vec![("esc", "back")];
+                };
                 let mut h = vec![("j/k", "scroll")];
-                if let Some(item) = self.find(id) {
-                    h.extend(action_hints(item));
-                    h.push(("d", "dismiss"));
-                    if !item.shpool().is_empty() {
-                        h.push(("a", "attach"));
-                    }
-                    if self.link(item.origin_file()).is_some() {
-                        h.push(("o", "open"));
-                    }
-                    h.push(("?", "raw"));
+                h.extend(action_hints(item));
+                h.push(("d", "dismiss"));
+                if !item.shpool().is_empty() {
+                    h.push(("a", "attach"));
                 }
+                if self.link(item.origin_file()).is_some() {
+                    h.push(("o", "open"));
+                }
+                h.push(("?", "raw"));
+                h.push(("esc", "back"));
+                h
+            }
+            Mode::SessionDetail { pid, .. } => {
+                let Some(session) = self.session_of(*pid) else {
+                    return vec![("esc", "back")];
+                };
+                let mut h = vec![("j/k", "scroll")];
+                h.extend(self.session_hints(session));
                 h.push(("esc", "back"));
                 h
             }
@@ -1097,6 +1164,18 @@ fn truncate(s: &str, max: usize) -> String {
             .take(max - 1)
             .chain(std::iter::once('…'))
             .collect()
+    }
+}
+
+/// The scroll offset after the scroll key `code` (None: not one), kept within 0..=`max`.
+fn scroll_key(scroll: u16, max: u16, code: KeyCode) -> Option<u16> {
+    let step = |delta: i32| (i32::from(scroll) + delta).clamp(0, i32::from(max)) as u16;
+    match code {
+        KeyCode::Char('j') | KeyCode::Down => Some(step(1)),
+        KeyCode::Char('k') | KeyCode::Up => Some(step(-1)),
+        KeyCode::PageDown => Some(step(10)),
+        KeyCode::PageUp => Some(step(-10)),
+        _ => None,
     }
 }
 
@@ -1691,7 +1770,8 @@ fn status_badge(status: &str) -> (String, Style) {
 }
 
 fn render_sessions(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::bordered().border_style(border_style(true));
+    let focused = !matches!(app.mode, Mode::SessionDetail { .. });
+    let block = Block::bordered().border_style(border_style(focused));
     let width = usize::from(block.inner(area).width);
     let sessions = app.visible_sessions();
     let context_width = sessions
@@ -1806,23 +1886,39 @@ fn session_lines(app: &App, session: &Session) -> Vec<Line<'static>> {
     lines
 }
 
-/// The detail pane of the sessions list (never focused).
+/// The detail pane of the sessions list: of the selected session, or focused and scrolling the
+/// one that is open.
 fn render_session_detail(f: &mut Frame, app: &App, area: Rect) {
+    let (session, scroll) = match &app.mode {
+        Mode::SessionDetail { pid, scroll } => (app.session_of(*pid), *scroll),
+        _ => (app.selected_session(), 0),
+    };
+    let focused = matches!(app.mode, Mode::SessionDetail { .. });
     let block = Block::bordered()
         .title(" Detail ")
-        .border_style(border_style(false));
+        .border_style(border_style(focused));
     let inner = block.inner(area);
     f.render_widget(block, area);
-    let lines = app
-        .selected_session()
-        .map(|s| session_lines(app, s))
-        .unwrap_or_default();
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    let lines = match session {
+        Some(s) => session_lines(app, s),
+        None if focused => vec![Line::styled("session is gone", dim())],
+        None => Vec::new(),
+    };
+    let scroll = scroll_for(&lines, None, scroll, inner);
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0)),
+        inner,
+    );
 }
 
 fn render_detail(f: &mut Frame, app: &App, area: Rect) {
     let (item, scroll) = match &app.mode {
-        Mode::List | Mode::ConfirmDismissAll | Mode::Task { .. } => (app.selected_item(), 0),
+        // SessionDetail is drawn by render_session_detail
+        Mode::List | Mode::ConfirmDismissAll | Mode::Task { .. } | Mode::SessionDetail { .. } => {
+            (app.selected_item(), 0)
+        }
         Mode::Detail { id, scroll } => (app.find(id), *scroll),
         Mode::Password { id, .. } | Mode::Answer { id, .. } => (app.find(id), 0),
     };
@@ -2072,9 +2168,7 @@ fn terminate(proc: &Path, pid: u32, start: Option<u64>) -> Result<(), String> {
 /// Kills the session of process `pid`, then dismisses its inbox items.
 fn kill(app: &mut App, base: &str, pid: u32, start: u64) {
     let place = app
-        .sessions
-        .iter()
-        .find(|s| s.pid == pid)
+        .session_of(pid)
         .map_or_else(|| format!("pid {pid}"), Session::place);
     let ids = app.session_item_ids(pid);
     if let Err(e) = terminate(Path::new("/proc"), pid, Some(start)) {
@@ -4014,41 +4108,6 @@ mod tests {
     }
 
     #[test]
-    fn enter_shows_the_items_of_the_session_and_esc_returns() {
-        let mut a = sessions_app(
-            vec![
-                in_session(question("a", 960.0), "s-a"),
-                in_session(question("b", 970.0), "s-b"),
-            ],
-            vec![session(1, "s-a", "idle"), session(2, "s-b", "idle")],
-        );
-        a.on_key(key('j'));
-        a.on_key(code(KeyCode::Enter));
-        assert_eq!(current_tab(&a), "Sessions");
-        assert_eq!(a.session.as_deref(), Some("s-b"));
-        assert_eq!(a.selected, 0);
-        assert_eq!(selected_id(&a), Some("b"));
-        let s = screen(&a);
-        assert!(s.contains(" Session ") && !s.contains("IDLE"), "{s}");
-        assert!(s.contains("title-b") && !s.contains("title-a"), "{s}");
-        assert!(a.hints().contains(&("esc", "Sessions")), "{:?}", a.hints());
-        assert!(s.contains("esc Sessions"), "{s}");
-        a.on_key(code(KeyCode::Esc));
-        assert!(a.session.is_none());
-        assert_eq!(current_tab(&a), "Sessions");
-        assert_eq!(selected_pid(&a), Some(2));
-        assert!(screen(&a).contains("IDLE"));
-        // `s` leaves the drill-down the same way
-        a.on_key(code(KeyCode::Enter));
-        assert_eq!(a.session.as_deref(), Some("s-b"));
-        a.on_key(key('s'));
-        assert!(a.session.is_none());
-        assert_eq!(current_tab(&a), "Sessions");
-        assert_eq!(selected_pid(&a), Some(2));
-        assert!(screen(&a).contains("IDLE"));
-    }
-
-    #[test]
     fn s_on_an_item_returns_to_the_tab_it_was_opened_on() {
         let mut a = app(vec![
             in_session(question("a", 960.0), "s-a"),
@@ -4068,61 +4127,6 @@ mod tests {
         assert_eq!(current_tab(&a), "All");
         let s = screen(&a);
         assert!(s.contains("title-a") && s.contains("title-b"), "{s}");
-    }
-
-    #[test]
-    fn f_is_ignored_in_a_drill_down_from_the_sessions_tab() {
-        let mut a = sessions_app(
-            vec![in_session(question("a", 960.0), "s-a")],
-            vec![session(1, "s-a", "idle")],
-        );
-        a.on_key(code(KeyCode::Enter));
-        assert!(a.session.is_some());
-        assert_eq!(a.on_key(key('f')), Effect::None);
-        assert_eq!(current_tab(&a), "Sessions");
-        assert!(a.session.is_some());
-        assert!(a.hints().iter().all(|(k, _)| *k != "f"));
-    }
-
-    #[test]
-    fn the_last_item_answered_returns_to_the_sessions() {
-        let mut a = sessions_app(
-            vec![in_session(permission("p", Some(HOOK_REPLY)), "s-a")],
-            vec![session(1, "s-a", WAITING)],
-        );
-        a.on_key(code(KeyCode::Enter));
-        a.now += 1.1;
-        a.on_key(code(KeyCode::Enter));
-        assert_eq!(a.on_key(key('y')), allow("p"));
-        assert_eq!(a.session.as_deref(), Some("s-a"));
-        // the router has dismissed it
-        a.set_items(vec![]);
-        assert!(a.session.is_none());
-        assert_eq!(current_tab(&a), "Sessions");
-        let s = screen(&a);
-        assert!(s.contains("WAIT") && !s.contains(" Session "), "{s}");
-    }
-
-    #[test]
-    fn an_item_vanishing_under_an_open_detail_keeps_the_drill_down_until_esc() {
-        let mut a = sessions_app(
-            vec![in_session(permission("p", Some(HOOK_REPLY)), "s-a")],
-            vec![session(1, "s-a", WAITING)],
-        );
-        a.on_key(code(KeyCode::Enter));
-        a.now += 1.1;
-        a.on_key(code(KeyCode::Enter));
-        assert!(matches!(a.mode, Mode::Detail { .. }));
-        a.set_items(vec![]);
-        assert_eq!(a.session.as_deref(), Some("s-a"));
-        assert!(matches!(a.mode, Mode::Detail { .. }));
-        assert!(screen(&a).contains("item is gone"));
-        a.on_key(code(KeyCode::Esc));
-        assert!(matches!(a.mode, Mode::List));
-        a.set_items(vec![]);
-        assert!(a.session.is_none());
-        assert_eq!(current_tab(&a), "Sessions");
-        assert!(screen(&a).contains("WAIT"));
     }
 
     #[test]
@@ -4151,59 +4155,6 @@ mod tests {
         a.set_items(vec![]);
         assert!(a.session.is_none());
         assert_eq!(current_tab(&a), "Review");
-    }
-
-    #[test]
-    fn enter_without_items_says_so() {
-        let mut a = sessions_app(
-            vec![in_session(question("a", 960.0), "s-other")],
-            vec![session(1, "s-a", "idle")],
-        );
-        assert_eq!(a.on_key(code(KeyCode::Enter)), Effect::None);
-        assert_eq!(current_tab(&a), "Sessions");
-        assert!(a.session.is_none());
-        let s = screen(&a);
-        assert!(
-            s.contains("no pending items") && !s.contains("a to attach"),
-            "{s}"
-        );
-        // nothing to open: no hint either
-        a.now += STATUS_TTL;
-        assert!(!screen(&a).contains("enter items"));
-        // attachable: the way on is named
-        let mut a = sessions_app(vec![], vec![shpooled(session(1, "s-a", "idle"), "jw-1")]);
-        a.on_key(code(KeyCode::Enter));
-        assert!(screen(&a).contains("no pending items — a to attach"));
-        // the items of an unreachable router are stale
-        let mut a = sessions_app(
-            vec![in_session(question("a", 960.0), "s-a")],
-            vec![shpooled(session(1, "s-a", "idle"), "jw-1")],
-        );
-        assert!(screen(&a).contains("enter items"));
-        a.offline = Some("down".into());
-        a.on_key(code(KeyCode::Enter));
-        assert_eq!(current_tab(&a), "Sessions");
-        assert!(a.session.is_none());
-        assert!(screen(&a).contains("no pending items — a to attach"));
-    }
-
-    #[test]
-    fn a_held_enter_opens_the_session_but_not_its_first_item() {
-        let mut a = sessions_app(
-            vec![in_session(question("a", 960.0), "s-a")],
-            vec![session(1, "s-a", "idle")],
-        );
-        a.on_key(code(KeyCode::Enter));
-        assert_eq!(a.session.as_deref(), Some("s-a"));
-        assert_eq!(current_tab(&a), "Sessions");
-        // the repeats are swallowed
-        a.now += 0.6;
-        assert_eq!(a.on_key(code(KeyCode::Enter)), Effect::None);
-        assert!(matches!(a.mode, Mode::List));
-        // released: the next Enter opens the item
-        a.now += 1.1;
-        a.on_key(code(KeyCode::Enter));
-        assert!(matches!(a.mode, Mode::Detail { .. }));
     }
 
     #[test]
@@ -5424,24 +5375,6 @@ mod tests {
         assert_eq!(current_tab(&a), "All");
     }
 
-    #[test]
-    fn items_of_a_session_entered_from_the_sessions_tab_stay_visible() {
-        let mut a = tabbed_sessions_app();
-        let item = in_session(from_file(question("r", 950.0), REVIEW_FILE), "s-r");
-        let task = in_session(from_file(question("t", 940.0), TASK_FILE), "s-t");
-        a.set_items(vec![item, task]);
-        assert_eq!(selected_pid(&a), Some(1));
-        a.on_key(code(KeyCode::Enter));
-        assert_eq!(a.session.as_deref(), Some("s-r"));
-        assert_eq!(current_tab(&a), "Sessions");
-        assert_eq!(visible_ids(&a), vec!["r"]);
-        a.on_key(code(KeyCode::Esc));
-        a.on_key(key('j'));
-        a.on_key(code(KeyCode::Enter));
-        assert_eq!(a.session.as_deref(), Some("s-t"));
-        assert_eq!(visible_ids(&a), vec!["t"]);
-    }
-
     // --- titles repeated by their text
 
     fn plain(lines: &[Line]) -> Vec<String> {
@@ -5528,5 +5461,508 @@ mod tests {
             lines.contains(&"Something different".to_string()),
             "{lines:?}"
         );
+    }
+
+    /// Enter on the selected session, then past the key guard.
+    fn open_session(a: &mut App) {
+        assert_eq!(a.on_key(code(KeyCode::Enter)), Effect::None);
+        assert!(matches!(a.mode, Mode::SessionDetail { .. }));
+        a.now += 1.1;
+    }
+
+    fn scroll_of(a: &App) -> u16 {
+        match a.mode {
+            Mode::SessionDetail { scroll, .. } => scroll,
+            _ => panic!("not in the session detail"),
+        }
+    }
+
+    /// Whether the detail pane's border is focused.
+    fn cyan_border(a: &App) -> bool {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| render(f, a)).unwrap();
+        // the detail pane's right border, below the header and tab rows
+        terminal.backend().buffer()[(99, 5)].fg == ratatui::style::Color::Cyan
+    }
+
+    /// A session (pid 1, s-a) with `n` pending items, so that its detail overflows.
+    fn long_session_app(n: usize) -> App {
+        let items = (0..n)
+            .map(|i| in_session(question(&format!("i{i:02}"), 900.0 + i as f64), "s-a"))
+            .collect();
+        sessions_app(items, vec![session(1, "s-a", "idle")])
+    }
+
+    #[test]
+    fn enter_and_tab_open_the_session_detail() {
+        for open in [KeyCode::Enter, KeyCode::Tab] {
+            let mut a = sessions_app(
+                vec![],
+                vec![session(1, "s-a", "idle"), session(2, "s-b", "idle")],
+            );
+            a.on_key(key('j'));
+            assert_eq!(a.on_key(code(open)), Effect::None, "{open:?}");
+            assert!(
+                matches!(a.mode, Mode::SessionDetail { pid: 2, scroll: 0 }),
+                "{open:?}"
+            );
+            assert!(a.session.is_none());
+            assert_eq!(current_tab(&a), "Sessions");
+            let s = screen(&a);
+            assert!(s.contains("pid: 2") && s.contains("session: s-b"), "{s}");
+        }
+    }
+
+    #[test]
+    fn the_session_detail_border_is_focused() {
+        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        assert!(!cyan_border(&a));
+        open_session(&mut a);
+        assert!(cyan_border(&a));
+        a.on_key(code(KeyCode::Esc));
+        assert!(!cyan_border(&a));
+    }
+
+    #[test]
+    fn enter_without_sessions_does_nothing() {
+        for open in [KeyCode::Enter, KeyCode::Tab] {
+            let mut a = sessions_app(vec![], vec![]);
+            assert_eq!(a.on_key(code(open)), Effect::None);
+            assert!(matches!(a.mode, Mode::List));
+        }
+    }
+
+    #[test]
+    fn the_session_detail_scrolls_and_clamps() {
+        let mut a = long_session_app(60);
+        open_session(&mut a);
+        let s = screen(&a);
+        assert!(s.contains("pid: 1") && !s.contains("title-i00"), "{s}");
+        // not above the top
+        a.on_key(key('k'));
+        a.on_key(code(KeyCode::Up));
+        a.on_key(code(KeyCode::PageUp));
+        assert_eq!(scroll_of(&a), 0);
+        // single steps and pages
+        assert_eq!(a.on_key(key('j')), Effect::None);
+        assert_eq!(scroll_of(&a), 1);
+        a.on_key(code(KeyCode::Down));
+        assert_eq!(scroll_of(&a), 2);
+        a.on_key(code(KeyCode::PageDown));
+        assert_eq!(scroll_of(&a), 12);
+        a.on_key(code(KeyCode::PageUp));
+        assert_eq!(scroll_of(&a), 2);
+        a.on_key(key('k'));
+        a.on_key(code(KeyCode::Up));
+        assert_eq!(scroll_of(&a), 0);
+        // down to the end, and not past it
+        for _ in 0..10 {
+            a.on_key(code(KeyCode::PageDown));
+        }
+        let end = scroll_of(&a);
+        assert!(end > 12, "{end}");
+        let s = screen(&a);
+        assert!(s.contains("title-i00") && !s.contains("pid: 1"), "{s}");
+        a.on_key(key('j'));
+        a.on_key(code(KeyCode::Down));
+        a.on_key(code(KeyCode::PageDown));
+        assert_eq!(scroll_of(&a), end);
+        // one step up is one row
+        a.on_key(key('k'));
+        assert_eq!(scroll_of(&a), end - 1);
+        // the session stays selected
+        assert!(matches!(a.mode, Mode::SessionDetail { pid: 1, .. }));
+    }
+
+    #[test]
+    fn a_short_session_detail_does_not_scroll() {
+        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        open_session(&mut a);
+        for c in [KeyCode::PageDown, KeyCode::Down, KeyCode::Char('j')] {
+            a.on_key(code(c));
+            assert_eq!(scroll_of(&a), 0);
+        }
+    }
+
+    #[test]
+    fn esc_q_backspace_and_tab_leave_the_session_detail_with_the_session_selected() {
+        for leave in [
+            KeyCode::Esc,
+            KeyCode::Char('q'),
+            KeyCode::Backspace,
+            KeyCode::Tab,
+        ] {
+            let mut a = sessions_app(
+                vec![],
+                vec![
+                    session(1, "s-a", "idle"),
+                    session(2, "s-b", "idle"),
+                    session(3, "s-c", "idle"),
+                ],
+            );
+            a.on_key(key('j'));
+            a.on_key(key('j'));
+            open_session(&mut a);
+            assert_eq!(a.on_key(code(leave)), Effect::None, "{leave:?}");
+            assert!(matches!(a.mode, Mode::List), "{leave:?}");
+            assert_eq!(selected_pid(&a), Some(3), "{leave:?}");
+            assert_eq!(current_tab(&a), "Sessions");
+        }
+    }
+
+    #[test]
+    fn a_in_the_session_detail_attaches_or_says_why_not() {
+        let mut a = sessions_app(vec![], vec![shpooled(session(1, "s-a", "idle"), "jw-1")]);
+        open_session(&mut a);
+        assert_eq!(a.on_key(key('a')), Effect::Attach("jw-1".into()));
+        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        open_session(&mut a);
+        assert_eq!(a.on_key(key('a')), Effect::None);
+        assert!(matches!(a.mode, Mode::SessionDetail { pid: 1, .. }));
+        let status = a.status().expect("a status message");
+        assert!(status.error && status.text.contains("not in a shpool session"));
+    }
+
+    #[test]
+    fn o_in_the_session_detail_opens_the_link_or_says_why_not() {
+        let a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        let mut a = with_origin(a, MR_URL);
+        open_session(&mut a);
+        assert_eq!(a.on_key(key('o')), Effect::Open(MR_URL.into()));
+        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        open_session(&mut a);
+        assert_eq!(a.on_key(key('o')), Effect::None);
+        assert!(matches!(a.mode, Mode::SessionDetail { pid: 1, .. }));
+        assert!(a.status().is_some_and(|s| s.error));
+    }
+
+    #[test]
+    fn x_in_the_session_detail_kills_the_session() {
+        let mut a = sessions_app(
+            vec![],
+            vec![
+                started(session(7, "s-a", WAITING), 42),
+                started(session(8, "s-b", "idle"), 43),
+            ],
+        );
+        a.on_key(key('j'));
+        open_session(&mut a);
+        assert_eq!(a.on_key(key('x')), Effect::Kill { pid: 8, start: 43 });
+        // no start time: refused, like from the list
+        let mut a = sessions_app(vec![], vec![session(7, "s-a", "idle")]);
+        open_session(&mut a);
+        assert_eq!(a.on_key(key('x')), Effect::None);
+        let status = a.status().expect("a status message");
+        assert!(status.error && status.text.contains("not killed"));
+    }
+
+    #[test]
+    fn other_keys_do_nothing_in_the_session_detail() {
+        let mut a = tabbed_sessions_app();
+        a.set_items(vec![in_session(question("a", 950.0), "s-r")]);
+        a.on_key(key('j'));
+        open_session(&mut a);
+        let tab = a.tab;
+        for c in [
+            KeyCode::Enter,
+            KeyCode::Char('s'),
+            KeyCode::Char('f'),
+            KeyCode::Char('N'),
+            KeyCode::Char('d'),
+            KeyCode::Char('?'),
+            KeyCode::Char('y'),
+            KeyCode::Char('D'),
+        ] {
+            a.now += 1.1;
+            assert_eq!(a.on_key(code(c)), Effect::None, "{c:?}");
+            assert!(
+                matches!(a.mode, Mode::SessionDetail { pid: 2, scroll: 0 }),
+                "{c:?}"
+            );
+            assert_eq!(a.tab, tab, "{c:?}");
+            assert!(a.session.is_none(), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn a_session_that_is_gone_says_so_and_only_esc_and_q_leave() {
+        let gone = || {
+            let mut a = sessions_app(
+                vec![],
+                vec![session(1, "s-a", "idle"), session(2, "s-b", "idle")],
+            );
+            a.on_key(key('j'));
+            open_session(&mut a);
+            a.set_sessions(vec![session(1, "s-a", "idle")]);
+            a
+        };
+        let mut a = gone();
+        assert!(matches!(a.mode, Mode::SessionDetail { pid: 2, .. }));
+        let s = screen(&a);
+        assert!(s.contains("session is gone"), "{s}");
+        for c in [
+            KeyCode::Enter,
+            KeyCode::Tab,
+            KeyCode::Backspace,
+            KeyCode::Char('a'),
+            KeyCode::Char('o'),
+            KeyCode::Char('x'),
+            KeyCode::Char('s'),
+            KeyCode::Char('f'),
+            KeyCode::Char('N'),
+            KeyCode::Char('j'),
+            KeyCode::PageDown,
+        ] {
+            a.now += 1.1;
+            assert_eq!(a.on_key(code(c)), Effect::None, "{c:?}");
+            assert!(
+                matches!(a.mode, Mode::SessionDetail { pid: 2, .. }),
+                "{c:?}"
+            );
+            assert!(screen(&a).contains("session is gone"), "{c:?}");
+        }
+        for leave in [KeyCode::Esc, KeyCode::Char('q')] {
+            let mut a = gone();
+            a.now += 1.1;
+            assert_eq!(a.on_key(code(leave)), Effect::None, "{leave:?}");
+            assert!(matches!(a.mode, Mode::List), "{leave:?}");
+        }
+    }
+
+    // --- s: the items of a session
+
+    #[test]
+    fn s_shows_the_items_of_the_session_and_esc_returns() {
+        let mut a = sessions_app(
+            vec![
+                in_session(question("a", 960.0), "s-a"),
+                in_session(question("b", 970.0), "s-b"),
+            ],
+            vec![session(1, "s-a", "idle"), session(2, "s-b", "idle")],
+        );
+        a.on_key(key('j'));
+        assert_eq!(a.on_key(key('s')), Effect::None);
+        assert!(matches!(a.mode, Mode::List));
+        assert_eq!(current_tab(&a), "Sessions");
+        assert_eq!(a.session.as_deref(), Some("s-b"));
+        assert_eq!(a.selected, 0);
+        assert_eq!(selected_id(&a), Some("b"));
+        let s = screen(&a);
+        assert!(s.contains(" Session ") && !s.contains("IDLE"), "{s}");
+        assert!(s.contains("title-b") && !s.contains("title-a"), "{s}");
+        assert!(a.hints().contains(&("esc", "Sessions")), "{:?}", a.hints());
+        assert!(s.contains("esc Sessions"), "{s}");
+        a.on_key(code(KeyCode::Esc));
+        assert!(a.session.is_none());
+        assert_eq!(current_tab(&a), "Sessions");
+        assert_eq!(selected_pid(&a), Some(2));
+        assert!(screen(&a).contains("IDLE"));
+        // `s` leaves the drill-down the same way (once the guard is down)
+        a.now += 1.1;
+        a.on_key(key('s'));
+        assert_eq!(a.session.as_deref(), Some("s-b"));
+        a.now += 1.1;
+        a.on_key(key('s'));
+        assert!(a.session.is_none());
+        assert_eq!(current_tab(&a), "Sessions");
+        assert_eq!(selected_pid(&a), Some(2));
+        assert!(screen(&a).contains("IDLE"));
+    }
+
+    #[test]
+    fn s_without_items_says_so() {
+        let mut a = sessions_app(
+            vec![in_session(question("a", 960.0), "s-other")],
+            vec![session(1, "s-a", "idle")],
+        );
+        assert_eq!(a.on_key(key('s')), Effect::None);
+        assert_eq!(current_tab(&a), "Sessions");
+        assert!(a.session.is_none());
+        assert!(matches!(a.mode, Mode::List));
+        let s = screen(&a);
+        assert!(
+            s.contains("no pending items") && !s.contains("a to attach"),
+            "{s}"
+        );
+        // attachable: the way on is named
+        let mut a = sessions_app(vec![], vec![shpooled(session(1, "s-a", "idle"), "jw-1")]);
+        a.on_key(key('s'));
+        assert!(a.session.is_none());
+        assert!(screen(&a).contains("no pending items — a to attach"));
+        // the items of an unreachable router are stale
+        let mut a = sessions_app(
+            vec![in_session(question("a", 960.0), "s-a")],
+            vec![shpooled(session(1, "s-a", "idle"), "jw-1")],
+        );
+        a.offline = Some("down".into());
+        a.on_key(key('s'));
+        assert_eq!(current_tab(&a), "Sessions");
+        assert!(a.session.is_none());
+        assert!(screen(&a).contains("no pending items — a to attach"));
+        // no sessions at all
+        let mut a = sessions_app(vec![], vec![]);
+        assert_eq!(a.on_key(key('s')), Effect::None);
+        assert!(a.session.is_none());
+    }
+
+    #[test]
+    fn a_held_s_opens_the_session_but_not_its_first_item() {
+        let mut a = sessions_app(
+            vec![in_session(question("a", 960.0), "s-a")],
+            vec![session(1, "s-a", "idle")],
+        );
+        a.on_key(key('s'));
+        assert_eq!(a.session.as_deref(), Some("s-a"));
+        // the repeats are swallowed: the drill-down is not left either
+        a.now += 0.6;
+        assert_eq!(a.on_key(key('s')), Effect::None);
+        assert_eq!(a.session.as_deref(), Some("s-a"));
+        assert!(matches!(a.mode, Mode::List));
+        // released: Enter opens the item
+        a.now += 1.1;
+        a.on_key(code(KeyCode::Enter));
+        assert!(matches!(a.mode, Mode::Detail { .. }));
+    }
+
+    #[test]
+    fn f_is_ignored_in_a_drill_down_from_the_sessions_tab() {
+        let mut a = sessions_app(
+            vec![in_session(question("a", 960.0), "s-a")],
+            vec![session(1, "s-a", "idle")],
+        );
+        a.on_key(key('s'));
+        assert!(a.session.is_some());
+        assert_eq!(a.on_key(key('f')), Effect::None);
+        assert_eq!(current_tab(&a), "Sessions");
+        assert!(a.session.is_some());
+        assert!(a.hints().iter().all(|(k, _)| *k != "f"));
+    }
+
+    #[test]
+    fn the_last_item_answered_returns_to_the_sessions() {
+        let mut a = sessions_app(
+            vec![in_session(permission("p", Some(HOOK_REPLY)), "s-a")],
+            vec![session(1, "s-a", WAITING)],
+        );
+        a.on_key(key('s'));
+        a.now += 1.1;
+        a.on_key(code(KeyCode::Enter));
+        a.now += 1.1;
+        assert_eq!(a.on_key(key('y')), allow("p"));
+        assert_eq!(a.session.as_deref(), Some("s-a"));
+        // the router has dismissed it
+        a.set_items(vec![]);
+        assert!(a.session.is_none());
+        assert_eq!(current_tab(&a), "Sessions");
+        let s = screen(&a);
+        assert!(s.contains("WAIT") && !s.contains(" Session "), "{s}");
+    }
+
+    #[test]
+    fn an_item_vanishing_under_an_open_detail_keeps_the_drill_down_until_esc() {
+        let mut a = sessions_app(
+            vec![in_session(permission("p", Some(HOOK_REPLY)), "s-a")],
+            vec![session(1, "s-a", WAITING)],
+        );
+        a.on_key(key('s'));
+        a.now += 1.1;
+        a.on_key(code(KeyCode::Enter));
+        assert!(matches!(a.mode, Mode::Detail { .. }));
+        a.set_items(vec![]);
+        assert_eq!(a.session.as_deref(), Some("s-a"));
+        assert!(matches!(a.mode, Mode::Detail { .. }));
+        assert!(screen(&a).contains("item is gone"));
+        a.on_key(code(KeyCode::Esc));
+        assert!(matches!(a.mode, Mode::List));
+        a.set_items(vec![]);
+        assert!(a.session.is_none());
+        assert_eq!(current_tab(&a), "Sessions");
+        assert!(screen(&a).contains("WAIT"));
+    }
+
+    #[test]
+    fn items_of_a_session_entered_from_the_sessions_tab_stay_visible() {
+        let mut a = tabbed_sessions_app();
+        let item = in_session(from_file(question("r", 950.0), REVIEW_FILE), "s-r");
+        let task = in_session(from_file(question("t", 940.0), TASK_FILE), "s-t");
+        a.set_items(vec![item, task]);
+        assert_eq!(selected_pid(&a), Some(1));
+        a.on_key(key('s'));
+        assert_eq!(a.session.as_deref(), Some("s-r"));
+        assert_eq!(current_tab(&a), "Sessions");
+        assert_eq!(visible_ids(&a), vec!["r"]);
+        a.on_key(code(KeyCode::Esc));
+        a.on_key(key('j'));
+        a.now += 1.1;
+        a.on_key(key('s'));
+        assert_eq!(a.session.as_deref(), Some("s-t"));
+        assert_eq!(visible_ids(&a), vec!["t"]);
+    }
+
+    // --- hints
+
+    #[test]
+    fn sessions_list_hints() {
+        // everything on offer, and no j/k
+        let a = sessions_app(
+            vec![in_session(question("a", 960.0), "s-a")],
+            vec![started(shpooled(session(1, "s-a", "idle"), "jw-1"), 42)],
+        );
+        let a = with_origin(a, MR_URL);
+        assert_eq!(
+            a.hints(),
+            vec![
+                ("enter", "open"),
+                ("s", "items"),
+                ("a", "attach"),
+                ("o", "open"),
+                ("x", "kill"),
+                ("f", "All"),
+                ("N", "new"),
+                ("q", "quit"),
+            ]
+        );
+        let s = screen(&a);
+        assert!(s.contains("enter open") && s.contains("s items"), "{s}");
+        // the bare minimum: no items, nothing to attach, open or kill
+        let a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        assert_eq!(
+            a.hints(),
+            vec![("enter", "open"), ("f", "All"), ("N", "new"), ("q", "quit")]
+        );
+        // items of another session do not count
+        let a = sessions_app(
+            vec![in_session(question("a", 960.0), "s-other")],
+            vec![session(1, "s-a", "idle")],
+        );
+        assert!(a.hints().iter().all(|(k, _)| *k != "s"));
+        // no sessions
+        let a = sessions_app(vec![], vec![]);
+        assert_eq!(a.hints(), vec![("f", "All"), ("N", "new"), ("q", "quit")]);
+    }
+
+    #[test]
+    fn session_detail_hints() {
+        let a = sessions_app(
+            vec![],
+            vec![started(shpooled(session(1, "s-a", "idle"), "jw-1"), 42)],
+        );
+        let mut a = with_origin(a, MR_URL);
+        open_session(&mut a);
+        assert_eq!(
+            a.hints(),
+            vec![
+                ("j/k", "scroll"),
+                ("a", "attach"),
+                ("o", "open"),
+                ("x", "kill"),
+                ("esc", "back"),
+            ]
+        );
+        let s = screen(&a);
+        assert!(s.contains("j/k scroll") && s.contains("esc back"), "{s}");
+        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        open_session(&mut a);
+        assert_eq!(a.hints(), vec![("j/k", "scroll"), ("esc", "back")]);
     }
 }
