@@ -1,7 +1,7 @@
 //! agent-inbox: terminal UI over the event router's queue (see ADR-023): inspect events, answer
 //! sudo password requests and, via the permission hook, Claude permission prompts and
-//! questions (ADR-025); `S` shows the live Claude sessions (attach, kill, start a new one;
-//! `jw` must be on PATH, the Nix package adds it). Only agents started by `jw agent` or the
+//! questions (ADR-025); the last tab (`f`) shows the live Claude sessions (attach, kill, start a
+//! new one; `jw` must be on PATH, the Nix package adds it). Only agents started by `jw agent` or the
 //! GitLab event handler (those with CLAUDE_ORIGIN_FILE) are listed, `o` opens their merge
 //! request or issue (`xdg-open`, also added by the Nix package).
 //!
