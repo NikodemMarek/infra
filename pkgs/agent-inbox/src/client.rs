@@ -124,7 +124,7 @@ impl Item {
         self.field("session_id")
     }
 
-    /// The shpool session the event comes from (`shpool attach <name>`), "" if there is none.
+    /// The shpool session the event comes from (`jw attach <name>`), "" if there is none.
     pub fn shpool(&self) -> &str {
         self.field("shpool")
     }

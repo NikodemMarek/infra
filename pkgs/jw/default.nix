@@ -13,6 +13,9 @@
 }:
 assert lib.assertMsg (builtins.match "[~/][A-Za-z0-9._/-]*" projectsRoot != null) "jw: projectsRoot must be ~/... or an absolute path of [A-Za-z0-9._/-]";
   runCommand "jw" {} ''
+    cp ${./jw.py} jw.py
+    cp ${./test_jw.py} test_jw.py
+    ${python3}/bin/python3 -m unittest
     install -Dm755 ${./jw.py} $out/bin/jw
     substituteInPlace $out/bin/jw \
       --replace-fail "#!/usr/bin/env python3" "#!${python3}/bin/python3" \
