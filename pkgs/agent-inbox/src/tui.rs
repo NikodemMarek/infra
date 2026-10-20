@@ -2,7 +2,7 @@
 //! to carry out), `render` draws it, `run` is the loop around the router client.
 //!
 //! Layout: a header line, the list of items next to (below, on narrow terminals) a detail pane
-//! for the selected item, and a footer with key hints or the last status message. Tab cycles
+//! for the selected item, and a footer with key hints or the last status message. Tab (Shift-Tab back) cycles
 //! through All, the configured filter tabs (`Tab`, which filter the items by the kind of their
 //! origin) and the Sessions tab: the same layout over the live Claude sessions (list and detail
 //! of the selected session; Enter opens the detail like an item's), all of them whatever
@@ -318,10 +318,15 @@ impl App {
     }
 
     /// Switches to the next tab (after Sessions: all); the selection follows its item or pid.
-    fn next_tab(&mut self) {
+    /// Switches to the following tab, or the previous one on Shift-Tab.
+    fn next_tab(&mut self, code: KeyCode) {
         let item = self.selected_item().map(|i| i.id.clone());
         let pid = self.selected_session().map(|s| s.pid);
-        self.tab = self.following_tab();
+        self.tab = if code == KeyCode::BackTab {
+            (self.tab + self.sessions_tab()) % (self.sessions_tab() + 1)
+        } else {
+            self.following_tab()
+        };
         self.select_id(item);
         self.select_pid(pid);
     }
@@ -530,7 +535,7 @@ impl App {
             KeyCode::Char('g') => self.selected = 0,
             KeyCode::Char('G') => self.selected = last,
             KeyCode::Char('N') => self.mode = Mode::Task { buf: String::new() },
-            KeyCode::Tab => self.next_tab(),
+            KeyCode::Tab | KeyCode::BackTab => self.next_tab(code),
             KeyCode::Enter | KeyCode::Char('l') => {
                 if let Some(id) = self.selected_item().map(|i| i.id.clone()) {
                     self.open(id, code);
@@ -561,7 +566,7 @@ impl App {
         let last = self.visible_sessions().len().saturating_sub(1);
         match code {
             KeyCode::Char('q') => return Effect::Quit,
-            KeyCode::Tab => self.next_tab(),
+            KeyCode::Tab | KeyCode::BackTab => self.next_tab(code),
             KeyCode::Char('j') | KeyCode::Down => {
                 self.session_sel = (self.session_sel + 1).min(last)
             }
@@ -629,9 +634,9 @@ impl App {
         self.mode = Mode::SessionDetail { pid, scroll };
         match code {
             KeyCode::Esc | KeyCode::Char('q' | 'h') | KeyCode::Backspace => self.mode = Mode::List,
-            KeyCode::Tab => {
+            KeyCode::Tab | KeyCode::BackTab => {
                 self.mode = Mode::List;
-                self.next_tab();
+                self.next_tab(code);
             }
             KeyCode::Char('a' | 'x' | 'o') => return self.session_key(Some(pid), code),
             _ => {}
@@ -733,9 +738,9 @@ impl App {
         }
         match code {
             KeyCode::Esc | KeyCode::Char('q' | 'h') | KeyCode::Backspace => self.mode = Mode::List,
-            KeyCode::Tab => {
+            KeyCode::Tab | KeyCode::BackTab => {
                 self.mode = Mode::List;
-                self.next_tab();
+                self.next_tab(code);
             }
             code => {
                 if let Some(effect) = self.item_key(id, code) {
@@ -5753,5 +5758,27 @@ mod tests {
         );
         open_session(&mut a);
         assert!(a.hints().iter().all(|(k, _)| *k != "s"), "{:?}", a.hints());
+    }
+
+    #[test]
+    fn shift_tab_goes_to_the_previous_tab() {
+        let mut a = tabbed_sessions_app();
+        let back = code(KeyCode::BackTab);
+        for name in ["Coding", "Review", "All", "Sessions"] {
+            assert_eq!(a.on_key(back), Effect::None);
+            assert_eq!(current_tab(&a), name);
+        }
+        // from a detail: back to the list, on the previous tab
+        a.set_sessions(vec![session(1, "s-a", "idle")]);
+        open_session(&mut a);
+        assert_eq!(a.on_key(back), Effect::None);
+        assert!(matches!(a.mode, Mode::List));
+        assert_eq!(current_tab(&a), "Coding");
+        // without configured tabs it toggles All and Sessions
+        let mut a = app(vec![]);
+        a.on_key(back);
+        assert_eq!(current_tab(&a), "Sessions");
+        a.on_key(back);
+        assert_eq!(current_tab(&a), "All");
     }
 }
