@@ -103,9 +103,6 @@ enum Mode {
     Answer { id: String, st: Answering },
     /// One key (`y`) confirms dismissing every item without a reply target, any other cancels.
     ConfirmDismissAll,
-    /// One key (`y`) confirms killing the session of process `pid`, which started at `start` when
-    /// asked (sessions view), any other cancels.
-    ConfirmKill { pid: u32, start: u64 },
     /// The task for a new agent being typed (footer).
     Task { buf: String },
 }
@@ -516,8 +513,6 @@ impl App {
             Mode::Answer { id, st } => self.answer_key(id, st, code),
             Mode::ConfirmDismissAll if code == KeyCode::Char('y') => Effect::DismissAll,
             Mode::ConfirmDismissAll => Effect::None,
-            Mode::ConfirmKill { pid, start } if code == KeyCode::Char('y') => self.kill(pid, start),
-            Mode::ConfirmKill { .. } => Effect::None,
             Mode::Task { buf } => self.task_key(buf, code),
         };
         // An item decided in the detail pane of a session: on to the next item of the session.
@@ -669,9 +664,9 @@ impl App {
                     None => self.notify("not in a shpool session", true),
                 }
             }
-            // Without a start time the pid cannot be told from a reused one: not worth asking.
+            // Without a start time the pid cannot be told from a reused one.
             KeyCode::Char('x') => match self.selected_session().map(|s| (s.pid, s.start)) {
-                Some((pid, Some(start))) => self.mode = Mode::ConfirmKill { pid, start },
+                Some((pid, Some(start))) => return Effect::Kill { pid, start },
                 Some((pid, None)) => self.notify(
                     format!("pid {pid} not killed: the registry has no start time"),
                     true,
@@ -686,21 +681,6 @@ impl App {
             _ => {}
         }
         Effect::None
-    }
-
-    /// The effect that kills the session of process `pid` (confirmed); it may have ended since
-    /// `start`, or the pid been reused.
-    fn kill(&mut self, pid: u32, start: u64) -> Effect {
-        let same = self
-            .sessions
-            .iter()
-            .any(|s| s.pid == pid && s.start == Some(start));
-        if same {
-            Effect::Kill { pid, start }
-        } else {
-            self.notify("session is gone", true);
-            Effect::None
-        }
     }
 
     /// The ids of the pending items of the session of process `pid`.
@@ -1030,7 +1010,7 @@ impl App {
             return h;
         }
         match &self.mode {
-            Mode::List | Mode::ConfirmDismissAll | Mode::ConfirmKill { .. } => {
+            Mode::List | Mode::ConfirmDismissAll => {
                 let mut h = Vec::new();
                 if let Some(item) = self.selected_item() {
                     h.push(("enter", "open"));
@@ -1872,9 +1852,7 @@ fn render_session_detail(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_detail(f: &mut Frame, app: &App, area: Rect) {
     let (item, scroll) = match &app.mode {
-        Mode::List | Mode::ConfirmDismissAll | Mode::ConfirmKill { .. } | Mode::Task { .. } => {
-            (app.selected_item(), 0)
-        }
+        Mode::List | Mode::ConfirmDismissAll | Mode::Task { .. } => (app.selected_item(), 0),
         Mode::Detail { id, scroll } => (app.find(id), *scroll),
         Mode::Password { id, .. } | Mode::Answer { id, .. } => (app.find(id), 0),
     };
@@ -1915,30 +1893,12 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-/// The confirmation prompt for killing the session of process `pid`.
-fn kill_question(app: &App, pid: u32) -> String {
-    let Some(s) = app.sessions.iter().find(|s| s.pid == pid) else {
-        return format!("Kill pid {pid}?");
-    };
-    let status = if s.status.is_empty() {
-        "unknown"
-    } else {
-        &s.status
-    };
-    format!(
-        "Kill claude {} ({}, pid {pid})?",
-        clean(&s.place()),
-        clean(status)
-    )
-}
-
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     let ask = match &app.mode {
         Mode::ConfirmDismissAll => Some(format!(
             "Dismiss {} items without a reply?",
             app.without_reply().len()
         )),
-        Mode::ConfirmKill { pid, .. } => Some(kill_question(app, *pid)),
         _ => None,
     };
     // the task popup has the focus: no status over its hints
@@ -4251,27 +4211,18 @@ mod tests {
     }
 
     #[test]
-    fn x_asks_and_y_kills_the_selected_session() {
+    fn x_kills_the_selected_session_at_once() {
         let sessions = vec![
             started(session(7, "s-a", WAITING), 42),
             started(session(8, "s-b", "idle"), 43),
         ];
         let mut a = sessions_app(vec![], sessions);
         assert!(screen(&a).contains("x kill"));
-        assert_eq!(a.on_key(key('x')), Effect::None);
-        let s = screen(&a);
-        assert!(
-            s.contains("Kill claude r:w1 (waiting, pid 7)?  y yes  n no"),
-            "{s}"
-        );
-        assert_eq!(a.on_key(key('y')), Effect::Kill { pid: 7, start: 42 });
+        assert_eq!(a.on_key(key('x')), Effect::Kill { pid: 7, start: 42 });
         assert!(matches!(a.mode, Mode::List));
-        assert!(!screen(&a).contains("Kill claude"));
         // the second session
         a.on_key(key('j'));
-        a.on_key(key('x'));
-        assert!(screen(&a).contains("Kill claude r:w1 (idle, pid 8)?"));
-        assert_eq!(a.on_key(key('y')), Effect::Kill { pid: 8, start: 43 });
+        assert_eq!(a.on_key(key('x')), Effect::Kill { pid: 8, start: 43 });
     }
 
     #[test]
@@ -4289,22 +4240,6 @@ mod tests {
     }
 
     #[test]
-    fn any_other_key_cancels_the_kill() {
-        for cancel in [key('n'), key('x'), key('j'), key('q'), code(KeyCode::Esc)] {
-            let sessions = vec![
-                started(session(7, "s-a", "idle"), 42),
-                started(session(8, "s-b", "idle"), 43),
-            ];
-            let mut a = sessions_app(vec![], sessions);
-            a.on_key(key('x'));
-            assert_eq!(a.on_key(cancel), Effect::None);
-            assert!(matches!(a.mode, Mode::List), "{cancel:?}");
-            assert_eq!(selected_pid(&a), Some(7), "{cancel:?}");
-            assert!(!screen(&a).contains("Kill claude"));
-        }
-    }
-
-    #[test]
     fn x_needs_a_selected_session_in_the_sessions_view() {
         let mut a = sessions_app(vec![], vec![]);
         assert!(!screen(&a).contains("x kill"));
@@ -4316,25 +4251,6 @@ mod tests {
         assert_eq!(a.on_key(key('x')), Effect::None);
         assert!(matches!(a.mode, Mode::List));
         assert!(!screen(&a).contains("Kill"));
-    }
-
-    #[test]
-    fn a_session_that_ended_under_the_prompt_is_not_killed() {
-        let mut a = sessions_app(vec![], vec![started(session(7, "s-a", "idle"), 42)]);
-        a.on_key(key('x'));
-        a.set_sessions(vec![]);
-        assert!(screen(&a).contains("Kill pid 7?"));
-        assert_eq!(a.on_key(key('y')), Effect::None);
-        assert!(screen(&a).contains("session is gone"));
-    }
-
-    #[test]
-    fn a_pid_reused_under_the_prompt_is_not_killed() {
-        let mut a = sessions_app(vec![], vec![started(session(7, "s-a", "idle"), 42)]);
-        a.on_key(key('x'));
-        a.set_sessions(vec![started(session(7, "s-new", "idle"), 99)]);
-        assert_eq!(a.on_key(key('y')), Effect::None);
-        assert!(screen(&a).contains("session is gone"));
     }
 
     #[test]
