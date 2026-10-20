@@ -59,15 +59,17 @@
     claude = pkgs.callPackage ./event-handlers/claude {
       notify = pkgs.event-handlers.notify;
     };
+    task = pkgs.callPackage ./event-handlers/task {};
   };
 
   # `handlers` stays explicit so `.override (old: {handlers = old.handlers // ...})`
   # can extend it.
   event-router = pkgs.callPackage ./event-router {
     # queued as well as handled; agent-inbox reads the queue
-    inbox = ["claude" "sudo"];
+    inbox = ["claude" "sudo" "task.failed"];
     handlers = {
       default = pkgs.event-handlers.notify;
+      "task.new" = pkgs.event-handlers.task;
     };
   };
 }
