@@ -61,6 +61,8 @@
       notify = pkgs.event-handlers.notify;
     };
     task = pkgs.callPackage ./event-handlers/task {};
+    # `session.message` events -> per-session mailbox read by the claude hooks
+    session-message = pkgs.callPackage ./event-handlers/session-message {};
   };
 
   # `handlers` stays explicit so `.override (old: {handlers = old.handlers // ...})`
@@ -71,6 +73,7 @@
     handlers = {
       default = pkgs.event-handlers.notify;
       "task.new" = pkgs.event-handlers.task;
+      "session.message" = pkgs.event-handlers.session-message;
     };
   };
 }
