@@ -541,7 +541,12 @@ def sync(remote, prefix, revset):
         for c in dropped:
             title = c["description"].partition("\n")[0]
             info(f"merged: {c['change'][:8]} {title}")
-        jj("abandon", *[c["commit"] for c in dropped])
+        # fast-forward merges put the commit itself into trunk, where it is immutable
+        landed = set(log_ids("::trunk() & (" + " | ".join(c["commit"] for c in dropped) + ")"))
+        if gone := [c["commit"] for c in dropped if c["commit"] not in landed]:
+            jj("abandon", *gone)
+        if log_ids("@ & ::trunk()"):
+            jj("new", "trunk()")
         if len(dropped) < len(before):
             # abandoning @ leaves the kept changes above it outside `-b @`
             rebase += ["-b", before[len(dropped)]["change"]]
