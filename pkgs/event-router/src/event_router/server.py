@@ -2,6 +2,7 @@
 queued in the inbox), `GET /inbox`, `DELETE /inbox/<id>`, `GET /health`."""
 
 import logging
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +17,9 @@ log = logging.getLogger(__name__)
 MAX_BODY = 1 << 20
 REAP_INTERVAL = 5.0
 INBOX_PATH = "/inbox"
+# Browsers can't forge Host or set Content-Type: application/json cross-origin
+# without a preflight, so these checks block CSRF and DNS rebinding.
+LOCAL_HOST = re.compile(r"(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?", re.IGNORECASE)
 
 
 def _handler(dispatcher: Dispatcher, inbox: Inbox) -> type[BaseHTTPRequestHandler]:
@@ -30,7 +34,16 @@ def _handler(dispatcher: Dispatcher, inbox: Inbox) -> type[BaseHTTPRequestHandle
         def _reply(self, code: int, msg: str) -> None:
             self._send(code, (msg + "\n").encode(), "text/plain; charset=utf-8")
 
+        def _host_ok(self) -> bool:
+            host = self.headers.get("Host")
+            if host is None or LOCAL_HOST.fullmatch(host):
+                return True
+            self._reply(403, "forbidden host")
+            return False
+
         def do_GET(self) -> None:
+            if not self._host_ok():
+                return
             if self.path == "/health":
                 self._reply(200, "ok")
             elif self.path == INBOX_PATH:
@@ -40,6 +53,8 @@ def _handler(dispatcher: Dispatcher, inbox: Inbox) -> type[BaseHTTPRequestHandle
                 self._reply(404, "not found")
 
         def do_DELETE(self) -> None:
+            if not self._host_ok():
+                return
             prefix = INBOX_PATH + "/"
             if self.path.startswith(prefix) and inbox.remove(self.path[len(prefix) :]):
                 # 204 carries no body, Content-Length or Content-Type
@@ -49,8 +64,15 @@ def _handler(dispatcher: Dispatcher, inbox: Inbox) -> type[BaseHTTPRequestHandle
                 self._reply(404, "not found")
 
         def do_POST(self) -> None:
+            if not self._host_ok():
+                return
             if self.path != "/events":
                 self._reply(404, "not found")
+                return
+            content_type = self.headers.get("Content-Type", "")
+            media_type = content_type.split(";")[0].strip().lower()
+            if media_type != "application/json":
+                self._reply(415, "Content-Type must be application/json")
                 return
             try:
                 length = int(self.headers.get("Content-Length") or "0")

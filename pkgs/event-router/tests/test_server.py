@@ -1,3 +1,4 @@
+import http.client
 import json
 import threading
 import urllib.error
@@ -25,9 +26,13 @@ def base() -> Iterator[str]:
         thread.join(5)
 
 
-def call(method: str, url: str, body: object = None) -> tuple[int, bytes]:
+def call(
+    method: str, url: str, body: object = None, headers: dict[str, str] | None = None
+) -> tuple[int, bytes]:
     data = body if isinstance(body, bytes) else None if body is None else json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data, method=method)
+    req = urllib.request.Request(
+        url, data=data, method=method, headers={"Content-Type": "application/json", **(headers or {})}
+    )
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
             return r.status, r.read()
@@ -85,3 +90,69 @@ def test_unknown_paths_are_404(base: str) -> None:
 
 def test_health(base: str) -> None:
     assert call("GET", f"{base}/health")[0] == 200
+
+
+@pytest.mark.parametrize("host", ["[::1]:7531", "localhost", "LOCALHOST:1", "127.0.0.1:7531"])
+def test_loopback_host_is_allowed(base: str, host: str) -> None:
+    assert call("GET", f"{base}/health", headers={"Host": host})[0] == 200
+
+
+@pytest.mark.parametrize("host", ["evil.com:7531", "127.0.0.1.evil.com", "localhost.evil.com", "evil.com", "evil.localhost"])
+def test_foreign_host_is_403_for_every_method(base: str, host: str) -> None:
+    h = {"Host": host}
+    assert call("GET", f"{base}/health", headers=h)[0] == 403
+    assert call("POST", f"{base}/events", {"type": "claude.x"}, headers=h)[0] == 403
+    assert call("DELETE", f"{base}/inbox/x", headers=h)[0] == 403
+    assert inbox(base) == []
+
+
+@pytest.mark.parametrize("ctype", ["text/plain", "text/plain; application/json"])
+def test_non_json_content_type_is_415_and_not_queued(base: str, ctype: str) -> None:
+    status, _ = call("POST", f"{base}/events", {"type": "claude.x", "title": "hi"}, {"Content-Type": ctype})
+    assert status == 415
+    assert inbox(base) == []
+
+
+def test_missing_content_type_is_415(base: str) -> None:
+    # urllib would add a form content type; http.client sends exactly what we give it
+    conn = http.client.HTTPConnection(base.removeprefix("http://"), timeout=5)
+    try:
+        conn.request("POST", "/events", body=b'{"type":"claude.x"}')
+        resp = conn.getresponse()
+        resp.read()
+        assert resp.status == 415
+    finally:
+        conn.close()
+    assert inbox(base) == []
+
+
+@pytest.mark.parametrize("ctype", ["application/json; charset=utf-8", "Application/JSON"])
+def test_json_content_type_variants_are_accepted(base: str, ctype: str) -> None:
+    status, _ = call("POST", f"{base}/events", {"type": "claude.x"}, {"Content-Type": ctype})
+    assert status == 202
+    assert len(inbox(base)) == 1
+
+
+def test_options_is_501(base: str) -> None:
+    assert call("OPTIONS", f"{base}/events")[0] == 501
+
+
+def test_missing_host_is_allowed(base: str) -> None:
+    host, port = base.removeprefix("http://").split(":")
+    conn = http.client.HTTPConnection(host, int(port), timeout=5)
+    try:
+        conn.putrequest("POST", "/events", skip_host=True)
+        conn.putheader("Content-Type", "application/json")
+        body = b'{"type":"claude.x"}'
+        conn.putheader("Content-Length", str(len(body)))
+        conn.endheaders(body)
+        resp = conn.getresponse()
+        resp.read()
+        assert resp.status == 202
+    finally:
+        conn.close()
+
+
+def test_foreign_host_unknown_post_path_is_403(base: str) -> None:
+    status, _ = call("POST", f"{base}/nope", {"type": "claude.x"}, {"Host": "evil.com"})
+    assert status == 403
