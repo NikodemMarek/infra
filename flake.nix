@@ -80,6 +80,7 @@
       event-handler-notify = pkgs.event-handlers.notify;
       event-handler-claude = pkgs.event-handlers.claude;
       event-handler-task = pkgs.event-handlers.task;
+      event-handler-session-message = pkgs.event-handlers.session-message;
     });
 
     nixosConfigurations = let
