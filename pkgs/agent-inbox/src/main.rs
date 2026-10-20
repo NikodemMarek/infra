@@ -5,7 +5,9 @@
 //! GitLab event handler (those with CLAUDE_ORIGIN_FILE) are listed, `o` opens their merge
 //! request or issue (`xdg-open`, also added by the Nix package).
 //!
-//!   agent-inbox              interactive UI
+//!   agent-inbox              interactive UI; $AGENT_INBOX_TABS (JSON, set by the Nix package)
+//!                            lists its filter tabs: [{"name":"Review","kinds":["review"]},
+//!                            {"name":"Coding"}], a tab without kinds shows the rest
 //!   agent-inbox list         id, age, type, project, title (TSV, newest first)
 //!   agent-inbox reply <id>   read one line from stdin, write it to the item's reply FIFO, dismiss
 //!                            (sudo: the password; claude.*: a JSON decision such as
@@ -28,6 +30,7 @@ use std::process::ExitCode;
 use client::{clean, Result};
 use reply::ReplyError;
 use serde_json::Value;
+use tui::Tab;
 
 const USAGE: &str = "usage: agent-inbox [list | reply <id> | dismiss <id> | sessions]";
 
@@ -67,10 +70,46 @@ fn runtime_dir() -> PathBuf {
         )
 }
 
+/// The filter tabs in the JSON `raw` (unset or empty: none): a list of objects with a `name` and
+/// optional `kinds`, a list of strings or null.
+fn parse_tabs(raw: &str) -> Result<Vec<Tab>> {
+    if raw.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let bad = |why: &str| format!("AGENT_INBOX_TABS: {why}");
+    let value: Value = serde_json::from_str(raw).map_err(|e| bad(&e.to_string()))?;
+    let list = value.as_array().ok_or_else(|| bad("not a list"))?;
+    list.iter()
+        .map(|tab| -> Result<Tab> {
+            let name = tab
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|n| !n.is_empty())
+                .ok_or_else(|| bad("a tab needs a name"))?;
+            let kinds = match tab.get("kinds") {
+                None | Some(Value::Null) => None,
+                Some(Value::Array(kinds)) => Some(
+                    kinds
+                        .iter()
+                        .map(|k| k.as_str().map(String::from))
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or_else(|| bad("kinds must be strings"))?,
+                ),
+                Some(_) => return Err(bad("kinds must be a list or null").into()),
+            };
+            Ok(Tab {
+                name: name.into(),
+                kinds,
+            })
+        })
+        .collect()
+}
+
 fn run_tui() -> Result<()> {
+    let tabs = parse_tabs(&env::var("AGENT_INBOX_TABS").unwrap_or_default())?;
     let base = client::base()?;
     let sessions_dir = sessions::config_dir().join("sessions");
-    tui::run(&base, Some(runtime_dir().as_path()), &sessions_dir)?;
+    tui::run(&base, Some(runtime_dir().as_path()), &sessions_dir, tabs)?;
     Ok(())
 }
 
@@ -152,5 +191,54 @@ fn dismiss(id: &str) -> Result<()> {
         Ok(())
     } else {
         Err("no such inbox item".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tab(name: &str, kinds: Option<&[&str]>) -> Tab {
+        Tab {
+            name: name.into(),
+            kinds: kinds.map(|k| k.iter().map(|s| s.to_string()).collect()),
+        }
+    }
+
+    #[test]
+    fn tabs_are_read_from_json() {
+        let raw = r#"[{"name":"Review","kinds":["review","note"]},{"name":"Coding"},
+            {"name":"Rest","kinds":null}]"#;
+        assert_eq!(
+            parse_tabs(raw).unwrap(),
+            vec![
+                tab("Review", Some(&["review", "note"])),
+                tab("Coding", None),
+                tab("Rest", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn unset_or_empty_means_no_tabs() {
+        assert_eq!(parse_tabs("").unwrap(), vec![]);
+        assert_eq!(parse_tabs(" \n").unwrap(), vec![]);
+        assert_eq!(parse_tabs("[]").unwrap(), vec![]);
+    }
+
+    #[test]
+    fn invalid_tabs_are_rejected() {
+        for raw in [
+            "{",
+            r#"{"name":"A"}"#,
+            r#"[{"kinds":["a"]}]"#,
+            r#"[{"name":""}]"#,
+            r#"[{"name":"A","kinds":"a"}]"#,
+            r#"[{"name":"A","kinds":[1]}]"#,
+            r#"["A"]"#,
+        ] {
+            let e = parse_tabs(raw).unwrap_err().to_string();
+            assert!(e.starts_with("AGENT_INBOX_TABS: "), "{raw}: {e}");
+        }
     }
 }

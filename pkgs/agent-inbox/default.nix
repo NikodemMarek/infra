@@ -4,6 +4,10 @@
   makeWrapper,
   jw,
   xdg-utils,
+  # Filter tabs, `f` cycles through them: a list of `{ name; kinds ? null; }`. `kinds` are the
+  # origin kinds the tab shows (`review`, `note`, `task`, ...); null or absent = every kind no
+  # other tab lists. Read from $AGENT_INBOX_TABS (JSON), which a value in the environment overrides.
+  tabs ? [ ],
 }:
 
 rustPlatform.buildRustPackage {
@@ -27,7 +31,7 @@ rustPlatform.buildRustPackage {
   # xdg-open of the user's own PATH wins. zellij and shpool come from PATH too: they must match the
   # running server and daemon.
   postInstall = ''
-    wrapProgram $out/bin/agent-inbox --suffix PATH : ${lib.makeBinPath [jw xdg-utils]}
+    wrapProgram $out/bin/agent-inbox --suffix PATH : ${lib.makeBinPath [jw xdg-utils]} ${lib.optionalString (tabs != [ ]) "--set-default AGENT_INBOX_TABS ${lib.escapeShellArg (builtins.toJSON tabs)}"}
   '';
 
   meta = {
