@@ -51,8 +51,11 @@
   # sessions run acceptEdits with the memory dir in additionalDirectories, so
   # without these they could write them directly. The architect's own files
   # (overview, decisions, log, notes) are not covered. Only Edit rules: they
-  # apply to Write too, Write path rules are never consulted.
+  # apply to Write too, Write path rules are never consulted. Sessions are
+  # started only with `jw agent`: others are invisible to agent-inbox.
   deny = [
+    "Bash(shpool attach:*)"
+    "Bash(shpool --no-daemonize attach:*)"
     "Edit(@memoryDir@/global.md)"
     "Edit(@memoryDir@/topic/**)"
     "Edit(@memoryDir@/lang/**)"
