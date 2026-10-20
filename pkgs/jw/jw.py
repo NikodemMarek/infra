@@ -90,7 +90,7 @@ def pick(items, query="", empty=None):
     if p.returncode == 1:
         raise Fail("no match")
     if p.returncode == 130:  # Esc, Ctrl-C
-        raise Fail("cancelled")  # agent-inbox matches this line (its `N`)
+        raise Fail("cancelled")  # `jw pick` turns it into exit 130, which agent-inbox treats as cancelled
     if p.returncode != 0:
         raise Fail(f"fzf failed (exit {p.returncode})")
     return p.stdout.strip()

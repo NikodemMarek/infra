@@ -7,14 +7,16 @@
 //! origin) and the Sessions tab: the same layout over the live Claude sessions (list and detail
 //! of the selected session; Enter opens the detail like an item's), all of them whatever
 //! their origin. `N` (everywhere) asks for a task
-//! in a popup (Ctrl+J adds a line) and starts a new agent for it (`jw agent -d`). Only the events
-//! and sessions of agents with an origin (a merge request, an issue or a task, see `Origin`) are
-//! shown, with it as their context; `o` opens its link (`xdg-open`).
+//! in a popup (Ctrl+J adds a line) and posts it to the router as a `task.new` event (an empty
+//! task: pick the repo with `jw pick` first). Only the events and sessions of agents with an
+//! origin (a merge request, an issue or a task, see `Origin`) are shown, with it as their
+//! context, plus the requests that come from no agent (sudo, failed tasks: `p` picks a repo with
+//! `jw pick` and sends the task again); `o` opens the link of an origin (`xdg-open`).
 
 use std::collections::HashMap;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{
@@ -34,7 +36,7 @@ use ratatui::{DefaultTerminal, Frame};
 use serde_json::{json, Map, Value};
 use unicode_width::UnicodeWidthChar;
 
-use crate::client::{self, clean, Item, Origin, Question};
+use crate::client::{self, clean, Item, Origin, Question, Task};
 use crate::reply::{self, ReplyError};
 use crate::sessions::{self, Session};
 
@@ -84,9 +86,14 @@ enum Effect {
         pid: u32,
         start: u64,
     },
-    /// Start a new agent for the task `.0` with `jw agent -d` (empty: pick a repo; needs the
-    /// terminal: done by `event_loop`).
-    NewAgent(String),
+    /// Post the task `.0` to the router.
+    SendTask(Task),
+    /// Choose the repo of `task` with `jw pick`, post it, and dismiss the item `dismiss` (needs
+    /// the terminal: done by `event_loop`).
+    PickRepo {
+        task: Task,
+        dismiss: Option<String>,
+    },
     /// Open the http(s) link `.0` with `xdg-open`.
     Open(String),
 }
@@ -188,11 +195,36 @@ fn action(item: &Item) -> Option<Action> {
     }
 }
 
+fn is_task_failed(item: &Item) -> bool {
+    item.kind() == "task.failed"
+}
+
+/// Items that come from no agent with an origin, so every tab shows them.
+fn always_shown(item: &Item) -> bool {
+    item.kind().starts_with("sudo.") || is_task_failed(item)
+}
+
+/// Sending the task of the `task.failed` item again, with a repo to pick.
+fn retry_effect(item: &Item) -> Effect {
+    Effect::PickRepo {
+        task: Task {
+            prompt: item.prompt().to_string(),
+            images: item.images().into_iter().map(String::from).collect(),
+            repo: None,
+            id: Some(item.event_id())
+                .filter(|id| !id.is_empty())
+                .map(String::from),
+        },
+        dismiss: Some(item.id.clone()),
+    }
+}
+
 fn action_hints(item: &Item) -> Vec<(&'static str, &'static str)> {
     match action(item) {
         Some(Action::Password) => vec![("p", "password")],
         Some(Action::Permission) => vec![("y", "allow"), ("n", "deny")],
         Some(Action::Question) => vec![("enter", "answer")],
+        None if is_task_failed(item) => vec![("p", "pick repo")],
         None => vec![],
     }
 }
@@ -245,16 +277,16 @@ impl App {
             .collect()
     }
 
-    /// The items that have an origin or are sudo requests, in any session.
+    /// The items that have an origin or are `always_shown`, in any session.
     fn shown(&self) -> impl Iterator<Item = &Item> {
         self.items
             .iter()
-            .filter(|i| !i.origin_file().is_empty() || i.kind().starts_with("sudo."))
+            .filter(|i| !i.origin_file().is_empty() || always_shown(i))
     }
 
     fn item_in_tab(&self, tab: usize, item: &Item) -> bool {
         let kind = self.origin_kind(item.origin_file());
-        item.kind().starts_with("sudo.") || self.in_tab(tab, kind)
+        always_shown(item) || self.in_tab(tab, kind)
     }
 
     /// All sessions: the origin tabs filter items only.
@@ -429,7 +461,7 @@ impl App {
     fn without_reply(&self) -> Vec<String> {
         self.visible()
             .into_iter()
-            .filter(|i| i.reply().is_none())
+            .filter(|i| i.reply().is_none() && !is_task_failed(i))
             .map(|i| i.id.clone())
             .collect()
     }
@@ -548,8 +580,16 @@ impl App {
                     self.mode = Mode::ConfirmDismissAll;
                 }
             }
-            // Dismiss, attach, open and raw view only: decisions and input modes are for the
-            // detail pane (a held key must not decide the items that move up under the selection).
+            // Dismiss, attach, open, raw view and picking the repo of a failed task only:
+            // decisions and input modes are for the detail pane (a held key must not decide the
+            // items that move up under the selection).
+            KeyCode::Char('p') if self.selected_item().is_some_and(is_task_failed) => {
+                if let Some(id) = self.selected_item().map(|i| i.id.clone()) {
+                    if let Some(effect) = self.item_key(id, code) {
+                        return effect;
+                    }
+                }
+            }
             KeyCode::Char('d' | 'a' | 'o' | '?') => {
                 if let Some(id) = self.selected_item().map(|i| i.id.clone()) {
                     if let Some(effect) = self.item_key(id, code) {
@@ -699,6 +739,10 @@ impl App {
                 }
                 Some(Effect::None)
             }
+            KeyCode::Char('p') if self.find(&id).is_some_and(is_task_failed) => {
+                self.mode = Mode::List;
+                self.find(&id).map(retry_effect)
+            }
             KeyCode::Char('p') | KeyCode::Enter if act == Some(Action::Password) => {
                 self.mode = Mode::Password {
                     id,
@@ -784,13 +828,24 @@ impl App {
         Effect::None
     }
 
-    /// Typing the task of a new agent; Enter starts it (an empty task: jw asks for the repo).
+    /// Typing the task of a new agent; Enter sends it (an empty task: pick the repo first).
     fn task_key(&mut self, mut buf: String, code: KeyCode) -> Effect {
         match code {
             KeyCode::Esc => self.mode = Mode::List,
             KeyCode::Enter => {
                 self.mode = Mode::List;
-                return Effect::NewAgent(buf.trim().to_string());
+                let task = Task {
+                    prompt: buf.trim().to_string(),
+                    ..Task::default()
+                };
+                return if task.prompt.is_empty() {
+                    Effect::PickRepo {
+                        task,
+                        dismiss: None,
+                    }
+                } else {
+                    Effect::SendTask(task)
+                };
             }
             KeyCode::Backspace => {
                 buf.pop();
@@ -983,7 +1038,10 @@ impl App {
                     if self.link(item.origin_file()).is_some() {
                         h.push(("o", "open"));
                     }
-                    if item.reply().is_none() {
+                    if is_task_failed(item) {
+                        h.push(("p", "pick repo"));
+                    }
+                    if item.reply().is_none() && !is_task_failed(item) {
                         h.push(("D", "dismiss read-only"));
                     }
                     h.push(("?", "raw"));
@@ -1140,6 +1198,7 @@ fn badge(kind: &str) -> (String, Style) {
         "claude.permission_request" => ("PERM".into(), strong(Color::Yellow)),
         "claude.question" => ("ASK".into(), strong(Color::Cyan)),
         "claude.waiting" => ("WAIT".into(), strong(Color::Green)),
+        "task.failed" => ("FAIL".into(), strong(Color::Red)),
         other => (
             truncate(&clean(other.rsplit('.').next().unwrap_or("")), BADGE_WIDTH),
             dim(),
@@ -1221,11 +1280,13 @@ fn detail_view(app: &App, item: &Item) -> Vec<Line<'static>> {
         "sudo.password_request" => sudo_lines(item, &mut lines),
         "claude.permission_request" => permission_lines(item, &mut lines),
         "claude.question" if !item.questions().is_empty() => question_summary(item, &mut lines),
+        "task.failed" => task_failed_lines(item, &mut lines),
         _ => other_lines(item, &mut lines),
     }
     lines.push(Line::default());
     lines.push(match action(item) {
         Some(_) => Line::from(hint_spans(&action_hints(item), " · ")),
+        None if is_task_failed(item) => Line::from(hint_spans(&action_hints(item), " · ")),
         None => {
             let why = if matches!(item.kind(), "claude.permission_request" | "claude.question")
                 && item.reply().is_none()
@@ -1261,6 +1322,32 @@ fn sudo_lines(item: &Item, lines: &mut Vec<Line<'static>>) {
     if !item.prompt().is_empty() {
         lines.push(Line::default());
         lines.extend(lines_of(item.prompt(), dim()));
+    }
+}
+
+/// A task the router could not start: the title, why, the prompt and the images.
+fn task_failed_lines(item: &Item, lines: &mut Vec<Line<'static>>) {
+    lines.push(Line::styled(clean(item.title()), bold()));
+    if !item.reason().is_empty() {
+        lines.push(Line::styled(
+            format!("reason: {}", clean(item.reason())),
+            Style::new().fg(Color::Red),
+        ));
+    }
+    if !item.prompt().is_empty() {
+        lines.push(Line::default());
+        lines.extend(lines_of(item.prompt(), Style::new()));
+    }
+    let images = item.images();
+    if !images.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::styled("images:", dim()));
+        lines.extend(
+            images
+                .into_iter()
+                .take(MAX_LINES)
+                .map(|i| Line::raw(clean(i))),
+        );
     }
 }
 
@@ -1548,7 +1635,7 @@ fn render_task(f: &mut Frame, p: &Panes, buf: &str) {
     let mut last = vec![Span::raw(clean(last)), cursor];
     if buf.is_empty() {
         last.push(Span::styled(
-            "What should the agent do? (empty: pick a repo and attach)",
+            "What should the agent do? (empty: pick a repo)",
             dim(),
         ));
     }
@@ -1892,10 +1979,10 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
         )),
         _ => None,
     };
-    // the task popup has the focus: no status over its hints
+    // the task popup has the focus: no status over its hints, except the error of a failed send
     let status = app
         .status()
-        .filter(|_| !matches!(app.mode, Mode::Task { .. }));
+        .filter(|s| s.error || !matches!(app.mode, Mode::Task { .. }));
     let line = if let Some(ask) = ask {
         let mut spans = vec![
             Span::styled(
@@ -1962,9 +2049,9 @@ fn event_loop(
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     app.now = client::now(); // not the time of the draw: the guard is timed
                     let effect = app.on_key(key);
-                    if let Effect::NewAgent(task) = &effect {
-                        new_agent(terminal, &mut app, task)?;
-                        refreshed = None; // a new session shows up in the registry
+                    if let Effect::PickRepo { task, dismiss } = effect {
+                        pick_repo(terminal, &mut app, base, task, dismiss.as_deref())?;
+                        refreshed = None; // a dismissed item goes, a new session shows up
                         continue;
                     }
                     if perform(&mut app, effect, base, runtime, sessions_dir) {
@@ -2059,7 +2146,13 @@ fn perform(
             open_url(app, &url);
             return false;
         }
-        Effect::NewAgent(_) => return false, // needs the terminal: `event_loop` does it
+        Effect::SendTask(task) => {
+            // the typed text must not be lost: back into the popup, to retry or copy
+            if !post_task(app, base, &task) {
+                app.mode = Mode::Task { buf: task.prompt };
+            }
+        }
+        Effect::PickRepo { .. } => return false, // needs the terminal: `event_loop` does it
     }
     refresh(app, base, runtime, sessions_dir);
     false
@@ -2170,118 +2263,78 @@ fn open_url(app: &mut App, url: &str) {
     }
 }
 
-/// The shpool session name from the last `jw attach <name>` line of the stderr of
-/// `jw agent -d` (which prints it when the session is started).
-fn started_session(stderr: &str) -> Option<String> {
-    stderr
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix("jw attach "))
-        .map(str::trim)
-        .rfind(|name| !name.is_empty())
-        .map(String::from)
-}
-
-/// What jw prints (last) when the user cancels its fzf.
-const JW_CANCELLED: &str = "jw: cancelled";
-
-/// What a `jw agent -d` run came to.
+/// What `jw pick` came to.
 #[derive(Debug, PartialEq)]
-enum Outcome {
-    /// Go to the session (no task: the user picked the repo in fzf).
-    Attach(String),
-    /// The session runs in the background (a task was given).
-    Started(String),
+enum Pick {
+    Repo(String),
     Cancelled,
     Failed(String),
 }
 
-/// The outcome of `jw agent -d` for `task` from its exit status and its stderr.
-fn outcome(task: &str, success: bool, stderr: &str) -> Outcome {
-    if success {
-        return match started_session(stderr) {
-            Some(name) if task.is_empty() => Outcome::Attach(name),
-            Some(name) => Outcome::Started(name),
-            None => Outcome::Failed("jw agent -d: no session name in its output".into()),
-        };
-    }
-    // with a task the stderr also has the routing lines: only the last one says why jw failed
-    match stderr.lines().map(str::trim).rfind(|l| !l.is_empty()) {
-        Some(JW_CANCELLED) => Outcome::Cancelled,
-        Some(why) => Outcome::Failed(why.into()),
-        None => Outcome::Failed("jw agent -d failed".into()),
-    }
-}
+/// What jw exits with when the user cancels its fzf (SIGINT).
+const JW_CANCELLED: i32 = 130;
 
-/// The arguments of `jw` for a new agent. `--` keeps a task like `-x` from being an option and
-/// its first word from being taken for a repo.
-fn jw_args(task: &str) -> Vec<String> {
-    let mut args = vec!["agent".to_string(), "-d".to_string()];
-    if !task.is_empty() {
-        args.push("--".into());
-        args.push(task.into());
+/// The outcome of `jw pick` from its exit code (None: killed by a signal) and its output.
+fn pick_outcome(code: Option<i32>, stdout: &str, stderr: &str) -> Pick {
+    match code {
+        Some(0) => match stdout.lines().map(str::trim).find(|l| !l.is_empty()) {
+            Some(repo) => Pick::Repo(repo.into()),
+            None => Pick::Failed("jw pick: no repo chosen".into()),
+        },
+        Some(JW_CANCELLED) => Pick::Cancelled,
+        _ => match stderr.lines().map(str::trim).rfind(|l| !l.is_empty()) {
+            Some(why) => Pick::Failed(why.into()),
+            None => Pick::Failed("jw pick failed".into()),
+        },
     }
-    args
 }
 
 extern "C" fn ignore_sigint(_: libc::c_int) {}
 
-/// Waits for `jw` (its stderr is piped) and returns whether it succeeded and its stderr, which is
-/// echoed line by line as jw prints it.
-fn wait_echoing(mut jw: Child) -> io::Result<(bool, String)> {
-    let pipe = jw.stderr.take().expect("stderr is piped");
-    let echo = std::thread::spawn(move || {
-        let mut stderr = String::new();
-        let mut pipe = BufReader::new(pipe);
-        let mut buf = Vec::new();
-        // not `lines()`: it stops at output that is not UTF-8
-        while matches!(pipe.read_until(b'\n', &mut buf), Ok(n) if n > 0) {
-            let line = String::from_utf8_lossy(&buf);
-            let line = line.trim_end_matches(['\r', '\n']);
-            let _ = writeln!(io::stderr(), "{line}");
-            stderr.push_str(line);
-            stderr.push('\n');
-            buf.clear();
-        }
-        stderr
-    });
-    let status = jw.wait();
-    let stderr = echo.join().unwrap_or_default();
-    Ok((status?.success(), stderr))
-}
-
-/// Runs `jw agent -d <task>`: whether it succeeded and its stderr.
-fn run_jw(task: &str) -> io::Result<(bool, String)> {
-    // jw is in our process group, so a Ctrl-C while it routes reaches us too. A handler that
-    // does nothing, not SIG_IGN: jw would inherit that.
+/// Runs `jw pick` (fzf draws on /dev/tty): its output is captured.
+fn run_pick() -> io::Result<Output> {
+    // jw is in our process group, so a Ctrl-C in fzf reaches us too. A handler that does
+    // nothing, not SIG_IGN: jw would inherit that.
     let handler = ignore_sigint as extern "C" fn(libc::c_int) as libc::sighandler_t;
     // SAFETY: the handler does nothing, so it is async-signal-safe.
     let previous = unsafe { libc::signal(libc::SIGINT, handler) };
     let result = Command::new("jw")
-        .args(jw_args(task))
-        .current_dir("/")
+        .arg("pick")
         .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::piped())
-        .spawn()
-        .and_then(wait_echoing);
+        .output();
     // SAFETY: restores the handler `signal` returned above.
     unsafe { libc::signal(libc::SIGINT, previous) };
     result
 }
 
-/// Starts a new agent: leaves the TUI's screen for `jw agent -d <task>` (jw picks the repo
-/// the task fits; without a task it asks with fzf, which draws on /dev/tty; the cwd `/` makes it
-/// always pick). Without a task it then goes to the session, with one the user stays in the
-/// inbox. jw's stderr is shown while it runs and parsed for the name of the session and the
-/// reason of a failure.
-fn new_agent(terminal: &mut DefaultTerminal, app: &mut App, task: &str) -> io::Result<()> {
+/// Posts `task` to the router and says so; whether it was accepted.
+fn post_task(app: &mut App, base: &str, task: &Task) -> bool {
+    match client::post_event(base, &client::task_event(task)) {
+        Ok(()) => {
+            app.notify("task sent", false);
+            true
+        }
+        Err(e) => {
+            app.notify(e, true);
+            false
+        }
+    }
+}
+
+/// Leaves the TUI's screen for `jw pick`, then posts `task` with the repo picked. The item
+/// `dismiss` is dismissed once the router has the task. No attach: the session shows up in the
+/// Sessions tab.
+fn pick_repo(
+    terminal: &mut DefaultTerminal,
+    app: &mut App,
+    base: &str,
+    mut task: Task,
+    dismiss: Option<&str>,
+) -> io::Result<()> {
     // what `ratatui::init` and `restore` do, without their panic hook
     disable_raw_mode()?;
     execute!(io::stdout(), LeaveAlternateScreen, DisableBracketedPaste)?;
-    if !task.is_empty() {
-        println!("New agent: {task}"); // jw's progress follows, e.g. "choosing a repo..."
-    }
-    let ran = run_jw(task);
+    let ran = run_pick();
     execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
     enable_raw_mode()?;
     // SAFETY: tcflush only takes integers; it drops what was typed after fzf exited, which
@@ -2293,21 +2346,26 @@ fn new_agent(terminal: &mut DefaultTerminal, app: &mut App, task: &str) -> io::R
     }
     terminal.clear()?;
     app.now = client::now(); // fzf may have taken a while: the status starts now
-    let (success, stderr) = match ran {
-        Ok(ran) => ran,
+    let out = match ran {
+        Ok(out) => out,
         Err(e) => {
             app.notify(format!("jw: {e}"), true);
             return Ok(());
         }
     };
-    match outcome(task, success, &stderr) {
-        Outcome::Attach(name) if std::env::var_os("ZELLIJ").is_some() => attach(app, &name),
-        Outcome::Attach(name) => {
-            app.notify(format!("started {name} (jw attach {name})"), false);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    match pick_outcome(out.status.code(), &stdout, &stderr) {
+        Pick::Repo(repo) => {
+            task.repo = Some(repo);
+            if post_task(app, base, &task) {
+                if let Some(id) = dismiss {
+                    dismiss_replied(app, base, id);
+                }
+            }
         }
-        Outcome::Started(name) => app.notify(format!("started {name}"), false),
-        Outcome::Cancelled => app.notify("cancelled", false), // e.g. Esc in fzf: not an error
-        Outcome::Failed(why) => app.notify(why, true),
+        Pick::Cancelled => app.notify("cancelled", false), // e.g. Esc in fzf: not an error
+        Pick::Failed(why) => app.notify(why, true),
     }
     Ok(())
 }
@@ -4052,7 +4110,10 @@ mod tests {
         type_text(&mut a, "y");
         assert_eq!(
             a.on_key(code(KeyCode::Enter)),
-            Effect::NewAgent("fix y".into())
+            Effect::SendTask(Task {
+                prompt: "fix y".into(),
+                ..Task::default()
+            })
         );
         assert!(matches!(a.mode, Mode::List));
     }
@@ -4063,11 +4124,7 @@ mod tests {
             let mut a = app(vec![]);
             a.on_key(key('N'));
             type_text(&mut a, text);
-            assert_eq!(
-                a.on_key(code(KeyCode::Enter)),
-                Effect::NewAgent(String::new()),
-                "{text:?}"
-            );
+            assert_eq!(a.on_key(code(KeyCode::Enter)), pick_repo(), "{text:?}");
             assert!(matches!(a.mode, Mode::List));
         }
     }
@@ -4077,10 +4134,7 @@ mod tests {
         let mut a = app(vec![]);
         a.on_key(key('N'));
         a.on_key(ctrl_j());
-        assert_eq!(
-            a.on_key(code(KeyCode::Enter)),
-            Effect::NewAgent(String::new())
-        );
+        assert_eq!(a.on_key(code(KeyCode::Enter)), pick_repo());
         assert!(matches!(a.mode, Mode::List));
     }
 
@@ -4121,6 +4175,14 @@ mod tests {
 
     fn ctrl_j() -> KeyEvent {
         KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL)
+    }
+
+    /// What an empty task asks for: choose the repo first, nothing to dismiss.
+    fn pick_repo() -> Effect {
+        Effect::PickRepo {
+            task: Task::default(),
+            dismiss: None,
+        }
     }
 
     #[test]
@@ -4183,7 +4245,10 @@ mod tests {
             type_text(&mut a, "b");
             assert_eq!(
                 a.on_key(code(KeyCode::Enter)),
-                Effect::NewAgent("a\nb".into()),
+                Effect::SendTask(Task {
+                    prompt: "a\nb".into(),
+                    ..Task::default()
+                }),
                 "{newline:?}"
             );
         }
@@ -4204,12 +4269,11 @@ mod tests {
     }
 
     #[test]
-    fn performing_a_new_agent_leaves_it_to_the_event_loop() {
+    fn performing_a_repo_pick_leaves_it_to_the_event_loop() {
         let mut a = app(vec![]);
-        let effect = Effect::NewAgent("fix".into());
         assert!(!perform(
             &mut a,
-            effect,
+            pick_repo(),
             "",
             None,
             Path::new("/nonexistent")
@@ -4217,102 +4281,100 @@ mod tests {
     }
 
     #[test]
-    fn started_session_is_the_name_of_the_last_jw_attach_line() {
-        assert_eq!(started_session("jw attach jw-1\n"), Some("jw-1".into()));
-        // noise before and after, trailing whitespace and carriage return
-        assert_eq!(
-            started_session("jw: fetch failed, continuing\n  jw attach jw-2 \t\r\nbye\n"),
-            Some("jw-2".into())
-        );
-        // the last one wins
-        assert_eq!(
-            started_session("jw attach jw-1\njw attach jw-3\nnoise\n"),
-            Some("jw-3".into())
-        );
-        assert_eq!(
-            started_session("no newline\njw attach jw-4"),
-            Some("jw-4".into())
-        );
-        // not the line: other text around it, another command, no name
-        for stderr in [
-            "",
-            "jw: no match\n",
-            "run jw attach jw-1\n",
-            "jw attach\n",
-            "jw attach  \n",
-            "shpool list jw-1\n",
-            "shpool attach jw-1\n",
-        ] {
-            assert_eq!(started_session(stderr), None, "{stderr:?}");
-        }
-    }
-
-    #[test]
-    fn outcome_of_a_started_session() {
-        let stderr = "jw: choosing a repo...\njw attach jw-1\n";
-        assert_eq!(
-            outcome("fix x", true, stderr),
-            Outcome::Started("jw-1".into())
-        );
-        // without a task the user picked the repo: go to the session
-        assert_eq!(
-            outcome("", true, "jw attach jw-2\n"),
-            Outcome::Attach("jw-2".into())
-        );
-        // success must come with a name
-        for task in ["", "fix x"] {
+    fn pick_outcome_reads_the_exit_code_and_output() {
+        assert_eq!(pick_outcome(Some(0), "r\n", ""), Pick::Repo("r".into()));
+        for stdout in ["", "\n"] {
             assert!(
-                matches!(
-                    outcome(task, true, "jw: choosing a repo...\n"),
-                    Outcome::Failed(_)
-                ),
-                "{task:?}"
+                matches!(pick_outcome(Some(0), stdout, ""), Pick::Failed(_)),
+                "{stdout:?}"
             );
         }
-        // a name of a failed run is no session
+        assert_eq!(pick_outcome(Some(130), "", ""), Pick::Cancelled);
         assert_eq!(
-            outcome("", false, "jw attach jw-3\njw: boom\n"),
-            Outcome::Failed("jw: boom".into())
+            pick_outcome(Some(1), "", "a\nb\n"),
+            Pick::Failed("b".into())
         );
+        assert!(matches!(pick_outcome(Some(1), "", ""), Pick::Failed(_)));
+        assert!(matches!(pick_outcome(None, "", ""), Pick::Failed(_)));
+    }
+
+    // --- failed tasks
+
+    /// A `task.failed` item, with no origin file.
+    fn task_failed(id: &str) -> Item {
+        Item {
+            id: id.into(),
+            received: 995.0,
+            event: json!({"type": "task.failed", "prompt": "x", "images": ["/a.png"], "id": "c1",
+                "reason": "no repo chosen (r)", "title": "x", "project": "task"}),
+        }
+    }
+
+    /// What `p` on `task_failed(id)` asks for.
+    fn retry(id: &str) -> Effect {
+        Effect::PickRepo {
+            task: Task {
+                prompt: "x".into(),
+                images: vec!["/a.png".into()],
+                repo: None,
+                id: Some("c1".into()),
+            },
+            dismiss: Some(id.into()),
+        }
     }
 
     #[test]
-    fn outcome_of_a_cancelled_or_failed_run() {
-        // cancelling fzf: without a task jw says only that, with one the routing lines come first
-        assert_eq!(outcome("", false, "jw: cancelled\n"), Outcome::Cancelled);
-        assert_eq!(
-            outcome(
-                "fix x",
-                false,
-                "jw: choosing a repo...\njw: no repo fits clearly, pick one\njw: cancelled\n"
-            ),
-            Outcome::Cancelled
-        );
-        // a failure that says nothing is no cancellation
-        assert_eq!(
-            outcome("", false, ""),
-            Outcome::Failed("jw agent -d failed".into())
-        );
-        // a real error, also after the routing lines
-        assert_eq!(
-            outcome("", false, "jw: no match\n"),
-            Outcome::Failed("jw: no match".into())
-        );
-        assert_eq!(
-            outcome(
-                "fix x",
-                false,
-                "jw: choosing a repo...\njw: no jj repos under /r\n"
-            ),
-            Outcome::Failed("jw: no jj repos under /r".into())
-        );
+    fn p_on_a_failed_task_picks_a_repo_from_list_and_detail() {
+        let mut a = app(vec![task_failed("i1")]);
+        assert_eq!(a.on_key(key('p')), retry("i1"));
+        assert!(matches!(a.mode, Mode::List));
+        let mut a = app(vec![task_failed("i1")]);
+        assert_eq!(a.on_key(code(KeyCode::Enter)), Effect::None);
+        assert!(matches!(a.mode, Mode::Detail { .. }));
+        assert_eq!(a.on_key(key('p')), retry("i1"));
+        assert!(matches!(a.mode, Mode::List));
     }
 
     #[test]
-    fn jw_args_put_the_task_after_a_double_dash() {
-        assert_eq!(jw_args(""), ["agent", "-d"]);
-        assert_eq!(jw_args("fix x"), ["agent", "-d", "--", "fix x"]);
-        assert_eq!(jw_args("-x"), ["agent", "-d", "--", "-x"]);
+    fn p_elsewhere_does_not_pick_a_repo() {
+        for item in [question("a", 990.0), sudo("s")] {
+            let mut a = app(vec![item.clone()]);
+            let effect = a.on_key(key('p'));
+            assert!(!matches!(effect, Effect::PickRepo { .. }), "{effect:?}");
+            let mut a = app(vec![item]);
+            a.on_key(code(KeyCode::Enter));
+            let effect = a.on_key(key('p'));
+            assert!(!matches!(effect, Effect::PickRepo { .. }), "{effect:?}");
+        }
+    }
+
+    #[test]
+    fn failed_task_detail_shows_reason_prompt_and_images() {
+        let mut t = task_failed("i1");
+        t.event["prompt"] = json!("fix the thing");
+        let mut a = app(vec![t]);
+        a.on_key(code(KeyCode::Enter));
+        let s = screen(&a);
+        for want in ["no repo chosen (r)", "fix the thing", "/a.png"] {
+            assert!(s.contains(want), "{want:?}:\n{s}");
+        }
+    }
+
+    #[test]
+    fn failed_tasks_are_visible_in_every_tab() {
+        let mut a = tabbed_app();
+        let mut items = a.items.clone();
+        items.push(task_failed("f"));
+        a.set_items(items);
+        for _ in 0..3 {
+            assert!(
+                visible_ids(&a).contains(&"f"),
+                "{}: {:?}",
+                current_tab(&a),
+                visible_ids(&a)
+            );
+            a.on_key(code(KeyCode::Tab));
+        }
     }
 
     #[test]

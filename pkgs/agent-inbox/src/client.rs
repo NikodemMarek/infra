@@ -8,7 +8,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -87,6 +87,36 @@ impl Origin {
     }
 }
 
+/// A task for a new agent, sent to the router as a `task.new` event (which routes it to a repo
+/// unless `repo` is given and starts the session).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Task {
+    pub prompt: String,
+    /// Absolute paths of images the agent should look at.
+    pub images: Vec<String>,
+    pub repo: Option<String>,
+    /// Correlates the `task.started`/`task.failed` events with a task.
+    pub id: Option<String>,
+}
+
+/// The `task.new` event for `task`: what is empty or unset is left out.
+pub fn task_event(task: &Task) -> Value {
+    let mut event = json!({"type": "task.new"});
+    if !task.prompt.is_empty() {
+        event["prompt"] = json!(task.prompt);
+    }
+    if !task.images.is_empty() {
+        event["images"] = json!(task.images);
+    }
+    if let Some(repo) = &task.repo {
+        event["repo"] = json!(repo);
+    }
+    if let Some(id) = &task.id {
+        event["id"] = json!(id);
+    }
+    event
+}
+
 /// `!7 title` for a merge request, `#7 title` for an issue, else the title; None if there is
 /// nothing to show.
 pub fn origin_label(origin: &Origin) -> Option<String> {
@@ -136,6 +166,27 @@ impl Item {
 
     pub fn prompt(&self) -> &str {
         self.field("prompt")
+    }
+
+    /// Why a `task.failed` task failed.
+    pub fn reason(&self) -> &str {
+        self.field("reason")
+    }
+
+    /// The `id` the event carries (that of the task for `task.failed`), "" if there is none.
+    pub fn event_id(&self) -> &str {
+        self.field("id")
+    }
+
+    /// The paths in `images` (`task.failed`).
+    pub fn images(&self) -> Vec<&str> {
+        self.event
+            .get("images")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect()
     }
 
     /// The text of the event (the last message of Claude for `claude.waiting`).
@@ -326,17 +377,35 @@ fn connect(base: &str) -> Result<TcpStream> {
     }
 }
 
-pub fn request(base: &str, method: &str, path: &str) -> Result<(u16, Vec<u8>)> {
+/// One HTTP/1.0 request, with an optional JSON body.
+pub fn request(base: &str, method: &str, path: &str, body: Option<&str>) -> Result<(u16, Vec<u8>)> {
     let mut stream = connect(base)?;
     stream.set_read_timeout(Some(TIMEOUT))?;
     stream.set_write_timeout(Some(TIMEOUT))?;
-    write!(
-        stream,
-        "{method} {path} HTTP/1.0\r\nHost: {base}\r\nContent-Length: 0\r\n\r\n"
-    )?;
+    // one write: a server that answers after the head must not see the body arrive later
+    let req = match body {
+        Some(body) => format!(
+            "{method} {path} HTTP/1.0\r\nHost: {base}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+        None => format!("{method} {path} HTTP/1.0\r\nHost: {base}\r\nContent-Length: 0\r\n\r\n"),
+    };
+    stream.write_all(req.as_bytes())?;
     let mut raw = Vec::new();
     stream.read_to_end(&mut raw)?;
     parse_response(&raw)
+}
+
+/// Sends `event` to the router (`POST /events`); only 202 is success.
+pub fn post_event(base: &str, event: &Value) -> std::result::Result<(), String> {
+    match request(base, "POST", "/events", Some(&event.to_string())) {
+        Ok((202, _)) => Ok(()),
+        Ok((status, body)) => Err(format!(
+            "router: {status} {}",
+            String::from_utf8_lossy(&body).trim()
+        )),
+        Err(e) => Err(format!("router: {e}")),
+    }
 }
 
 fn parse_response(raw: &[u8]) -> Result<(u16, Vec<u8>)> {
@@ -356,7 +425,7 @@ fn parse_response(raw: &[u8]) -> Result<(u16, Vec<u8>)> {
 
 /// Queued events, oldest first.
 pub fn list(base: &str) -> Result<Vec<Item>> {
-    let (status, body) = request(base, "GET", "/inbox")?;
+    let (status, body) = request(base, "GET", "/inbox", None)?;
     if status != 200 {
         return Err(format!("GET /inbox: HTTP {status}").into());
     }
@@ -390,7 +459,7 @@ pub fn dismiss(base: &str, id: &str) -> Result<bool> {
     {
         return Err(format!("invalid inbox id {id:?}").into());
     }
-    match request(base, "DELETE", &format!("/inbox/{id}"))?.0 {
+    match request(base, "DELETE", &format!("/inbox/{id}"), None)?.0 {
         204 => Ok(true),
         404 => Ok(false),
         status => Err(format!("DELETE /inbox/{id}: HTTP {status}").into()),
@@ -478,6 +547,55 @@ mod tests {
         let (base, server) = stub("HTTP/1.0 500 Internal Server Error\r\n\r\n");
         assert!(dismiss(&base, "a1").is_err());
         server.join().unwrap();
+    }
+
+    #[test]
+    fn post_event_sends_json_and_accepts_only_202() {
+        let (base, server) = stub("HTTP/1.0 202 Accepted\r\n\r\n");
+        let event = serde_json::json!({"type": "task.new", "prompt": "x"});
+        assert_eq!(post_event(&base, &event), Ok(()));
+        let req = server.join().unwrap();
+        assert!(req.starts_with("POST /events HTTP/1.0\r\n"), "{req}");
+        assert!(req.contains(&format!("Host: {base}\r\n")), "{req}");
+        assert!(req.contains("Content-Type: application/json\r\n"), "{req}");
+        let len = event.to_string().len();
+        assert!(req.contains(&format!("Content-Length: {len}\r\n")), "{req}");
+        for status in ["200 OK", "204 No Content"] {
+            let (base, server) = stub(&format!("HTTP/1.0 {status}\r\n\r\nbody"));
+            assert!(post_event(&base, &event).is_err(), "{status}");
+            server.join().unwrap();
+        }
+        let (base, server) = stub("HTTP/1.0 500 Internal Server Error\r\n\r\nboom");
+        let err = post_event(&base, &event).unwrap_err();
+        assert!(err.starts_with("router: 500"), "{err}");
+        assert!(err.contains("boom"), "{err}");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn task_event_leaves_out_what_is_empty() {
+        assert_eq!(
+            task_event(&Task::default()),
+            serde_json::json!({"type": "task.new"})
+        );
+        let full = Task {
+            prompt: "fix".into(),
+            images: vec!["/a.png".into()],
+            repo: Some("/r".into()),
+            id: Some("c1".into()),
+        };
+        assert_eq!(
+            task_event(&full),
+            serde_json::json!({"type": "task.new", "prompt": "fix", "images": ["/a.png"], "repo": "/r", "id": "c1"})
+        );
+        let partial = Task {
+            repo: Some("/r".into()),
+            ..Task::default()
+        };
+        assert_eq!(
+            task_event(&partial),
+            serde_json::json!({"type": "task.new", "repo": "/r"})
+        );
     }
 
     #[test]
