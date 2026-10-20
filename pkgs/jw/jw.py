@@ -152,24 +152,42 @@ def in_use(d, ignore=()):
     return False
 
 
-def cmd_new(a):
-    home = repo_home(a.repo)
+def fetch(home):
     try:
         jj("--ignore-working-copy", "git", "fetch", cwd=home)
     except Fail:
         sys.stderr.write("jw: fetch failed, continuing\n")
-    name = time.strftime("w-%m%d-%H%M%S")
+
+
+def add_workspace(home, revision, name, resolve_in):
+    """Create the workspace <home>.agents/<name> on revision and return its directory. resolve_in is the workspace
+    directory to resolve revision in (its edits are snapshotted first), None for home without snapshotting."""
     # resolve first: `workspace add` leaves its directory behind on a bad revision
-    commits = jj("--ignore-working-copy", "log", "--no-graph", "-r", a.revision,
-                 "-T", 'if(root, "root", commit_id) ++ "\\n"', cwd=home).split()
+    flags = ["--ignore-working-copy"] if resolve_in is None else []
+    commits = jj(*flags, "log", "--no-graph", "-r", revision,
+                 "-T", 'if(root, "root", commit_id) ++ "\\n"', cwd=resolve_in or home).split()
     if len(commits) != 1:
-        raise Fail(f"{a.revision!r} must be exactly one commit, not {len(commits)}")
+        raise Fail(f"{revision!r} must be exactly one commit, not {len(commits)}")
     if commits[0] == "root":
-        raise Fail(f"{a.revision} resolves to the root commit; pass -r")
+        raise Fail(f"{revision} resolves to the root commit; pass -r")
     d = f"{home}.agents/{name}"
     os.makedirs(os.path.dirname(d), exist_ok=True)
     jj("workspace", "add", "--name", name, "-r", commits[0], d, cwd=home)
-    print(d)
+    return d
+
+
+def cmd_new(a):
+    home = repo_home(a.repo)
+    fetch(home)
+    resolve_in = None
+    if a.revision:  # the default trunk() is resolved in home without a snapshot
+        try:
+            root, current_home = locate()
+            if os.path.realpath(current_home) == os.path.realpath(home):
+                resolve_in = root
+        except Fail:
+            pass  # not in a repo
+    print(add_workspace(home, a.revision or "trunk()", time.strftime("w-%m%d-%H%M%S"), resolve_in))
 
 
 def cmd_cd(a):
@@ -582,7 +600,7 @@ def parse_args():
     sub = p.add_subparsers(dest="cmd")
     s = sub.add_parser("new", aliases=["n"], help="create a workspace in a repo and go there")
     s.add_argument("repo", nargs="?", help=f"repo under {ROOT} (default: pick one, the current one first)")
-    s.add_argument("-r", "--revision", default="trunk()", help="start from (default: trunk())")
+    s.add_argument("-r", "--revision", help="revision, bookmark or bookmark@origin to start from (default: trunk()); when given in this repo, it is resolved in the current workspace")
     s.set_defaults(func=cmd_new)
     s = sub.add_parser("cd", aliases=["c"], help="go to a workspace (default: pick one, this repo's first)")
     s.add_argument("name", nargs="?")
