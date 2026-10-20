@@ -7,7 +7,8 @@
 //! `N` (in both views) asks for a task in a popup (Ctrl+J adds a line) and starts a new agent
 //! for it (`jw agent -d`). Only the events and sessions of agents with an origin (a merge
 //! request, an issue or a task, see `Origin`) are shown, with it as their context; `o` opens its
-//! link (`xdg-open`).
+//! link (`xdg-open`). With filter tabs (`Tab`) configured, `f` cycles through All and the tabs,
+//! which filter both views by the kind of the origin.
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
@@ -140,6 +141,14 @@ enum View {
     Sessions,
 }
 
+/// A filter tab: shows the items and sessions whose origin kind is in `kinds`; without `kinds`,
+/// those whose kind no tab lists.
+#[derive(Debug, PartialEq)]
+pub struct Tab {
+    pub name: String,
+    pub kinds: Option<Vec<String>>,
+}
+
 #[derive(Default)]
 struct App {
     view: View,
@@ -147,13 +156,16 @@ struct App {
     items: Vec<Item>,
     /// Index into `visible()`.
     selected: usize,
+    tabs: Vec<Tab>,
+    /// The active tab: 0 = all, else the `tabs` index + 1.
+    tab: usize,
     /// Show only the items of this Claude session.
     session: Option<String>,
     /// The session view was entered from the sessions list: leaving it returns there.
     from_sessions: bool,
     /// Newest first.
     sessions: Vec<Session>,
-    /// Index into `sessions`.
+    /// Index into `visible_sessions()`.
     session_sel: usize,
     /// The origin files seen so far (items and sessions) and what `Origin::load` made of them.
     origins: HashMap<String, Option<Origin>>,
@@ -246,12 +258,21 @@ impl App {
         self.items.iter().find(|i| i.id == id)
     }
 
-    /// The items of the session view, or all of them: those of agents with an origin and sudo
-    /// requests (they come from no agent).
+    /// The items of the session view, or all of them in the active tab.
     fn visible(&self) -> Vec<&Item> {
+        self.items_in(self.tab)
+    }
+
+    /// The items of `visible()` as if `tab` were the active one: those of agents with an origin
+    /// and sudo requests (they come from no agent, so every tab shows them). The session view
+    /// ignores the tab (it cannot be changed there).
+    fn items_in(&self, tab: usize) -> Vec<&Item> {
         let session = self.session.as_deref();
         self.shown()
-            .filter(|i| session.is_none_or(|s| i.session_id() == s))
+            .filter(|i| match session {
+                Some(s) => i.session_id() == s,
+                None => self.item_in_tab(tab, i),
+            })
             .collect()
     }
 
@@ -262,9 +283,87 @@ impl App {
             .filter(|i| !i.origin_file().is_empty() || i.kind().starts_with("sudo."))
     }
 
+    fn item_in_tab(&self, tab: usize, item: &Item) -> bool {
+        let kind = self.origin_kind(item.origin_file());
+        item.kind().starts_with("sudo.") || self.in_tab(tab, kind)
+    }
+
+    /// The sessions in the active tab.
+    fn visible_sessions(&self) -> Vec<&Session> {
+        self.sessions_in(self.tab)
+    }
+
+    fn sessions_in(&self, tab: usize) -> Vec<&Session> {
+        self.sessions
+            .iter()
+            .filter(|s| self.in_tab(tab, self.origin_kind(&s.origin_file)))
+            .collect()
+    }
+
+    /// The tab `tab` (0 = all); None for all.
+    fn tab_def(&self, tab: usize) -> Option<&Tab> {
+        self.tabs.get(tab.checked_sub(1)?)
+    }
+
+    fn tab_name(&self, tab: usize) -> &str {
+        self.tab_def(tab).map_or("All", |t| t.name.as_str())
+    }
+
+    /// Whether something of origin kind `kind` shows in `tab`.
+    fn in_tab(&self, tab: usize, kind: &str) -> bool {
+        let listed = |t: &Tab| t.kinds.iter().flatten().any(|k| k == kind);
+        match self.tab_def(tab) {
+            None => true,
+            Some(t) if t.kinds.is_some() => listed(t),
+            Some(_) => !self.tabs.iter().any(listed),
+        }
+    }
+
+    /// `All N · Review N · …` with the active tab in bold; None without tabs.
+    fn tabs_title(&self, count: impl Fn(usize) -> usize) -> Option<Line<'static>> {
+        if self.tabs.is_empty() {
+            return None;
+        }
+        let mut spans = vec![Span::raw(" ")];
+        for tab in 0..=self.tabs.len() {
+            if tab > 0 {
+                spans.push(Span::styled(" · ", dim()));
+            }
+            let text = format!("{} {}", self.tab_name(tab), count(tab));
+            spans.push(if tab == self.tab {
+                Span::styled(text, bold())
+            } else {
+                Span::raw(text)
+            });
+        }
+        spans.push(Span::raw(" "));
+        Some(Line::from(spans))
+    }
+
+    /// Switches to the next tab (after the last: all); the selection follows its item or pid.
+    fn next_tab(&mut self) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let item = self.selected_item().map(|i| i.id.clone());
+        let pid = self.selected_session().map(|s| s.pid);
+        self.tab = self.following_tab();
+        self.select_id(item);
+        self.select_pid(pid);
+    }
+
+    fn following_tab(&self) -> usize {
+        (self.tab + 1) % (self.tabs.len() + 1)
+    }
+
     /// The origin that was read from `file`.
     fn origin(&self, file: &str) -> Option<&Origin> {
         self.origins.get(file)?.as_ref()
+    }
+
+    /// The kind of the origin read from `file`, "" if there is none.
+    fn origin_kind(&self, file: &str) -> &str {
+        self.origin(file).map_or("", |o| o.kind.as_str())
     }
 
     fn origin_label(&self, file: &str) -> Option<String> {
@@ -334,14 +433,21 @@ impl App {
     fn set_sessions(&mut self, sessions: Vec<Session>) {
         let followed = self.selected_session().map(|s| s.pid);
         self.sessions = sessions;
-        self.session_sel = followed
-            .and_then(|pid| self.sessions.iter().position(|s| s.pid == pid))
+        self.select_pid(followed);
+    }
+
+    /// Selects the session of process `pid` if it is visible, else keeps the position (within
+    /// the list).
+    fn select_pid(&mut self, pid: Option<u32>) {
+        let visible = self.visible_sessions();
+        self.session_sel = pid
+            .and_then(|pid| visible.iter().position(|s| s.pid == pid))
             .unwrap_or(self.session_sel)
-            .min(self.sessions.len().saturating_sub(1));
+            .min(visible.len().saturating_sub(1));
     }
 
     fn selected_session(&self) -> Option<&Session> {
-        self.sessions.get(self.session_sel)
+        self.visible_sessions().get(self.session_sel).copied()
     }
 
     /// The pending items of `session` (none while the router is unreachable: they are stale).
@@ -488,6 +594,7 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => self.selected = self.selected.saturating_sub(1),
             KeyCode::Char('S') => self.view = View::Sessions,
             KeyCode::Char('N') => self.mode = Mode::Task { buf: String::new() },
+            KeyCode::Char('f') if self.session.is_none() => self.next_tab(),
             KeyCode::Esc | KeyCode::Char('s') if self.session.is_some() => self.set_session(None),
             KeyCode::Char('s') => {
                 let session = self.selected_item().map(|i| i.session_id().to_string());
@@ -523,9 +630,10 @@ impl App {
     }
 
     fn sessions_key(&mut self, code: KeyCode) -> Effect {
-        let last = self.sessions.len().saturating_sub(1);
+        let last = self.visible_sessions().len().saturating_sub(1);
         match code {
             KeyCode::Char('q') => return Effect::Quit,
+            KeyCode::Char('f') => self.next_tab(),
             KeyCode::Char('j') | KeyCode::Down => {
                 self.session_sel = (self.session_sel + 1).min(last)
             }
@@ -889,8 +997,16 @@ impl App {
         )
     }
 
+    /// The hint for `f`, which names the tab it switches to; None without tabs.
+    fn tab_hint(&self) -> Option<(&str, &str)> {
+        if self.tabs.is_empty() {
+            return None;
+        }
+        Some(("f", self.tab_name(self.following_tab())))
+    }
+
     /// Key hints for the footer (key, label).
-    fn hints(&self) -> Vec<(&'static str, &'static str)> {
+    fn hints(&self) -> Vec<(&str, &str)> {
         if self.view == View::Sessions {
             let mut h = vec![("j/k", "move")];
             if let Some(session) = self.selected_session() {
@@ -907,6 +1023,7 @@ impl App {
                     h.push(("x", "kill"));
                 }
             }
+            h.extend(self.tab_hint());
             h.push(("N", "new"));
             h.push(("S", "inbox"));
             h.push(("q", "quit"));
@@ -939,6 +1056,8 @@ impl App {
                         "all items"
                     };
                     h.push(("esc", back));
+                } else {
+                    h.extend(self.tab_hint());
                 }
                 h.push(("N", "new"));
                 h.push(("S", "sessions"));
@@ -1425,14 +1544,22 @@ fn render(f: &mut Frame, app: &App) {
         Mode::List | Mode::ConfirmDismissAll | Mode::Task { .. }
     );
     if app.view == View::Sessions {
-        if app.sessions.is_empty() {
-            render_empty(f, &p, "No Claude sessions");
+        if app.visible_sessions().is_empty() {
+            let text = match app.tab_def(app.tab) {
+                Some(tab) => format!("No sessions in {}", tab.name),
+                None => "No Claude sessions".to_string(),
+            };
+            render_empty(f, &p, &text);
         } else {
             render_sessions(f, app, p.list);
             render_session_detail(f, app, p.detail);
         }
     } else if app.visible().is_empty() && list_shown {
-        render_empty(f, &p, "No pending requests");
+        let text = match app.tab_def(app.tab) {
+            Some(tab) => format!("No pending items in {}", tab.name),
+            None => "No pending requests".to_string(),
+        };
+        render_empty(f, &p, &text);
     } else {
         render_list(f, app, p.list);
         render_detail(f, app, p.detail);
@@ -1540,9 +1667,11 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
         Some(session) => {
             let place = visible.first().map(|i| i.place()).unwrap_or_default();
             let short: String = session.chars().take(8).collect();
-            clean(&format!(" Session {place} · {short} "))
+            Line::from(clean(&format!(" Session {place} · {short} ")))
         }
-        None => " Inbox ".to_string(),
+        None => app
+            .tabs_title(|tab| app.items_in(tab).len())
+            .unwrap_or_else(|| Line::from(" Inbox ")),
     };
     let block = Block::bordered()
         .title(title)
@@ -1611,20 +1740,22 @@ fn status_badge(status: &str) -> (String, Style) {
 }
 
 fn render_sessions(f: &mut Frame, app: &App, area: Rect) {
+    let title = app
+        .tabs_title(|tab| app.sessions_in(tab).len())
+        .unwrap_or_else(|| Line::from(" Sessions "));
     let block = Block::bordered()
-        .title(" Sessions ")
+        .title(title)
         .border_style(border_style(true));
     let width = usize::from(block.inner(area).width);
-    let context_width = app
-        .sessions
+    let sessions = app.visible_sessions();
+    let context_width = sessions
         .iter()
         .map(|s| clean(&app.session_context(s)).chars().count())
         .max()
         .unwrap_or(0)
         .min(CONTEXT_MAX_WIDTH)
         .min(width / 3);
-    let rows: Vec<ListItem> = app
-        .sessions
+    let rows: Vec<ListItem> = sessions
         .iter()
         .map(|s| ListItem::new(session_row(app, s, width, context_width)))
         .collect();
@@ -1840,10 +1971,15 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
 }
 
 /// `sessions_dir` is the session registry (`<config dir>/sessions`).
-pub fn run(base: &str, runtime: Option<&Path>, sessions_dir: &Path) -> io::Result<()> {
+pub fn run(
+    base: &str,
+    runtime: Option<&Path>,
+    sessions_dir: &Path,
+    tabs: Vec<Tab>,
+) -> io::Result<()> {
     let mut terminal = ratatui::init();
     let result = execute!(io::stdout(), EnableBracketedPaste)
-        .and_then(|()| event_loop(&mut terminal, base, runtime, sessions_dir));
+        .and_then(|()| event_loop(&mut terminal, base, runtime, sessions_dir, tabs));
     let _ = execute!(io::stdout(), DisableBracketedPaste);
     ratatui::restore();
     result
@@ -1854,8 +1990,12 @@ fn event_loop(
     base: &str,
     runtime: Option<&Path>,
     sessions_dir: &Path,
+    tabs: Vec<Tab>,
 ) -> io::Result<()> {
-    let mut app = App::default();
+    let mut app = App {
+        tabs,
+        ..App::default()
+    };
     let mut refreshed: Option<Instant> = None;
     loop {
         if refreshed.is_none_or(|t| t.elapsed() >= REFRESH) {
@@ -1890,15 +2030,32 @@ fn event_loop(
 /// Reloads the sessions (they need no router) and the inbox items, then reads the origins they
 /// refer to.
 fn refresh(app: &mut App, base: &str, runtime: Option<&Path>, sessions_dir: &Path) {
-    app.set_sessions(sessions::load(sessions_dir, Path::new("/proc")));
-    match client::list(base) {
+    let sessions = sessions::load(sessions_dir, Path::new("/proc"));
+    let items = client::list(base).map_err(|e| e.to_string());
+    update(app, sessions, items, runtime);
+}
+
+/// Applies a refresh. The origins of new items and sessions are read last and decide what the
+/// tab shows, so the selection is restored after that, not only after each list.
+fn update(
+    app: &mut App,
+    sessions: Vec<Session>,
+    items: Result<Vec<Item>, String>,
+    runtime: Option<&Path>,
+) {
+    let item = app.selected_item().map(|i| i.id.clone());
+    let pid = app.selected_session().map(|s| s.pid);
+    app.set_sessions(sessions);
+    match items {
         Ok(items) => {
             app.offline = None;
             app.set_items(items);
         }
-        Err(e) => app.offline = Some(e.to_string()),
+        Err(e) => app.offline = Some(e),
     }
     load_origins(app, runtime);
+    app.select_id(item);
+    app.select_pid(pid);
 }
 
 /// Reads the origin files of the items and sessions that have not been read yet (the files are
@@ -4887,5 +5044,325 @@ mod tests {
         }
         let s = screen(&a);
         assert!(s.contains("desc 30"), "{s}");
+    }
+
+    // --- filter tabs
+
+    const REVIEW_FILE: &str = "/run/user/1/claude-origin/review.json";
+    const TASK_FILE: &str = "/run/user/1/claude-origin/task.json";
+
+    /// Review shows the kind `review`, Coding the rest.
+    fn tabs() -> Vec<Tab> {
+        vec![
+            Tab {
+                name: "Review".into(),
+                kinds: Some(vec!["review".into()]),
+            },
+            Tab {
+                name: "Coding".into(),
+                kinds: None,
+            },
+        ]
+    }
+
+    fn kind_origin(kind: &str) -> Option<Origin> {
+        Some(Origin {
+            kind: kind.into(),
+            ..Origin::default()
+        })
+    }
+
+    fn from_file(mut item: Item, file: &str) -> Item {
+        item.event["origin_file"] = json!(file);
+        item
+    }
+
+    fn session_from(mut s: Session, file: &str) -> Session {
+        s.origin_file = file.into();
+        s
+    }
+
+    /// Items (newest first) sudo `s`, review `r`, task `t` and `u` of an origin that has not
+    /// been read.
+    fn tabbed_app() -> App {
+        let mut a = App {
+            tabs: tabs(),
+            area: Rect::new(0, 0, 100, 30),
+            now: 1000.0,
+            ..App::default()
+        };
+        a.origins.insert(REVIEW_FILE.into(), kind_origin("review"));
+        a.origins.insert(TASK_FILE.into(), kind_origin("task"));
+        a.set_items(vec![
+            question("u", 900.0),
+            from_file(question("t", 910.0), TASK_FILE),
+            from_file(question("r", 920.0), REVIEW_FILE),
+            sudo("s"),
+        ]);
+        a
+    }
+
+    /// `tabbed_app` on the sessions view, with the sessions 1 (review), 2 (task), 3 (unknown).
+    fn tabbed_sessions_app() -> App {
+        let mut a = tabbed_app();
+        a.set_sessions(vec![
+            session_from(session(1, "s-r", "idle"), REVIEW_FILE),
+            session_from(session(2, "s-t", "idle"), TASK_FILE),
+            session(3, "s-u", "idle"),
+        ]);
+        assert_eq!(a.on_key(key('S')), Effect::None);
+        a
+    }
+
+    fn visible_ids(a: &App) -> Vec<&str> {
+        a.visible().iter().map(|i| i.id.as_str()).collect()
+    }
+
+    fn visible_pids(a: &App) -> Vec<u32> {
+        a.visible_sessions().iter().map(|s| s.pid).collect()
+    }
+
+    #[test]
+    fn f_does_nothing_without_tabs() {
+        let mut a = app(vec![question("a", 990.0)]);
+        a.set_sessions(vec![session(1, "s-a", "idle")]);
+        for inbox in [true, false] {
+            assert_eq!(a.on_key(key('f')), Effect::None);
+            assert_eq!(a.tab, 0);
+            assert!(a.hints().iter().all(|(k, _)| *k != "f"));
+            let s = screen(&a);
+            let title = if inbox { " Inbox " } else { " Sessions " };
+            assert!(s.contains(title) && !s.contains("All 1"), "{s}");
+            a.on_key(key('S'));
+        }
+    }
+
+    #[test]
+    fn f_cycles_through_the_tabs_and_back() {
+        let mut a = tabbed_app();
+        assert_eq!(visible_ids(&a), vec!["s", "r", "t", "u"]);
+        let s = screen(&a);
+        assert!(s.contains("All 4 · Review 2 · Coding 3"), "{s}");
+        assert!(!s.contains(" Inbox "), "{s}");
+        for (name, next, ids) in [
+            ("Review", "Coding", vec!["s", "r"]),
+            ("Coding", "All", vec!["s", "t", "u"]),
+            ("All", "Review", vec!["s", "r", "t", "u"]),
+        ] {
+            assert_eq!(a.on_key(key('f')), Effect::None);
+            assert_eq!(a.tab_name(a.tab), name);
+            assert_eq!(visible_ids(&a), ids);
+            assert!(a.hints().contains(&("f", next)), "{:?}", a.hints());
+            assert!(screen(&a).contains(&format!("f {next}")));
+        }
+    }
+
+    #[test]
+    fn the_active_tab_is_bold_in_the_title() {
+        let mut a = tabbed_app();
+        let bold_tabs = |a: &App| -> Vec<String> {
+            let title = a.tabs_title(|tab| tab).unwrap();
+            let bold_spans = title
+                .spans
+                .iter()
+                .filter(|s| s.style.add_modifier.contains(Modifier::BOLD));
+            bold_spans.map(|s| s.content.to_string()).collect()
+        };
+        assert_eq!(bold_tabs(&a), vec!["All 0"]);
+        a.on_key(key('f'));
+        assert_eq!(bold_tabs(&a), vec!["Review 1"]);
+        a.on_key(key('f'));
+        assert_eq!(bold_tabs(&a), vec!["Coding 2"]);
+    }
+
+    #[test]
+    fn the_selection_follows_its_item_across_tabs_else_clamps() {
+        let mut a = tabbed_app();
+        a.on_key(key('f'));
+        a.on_key(key('f'));
+        a.on_key(key('j'));
+        a.on_key(key('j'));
+        assert_eq!(selected_id(&a), Some("u"));
+        a.on_key(key('f'));
+        assert_eq!(selected_id(&a), Some("u"));
+        assert_eq!(a.selected, 3);
+        // not in Review: the position, within the shorter list
+        a.on_key(key('f'));
+        assert_eq!(selected_id(&a), Some("r"));
+        assert_eq!(a.selected, 1);
+    }
+
+    #[test]
+    fn an_empty_tab_says_so() {
+        let mut a = tabbed_app();
+        a.set_items(vec![from_file(question("t", 910.0), TASK_FILE)]);
+        a.on_key(key('f'));
+        let s = screen(&a);
+        assert!(s.contains("No pending items in Review"), "{s}");
+        a.on_key(key('f'));
+        assert!(screen(&a).contains("title-t"));
+    }
+
+    #[test]
+    fn dismiss_all_follows_the_tab() {
+        let capital_d = KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT);
+        let mut a = tabbed_app();
+        for (n, ids) in [
+            (3, vec!["r", "t", "u"]),
+            (1, vec!["r"]),
+            (2, vec!["t", "u"]),
+        ] {
+            a.on_key(capital_d);
+            let s = screen(&a);
+            let prompt = format!("Dismiss {n} items without a reply?");
+            assert!(s.contains(&prompt), "{s}");
+            assert_eq!(a.on_key(key('y')), Effect::DismissAll);
+            let mut without_reply = a.without_reply();
+            without_reply.sort();
+            assert_eq!(without_reply, ids);
+            a.on_key(key('f'));
+        }
+    }
+
+    #[test]
+    fn f_is_ignored_inside_a_session() {
+        let mut a = tabbed_app();
+        a.set_items(vec![
+            in_session(question("a", 950.0), "s-x"),
+            in_session(question("b", 960.0), "s-y"),
+        ]);
+        a.on_key(key('s'));
+        assert_eq!(a.session.as_deref(), Some("s-y"));
+        assert_eq!(a.on_key(key('f')), Effect::None);
+        assert_eq!(a.tab, 0);
+        let s = screen(&a);
+        assert!(s.contains(" Session ") && !s.contains("Review 0"), "{s}");
+        assert!(a.hints().iter().all(|(k, _)| *k != "f"));
+        a.on_key(code(KeyCode::Esc));
+        a.on_key(key('f'));
+        assert_eq!(a.tab, 1);
+    }
+
+    #[test]
+    fn f_in_the_sessions_view_keeps_the_session_filter_of_the_inbox() {
+        let mut a = tabbed_app();
+        a.set_items(vec![
+            in_session(from_file(question("a", 950.0), TASK_FILE), "s-x"),
+            in_session(from_file(question("b", 960.0), TASK_FILE), "s-y"),
+        ]);
+        a.on_key(key('s'));
+        a.on_key(key('S'));
+        a.on_key(key('f'));
+        assert_eq!(a.tab, 1);
+        assert_eq!(visible_ids(&a), vec!["b"]);
+        a.set_items(vec![in_session(
+            from_file(question("b", 960.0), TASK_FILE),
+            "s-y",
+        )]);
+        assert_eq!(a.session.as_deref(), Some("s-y"));
+        assert!(matches!(a.view, View::Sessions));
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_selection_when_new_origins_change_the_tab() {
+        let pid = std::process::id();
+        let root = std::env::temp_dir().join(format!("agent-inbox-test-tabs-{pid}"));
+        let dir = root.join("claude-origin");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&dir).unwrap();
+        let new = dir.join("new.json");
+        std::fs::write(&new, r#"{"kind":"review"}"#).unwrap();
+        let new = new.to_string_lossy().into_owned();
+        // the new item (newest) and session (first) have an origin that is not read yet: until
+        // it is, they show in Coding, afterwards in Review
+        for (tab, old) in [(1, REVIEW_FILE), (2, TASK_FILE)] {
+            let items = |ids: &[&str]| -> Vec<Item> {
+                let file = |id: &str| if id == "n" { new.as_str() } else { old };
+                let item = |id: &str| from_file(question(id, 900.0), file(id));
+                ids.iter().map(|id| item(id)).collect()
+            };
+            let sessions = |pids: &[u32]| -> Vec<Session> {
+                let file = |pid: u32| if pid == 4 { new.as_str() } else { old };
+                let make = |pid: u32| session(pid, &format!("s-{pid}"), "idle");
+                pids.iter()
+                    .map(|&p| session_from(make(p), file(p)))
+                    .collect()
+            };
+            let mut a = tabbed_app();
+            a.tab = tab;
+            a.set_items(items(&["i1", "i2", "i3"]));
+            a.set_sessions(sessions(&[1, 2, 3]));
+            a.selected = 1;
+            a.session_sel = 1;
+            assert_eq!(selected_id(&a), Some("i2"));
+            assert_eq!(selected_pid(&a), Some(2));
+            let new_items = items(&["i1", "i2", "i3", "n"]);
+            update(&mut a, sessions(&[4, 1, 2, 3]), Ok(new_items), Some(&root));
+            assert_eq!(selected_id(&a), Some("i2"), "tab {tab}");
+            assert_eq!(selected_pid(&a), Some(2), "tab {tab}");
+            let in_review = tab == 1;
+            assert_eq!(visible_ids(&a).contains(&"n"), in_review);
+            assert_eq!(visible_pids(&a).contains(&4), in_review);
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn sessions_are_filtered_and_the_selection_follows_its_pid() {
+        let mut a = tabbed_sessions_app();
+        assert_eq!(visible_pids(&a), vec![1, 2, 3]);
+        let s = screen(&a);
+        assert!(s.contains("All 3 · Review 1 · Coding 2"), "{s}");
+        assert!(!s.contains(" Sessions "), "{s}");
+        assert!(a.hints().contains(&("f", "Review")));
+        a.on_key(key('f'));
+        assert_eq!(visible_pids(&a), vec![1]);
+        a.on_key(key('j'));
+        assert_eq!(selected_pid(&a), Some(1));
+        a.on_key(key('f'));
+        assert_eq!(visible_pids(&a), vec![2, 3]);
+        a.on_key(key('j'));
+        assert_eq!(selected_pid(&a), Some(3));
+        a.on_key(key('j'));
+        assert_eq!(selected_pid(&a), Some(3));
+        a.on_key(key('f'));
+        assert_eq!(selected_pid(&a), Some(3));
+        assert_eq!(a.session_sel, 2);
+        // refreshes follow the pid within the tab
+        a.on_key(key('f'));
+        a.on_key(key('f'));
+        a.on_key(key('j'));
+        assert_eq!(selected_pid(&a), Some(3));
+        a.set_sessions(vec![
+            session(4, "s-4", "idle"),
+            session_from(session(2, "s-t", "idle"), TASK_FILE),
+            session(3, "s-u", "idle"),
+        ]);
+        assert_eq!(selected_pid(&a), Some(3));
+        assert_eq!(visible_pids(&a), vec![4, 2, 3]);
+    }
+
+    #[test]
+    fn a_tab_without_sessions_says_so() {
+        let mut a = tabbed_sessions_app();
+        a.set_sessions(vec![session_from(session(2, "s-t", "idle"), TASK_FILE)]);
+        a.on_key(key('f'));
+        let s = screen(&a);
+        assert!(s.contains("No sessions in Review"), "{s}");
+        // the empty state still switches
+        a.on_key(key('f'));
+        assert!(screen(&a).contains("IDLE"));
+    }
+
+    #[test]
+    fn items_of_a_session_view_entered_from_a_tab_stay_visible() {
+        let mut a = tabbed_sessions_app();
+        let item = in_session(from_file(question("r", 950.0), REVIEW_FILE), "s-r");
+        a.set_items(vec![item]);
+        a.on_key(key('f'));
+        assert_eq!(selected_pid(&a), Some(1));
+        a.on_key(code(KeyCode::Enter));
+        assert_eq!(a.session.as_deref(), Some("s-r"));
+        assert_eq!(visible_ids(&a), vec!["r"]);
     }
 }

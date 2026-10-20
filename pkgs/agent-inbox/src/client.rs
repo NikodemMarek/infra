@@ -40,8 +40,8 @@ pub struct Question {
 /// `CLAUDE_ORIGIN_FILE` points to); fields the file does not have are empty.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Origin {
-    /// Not shown: `target` tells what it is.
-    #[allow(dead_code)]
+    /// What the agent was started for (`review`, `note`, `build-failed`, `default`, ... for GitLab
+    /// events, `task` for `jw agent`): picks the filter tab, see `tui::Tab`.
     pub kind: String,
     pub iid: Option<u64>,
     /// `MergeRequest` or `Issue`, "" for a task.
