@@ -2,8 +2,10 @@
 //! (the router closes the connection after every response).
 
 use std::error::Error;
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
@@ -12,6 +14,7 @@ pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 const TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_URL: &str = "http://127.0.0.1:7531";
+const ORIGIN_MAX_BYTES: u64 = 64 * 1024;
 
 /// One queued event with the router's bookkeeping.
 #[derive(Clone, Debug)]
@@ -31,6 +34,72 @@ pub struct Question {
     /// Option labels; `descriptions[i]` belongs to `labels[i]` (empty if there is none).
     pub labels: Vec<String>,
     pub descriptions: Vec<String>,
+}
+
+/// What a session started by `jw agent` or the GitLab event handler works on (the JSON file
+/// `CLAUDE_ORIGIN_FILE` points to); fields the file does not have are empty.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Origin {
+    // not shown yet
+    #[allow(dead_code)]
+    pub kind: String,
+    pub iid: Option<u64>,
+    /// `MergeRequest` or `Issue`, "" for a task.
+    pub target: String,
+    pub title: String,
+    pub url: String,
+    // not shown yet
+    #[allow(dead_code)]
+    pub description: String,
+    // not shown yet
+    #[allow(dead_code)]
+    pub prompt: String,
+}
+
+impl Origin {
+    /// The origin file `path`, which must be a regular file of at most 64 KB directly in `dir`
+    /// (the path comes from an event: untrusted) holding a JSON object.
+    pub fn load(path: &Path, dir: &Path) -> Option<Origin> {
+        if path.parent() != Some(dir) {
+            return None;
+        }
+        // not a FIFO: opening it would block
+        if !fs::metadata(path).ok()?.is_file() {
+            return None;
+        }
+        let mut raw = String::new();
+        fs::File::open(path)
+            .ok()?
+            .take(ORIGIN_MAX_BYTES + 1)
+            .read_to_string(&mut raw)
+            .ok()?;
+        if raw.len() as u64 > ORIGIN_MAX_BYTES {
+            return None;
+        }
+        let v: Value = serde_json::from_str(&raw).ok()?;
+        v.as_object()?;
+        let text = |key: &str| v.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+        Some(Origin {
+            kind: text("kind"),
+            iid: v.get("iid").and_then(Value::as_u64),
+            target: text("target"),
+            title: text("title"),
+            url: text("url"),
+            description: text("description"),
+            prompt: text("prompt"),
+        })
+    }
+}
+
+/// `!7 title` for a merge request, `#7 title` for an issue, else the title; None if there is
+/// nothing to show.
+pub fn origin_label(origin: &Origin) -> Option<String> {
+    let label = match (origin.target.as_str(), origin.iid) {
+        ("MergeRequest", Some(iid)) => format!("!{iid} {}", origin.title),
+        ("Issue", Some(iid)) => format!("#{iid} {}", origin.title),
+        _ => origin.title.clone(),
+    };
+    Some(clean(label.trim())).filter(|l| !l.is_empty())
 }
 
 impl Item {
@@ -62,6 +131,11 @@ impl Item {
     /// The shpool session the event comes from (`shpool attach <name>`), "" if there is none.
     pub fn shpool(&self) -> &str {
         self.field("shpool")
+    }
+
+    /// The origin file of the session the event comes from, "" for a hand-started one.
+    pub fn origin_file(&self) -> &str {
+        self.field("origin_file")
     }
 
     pub fn prompt(&self) -> &str {
@@ -570,5 +644,111 @@ mod tests {
         assert_eq!(item.age(1000.0 + 7200.0), "2h");
         assert_eq!(item.age(900.0), "0s");
         assert_eq!(clean("a\x1b[31m\tb\nc"), "a [31m b c");
+    }
+
+    /// Fresh `<temp>/<test>/claude-origin`.
+    fn origin_dir(test: &str) -> std::path::PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("agent-inbox-test-{}-{test}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let dir = root.join("claude-origin");
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// `<dir>/<name>` holding `text`.
+    fn write_origin(dir: &Path, name: &str, text: &str) -> std::path::PathBuf {
+        fs::write(dir.join(name), text).unwrap();
+        dir.join(name)
+    }
+
+    #[test]
+    fn origin_loads_a_merge_request_and_a_task() {
+        let mr = r#"{"kind":"review","iid":7,"target":"MergeRequest","title":"T","url":"https://gitlab/x/-/merge_requests/7","description":"d"}"#;
+        let dir = origin_dir("origin-mr");
+        let path = write_origin(&dir, "a.json", mr);
+        assert_eq!(
+            Origin::load(&path, &dir),
+            Some(Origin {
+                kind: "review".into(),
+                iid: Some(7),
+                target: "MergeRequest".into(),
+                title: "T".into(),
+                url: "https://gitlab/x/-/merge_requests/7".into(),
+                description: "d".into(),
+                prompt: "".into(),
+            })
+        );
+        let text = r#"{"kind":"task","title":"t","prompt":"p"}"#;
+        let path = write_origin(&dir, "b.json", text);
+        let task = Origin::load(&path, &dir).unwrap();
+        assert_eq!(
+            (task.iid, task.url.as_str(), task.prompt.as_str()),
+            (None, "", "p")
+        );
+        fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn origin_rejects_foreign_oversized_and_malformed_files() {
+        let dir = origin_dir("origin-bad");
+        let load = |path: &Path| Origin::load(path, &dir);
+        let ok = write_origin(&dir, "a.json", r#"{"title":"T"}"#);
+        assert!(load(&ok).is_some());
+        // outside the directory, also by way of `..` and a subdirectory
+        let outside = write_origin(dir.parent().unwrap(), "b.json", r#"{"title":"T"}"#);
+        assert!(load(&outside).is_none());
+        assert!(load(&dir.join("../b.json")).is_none());
+        fs::create_dir(dir.join("sub")).unwrap();
+        let nested = write_origin(&dir.join("sub"), "c.json", r#"{"title":"T"}"#);
+        assert!(load(&nested).is_none());
+        // a directory, a missing file, over 64 KB, bad JSON, not an object
+        assert!(load(&dir.join("sub")).is_none());
+        assert!(load(&dir.join("gone.json")).is_none());
+        let big = format!(
+            r#"{{"title":"T","description":"{}"}}"#,
+            "x".repeat(64 * 1024)
+        );
+        assert!(load(&write_origin(&dir, "big.json", &big)).is_none());
+        assert!(load(&write_origin(&dir, "junk.json", "{not json")).is_none());
+        assert!(load(&write_origin(&dir, "list.json", "[]")).is_none());
+        fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn origin_label_names_the_merge_request_issue_or_task() {
+        let label = |target: &str, iid: Option<u64>, title: &str| {
+            origin_label(&Origin {
+                target: target.into(),
+                iid,
+                title: title.into(),
+                ..Origin::default()
+            })
+        };
+        assert_eq!(label("MergeRequest", Some(7), "T"), Some("!7 T".into()));
+        assert_eq!(label("Issue", Some(12), "T"), Some("#12 T".into()));
+        assert_eq!(label("", None, "do it"), Some("do it".into()));
+        // without a number only the title is left
+        assert_eq!(label("MergeRequest", None, "T"), Some("T".into()));
+        assert_eq!(label("MergeRequest", Some(7), ""), Some("!7".into()));
+        assert_eq!(label("", None, ""), None);
+        assert_eq!(
+            label("Issue", Some(1), "a\x1b[31m\nb"),
+            Some("#1 a [31m b".into())
+        );
+    }
+
+    #[test]
+    fn origin_file_is_empty_without_one() {
+        let item = |event: Value| Item {
+            id: "a".into(),
+            received: 0.0,
+            event,
+        };
+        assert_eq!(
+            item(serde_json::json!({"origin_file": "/o/1"})).origin_file(),
+            "/o/1"
+        );
+        assert_eq!(item(serde_json::json!({})).origin_file(), "");
     }
 }

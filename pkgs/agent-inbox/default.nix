@@ -3,6 +3,7 @@
   rustPlatform,
   makeWrapper,
   jw,
+  xdg-utils,
 }:
 
 rustPlatform.buildRustPackage {
@@ -22,10 +23,11 @@ rustPlatform.buildRustPackage {
 
   nativeBuildInputs = [makeWrapper];
 
-  # `N` asks for a task and runs `jw agent -d <task>`; a jw of the user's own PATH wins. zellij and
-  # shpool come from PATH too: they must match the running server and daemon.
+  # `N` asks for a task and runs `jw agent -d <task>`; `o` opens a link with xdg-open. A jw or
+  # xdg-open of the user's own PATH wins. zellij and shpool come from PATH too: they must match the
+  # running server and daemon.
   postInstall = ''
-    wrapProgram $out/bin/agent-inbox --suffix PATH : ${lib.makeBinPath [jw]}
+    wrapProgram $out/bin/agent-inbox --suffix PATH : ${lib.makeBinPath [jw xdg-utils]}
   '';
 
   meta = {
