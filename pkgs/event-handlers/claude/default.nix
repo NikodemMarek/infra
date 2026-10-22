@@ -7,6 +7,7 @@
   jq,
   util-linux,
   coreutils,
+  curl,
   glab,
   jujutsu,
   claude,
@@ -17,7 +18,9 @@
   # a package following the `gitlab-context prepare` protocol: reads the event
   # on stdin, takes `--checkout=<dir> --task=<text> [--profile=<p>] [--dry-run]`
   # and prints one JSON line: `{"action": "skip", "reason": ...}` or
-  # `{"action": "spawn", "cwd", "context_dir", "session_lock", "workspace"}`
+  # `{"action": "spawn", "cwd", "context_dir", "session_lock", "workspace"}` or
+  # `{"action": "message", "to": "<session name>", "text": "<text>"}` (the text is
+  # posted as a `session.message` to the running session `to`; nothing is started)
   # (`context_dir/prompt.md` is the prompt). null: no preparation, claude starts
   # in the main checkout with a prompt built from the event alone.
   # A spawn may also carry `"session": {"id": "<uuid>", "dir": "<abs path>",
@@ -104,6 +107,28 @@ let
               echo "context tool: incomplete spawn output: $out" >&2
             fi
             ;;
+          message)
+            # \z, not $: the regex of jq also matches before a trailing newline
+            if to=$(jq -er '.to | strings | select(test("^[A-Za-z0-9][A-Za-z0-9._-]*\\z"))' <<<"$out" 2>/dev/null) &&
+              text=$(jq -er '.text | strings | select(test("\\S"))' <<<"$out" 2>/dev/null); then
+              if [[ -n "$dry_run" ]]; then
+                echo "action: message"
+                echo "to: $to"
+                echo "text: $text"
+                exit 0
+              fi
+              if ! jq -c '{type: "session.message", to: .to, from: "gitlab", text: .text}' <<<"$out" |
+                curl -fsS --noproxy '*' -m 5 -H 'Content-Type: application/json' --data-binary @- \
+                  "''${EVENT_ROUTER_URL:-http://127.0.0.1:7531}/events" >/dev/null; then
+                echo "cannot post the message for session $to to the event router" >&2
+                exit 1
+              fi
+              jq --arg title "sent to the running Claude session $to" '.title = $title' <<<"$event" | ${lib.getExe notify}
+              exit 0
+            else
+              echo "context tool: invalid message output: $out" >&2
+            fi
+            ;;
           *) echo "context tool: unknown action '$action'" >&2 ;;
         esac
       else
@@ -173,7 +198,7 @@ let
           if [[ ''${#paths[@]} == 0 ]]; then
             exit 0
           fi
-          claude --resume "$6" --add-dir "$1" "$7" --permission-mode "$perm" "New GitLab activity on this MR, read: ''${paths[*]}" 8>&- || status=$?
+          claude --resume "$6" --add-dir "$1" "$7" --permission-mode "$perm" "New GitLab activity, read: ''${paths[*]}" 8>&- || status=$?
           if [[ "$status" != 0 ]]; then
             # the taken files are not queued any more: say so; start afresh next time
             not_started "claude --resume exited with $status; undelivered: ''${paths[*]}"
@@ -219,6 +244,7 @@ writeShellApplication {
     jq
     util-linux
     coreutils
+    curl
     glab
     claude
   ] ++ extraPackages;
