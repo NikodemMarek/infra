@@ -99,10 +99,6 @@ let
                 sdir=""
                 resume=""
               fi
-              # edits are auto-approved only in a workspace of its own, never in the main checkout
-              if jq -e '.workspace | type == "object"' <<<"$out" >/dev/null; then
-                perm=acceptEdits
-              fi
             else
               echo "context tool: incomplete spawn output: $out" >&2
             fi
@@ -140,7 +136,7 @@ let
   '';
 
   # runs in the shpool session: $1 = context dir, $2 = session lock, $3 = gitlab host,
-  # $4 = claude permission mode (default: ask for everything),
+  # $4 = claude permission mode (default: auto),
   # $5 = knowledge origin (`event:<type>`), exported so the knowledge CLI marks
   # what the session submits as untrusted, optionally $6 = claude session id,
   # $7 = session dir (see contextTool): then the lock is held on fd 8 while
@@ -161,10 +157,10 @@ let
       export GITLAB_HOST="$3"
       export KNOWLEDGE_ORIGIN="''${5:-}"
       export PATH="$PATH:${jujutsu}/bin"
-      perm=''${4:-default}
+      perm=''${4:-auto}
       case "$perm" in
-        default | acceptEdits) ;;
-        *) perm=default ;;
+        default | acceptEdits | auto) ;;
+        *) perm=auto ;;
       esac
 
       # say it in the session and as an event; no SHPOOL_SESSION_NAME: this
@@ -233,9 +229,8 @@ let
 in
 # event handler: notify, then (with a contextTool) prepare a workspace and the
 # GitLab context, and open a shpool session there (`jw attach <name>`)
-# running Claude with edits auto-approved in the workspace (everything else
-# still asks). Without a contextTool the session runs a plain claude in the
-# main checkout, asking for everything.
+# running Claude in auto mode. Without a contextTool the session runs a plain
+# claude in the main checkout, also in auto mode.
 writeShellApplication {
   name = "event-handler-claude-${name}";
   # glab, extraPackages: the environment, PATH included, goes into the shpool session via the job script
@@ -277,7 +272,7 @@ writeShellApplication {
     claude_origin=$(jq -c --arg kind ${lib.escapeShellArg name} '(.raw.target // .raw.merge_request // {}) as $t | {kind:$kind, iid:.target_iid, target:.target_type, title, url, description:(($t.description // "")[0:8000])} | with_entries(select(.value != null and .value != ""))' <<<"$event")
 
     prepared=0
-    perm=default
+    perm=auto
     cwd=""
     context_dir=""
     session_lock=""

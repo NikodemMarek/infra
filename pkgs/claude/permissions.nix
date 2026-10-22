@@ -84,4 +84,6 @@
   ];
   ask = [];
   additionalDirectories = ["@memoryDir@" "~/projects"];
+  # every session starts in auto mode, also those jw and the event handlers start
+  defaultMode = "auto";
 }
