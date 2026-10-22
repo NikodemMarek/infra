@@ -194,6 +194,20 @@ let
     ];
   };
 
+  # Seeds the project MCP servers of a directory as disabled (no blocking approval dialog); never fails.
+  mcpDefaults = shellHook {
+    name = "claude-mcp-defaults";
+    src = ./mcp-defaults.sh;
+    runtimeInputs = [
+      jq
+      coreutils
+    ];
+    bashOptions = [
+      "nounset"
+      "pipefail"
+    ];
+  };
+
   jjWorkspace = stdenvNoCC.mkDerivation {
     pname = "claude-jj-workspace";
     version = "0.1.0";
@@ -211,6 +225,7 @@ let
           lib.makeBinPath [
             jujutsu
             git
+            mcpDefaults
           ]
         }
       runHook postInstall
@@ -232,11 +247,12 @@ symlinkJoin {
     mailTake
     stopHook
     promptHook
+    mcpDefaults
     jjWorkspace
   ];
 
   meta = {
-    description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop and UserPromptSubmit hooks (queued follow-up prompts of event-started sessions, queued session messages, waiting notification), jj workspaces for isolated agents";
+    description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop and UserPromptSubmit hooks (queued follow-up prompts of event-started sessions, queued session messages, waiting notification), jj workspaces for isolated agents, project MCP servers seeded as disabled";
     platforms = lib.platforms.unix;
   };
 }

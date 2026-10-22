@@ -77,6 +77,14 @@ def git(cwd, *args):
     return p.stdout
 
 
+def mcp_defaults(d):
+    """Start the project MCP servers of a fresh workspace disabled: avoids the blocking approval dialog."""
+    try:
+        subprocess.run(["claude-mcp-defaults", d], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    except OSError as e:
+        log(f"claude-mcp-defaults: {e}")
+
+
 def inside(path, parent):
     path, parent = os.path.realpath(path), os.path.realpath(parent)
     return path == parent or path.startswith(parent + os.sep)
@@ -353,6 +361,7 @@ def create(inp):
             base = jj(root, "log", "--no-graph", "-r", "@", "-T", "change_id").strip()  # snapshots
         os.makedirs(os.path.dirname(d), exist_ok=True)
         jj(root, "workspace", "add", f"--name={wsname}", "-r", f"change_id({base})", d)
+        mcp_defaults(d)
         try:
             st = {"name": name, "root": root, "dir": d, "agents": agents, "base": base,
                   "kind": kind,
@@ -382,6 +391,7 @@ def create_git(cwd, name, inp):
         git(top, "worktree", "add", wt, branch)
     else:
         git(top, "worktree", "add", "-b", branch, wt, "HEAD")
+    mcp_defaults(wt)
     return wt
 
 
