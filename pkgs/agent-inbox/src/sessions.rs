@@ -51,6 +51,26 @@ impl Session {
             })
             .unwrap_or_default()
     }
+
+    /// The repo of the cwd: `<repo>` of `<repo>.agents/<workspace>`, else its last component.
+    pub fn repo(&self) -> String {
+        self.cwd
+            .split('/')
+            .find_map(|c| c.strip_suffix(".agents").filter(|r| !r.is_empty()))
+            .or_else(|| self.cwd.rsplit('/').find(|c| !c.is_empty()))
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// `<workspace>` of a cwd in `<repo>.agents/<workspace>`, else "".
+    pub fn workspace(&self) -> String {
+        let mut parts = self.cwd.split('/');
+        parts
+            .find(|c| c.strip_suffix(".agents").is_some_and(|r| !r.is_empty()))
+            .and_then(|_| parts.next())
+            .unwrap_or_default()
+            .to_string()
+    }
 }
 
 /// `$CLAUDE_CONFIG_DIR`, else `~/.local/share/claude`; the registry is in its `sessions` directory.
@@ -381,5 +401,39 @@ mod tests {
         assert_eq!(place("/x/r.agents"), "r.agents");
         assert_eq!(place("/"), "");
         assert_eq!(place(""), "");
+    }
+
+    #[test]
+    fn repo_is_the_agents_parent_else_the_last_component() {
+        for (cwd, want) in [
+            ("/p/home-infra.agents/s-1/sub", "home-infra"),
+            ("/p/home-infra.agents/s-1", "home-infra"),
+            ("/p/home-infra.agents", "home-infra"),
+            ("/p/x.agents/", "x"),
+            ("/p/dotfiles", "dotfiles"),
+            ("/p/dotfiles/", "dotfiles"),
+            // an empty repo name is not an agents dir
+            ("/p/.agents/s-1", "s-1"),
+            ("/", ""),
+            ("", ""),
+        ] {
+            assert_eq!(session_at(cwd).repo(), want, "{cwd:?}");
+        }
+    }
+
+    #[test]
+    fn workspace_is_the_component_after_the_agents_dir() {
+        for (cwd, want) in [
+            ("/p/home-infra.agents/s-1/sub", "s-1"),
+            ("/p/home-infra.agents/s-1", "s-1"),
+            ("/p/home-infra.agents", ""),
+            ("/p/x.agents/", ""),
+            ("/p/dotfiles", ""),
+            ("/p/.agents/s-1", ""),
+            ("/", ""),
+            ("", ""),
+        ] {
+            assert_eq!(session_at(cwd).workspace(), want, "{cwd:?}");
+        }
     }
 }

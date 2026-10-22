@@ -244,15 +244,19 @@ impl Item {
         .to_string()
     }
 
-    /// Where the event comes from: `repo:workspace` (no workspace for an empty one or
-    /// `default`); without jj the `project_name`.
-    pub fn place(&self) -> String {
-        let (repo, workspace) = (self.jj("repo"), self.jj("workspace"));
-        match (repo, workspace) {
-            ("", _) => self.project_name(),
-            (repo, "" | "default") => repo.to_string(),
-            (repo, workspace) => format!("{repo}:{workspace}"),
+    /// The workspace: the jj one unless empty or `default`, else `<workspace>` of a cwd in
+    /// `<repo>.agents/<workspace>`, else "".
+    pub fn workspace(&self) -> String {
+        let jj = self.jj("workspace");
+        if !jj.is_empty() && jj != "default" {
+            return jj.to_string();
         }
+        let mut parts = self.cwd().split('/');
+        parts
+            .find(|c| c.strip_suffix(".agents").is_some_and(|r| !r.is_empty()))
+            .and_then(|_| parts.next())
+            .unwrap_or_default()
+            .to_string()
     }
 
     /// `repo[/subdir] ws:workspace[ @change][ index/size]` like the statusline; None without jj.
@@ -703,23 +707,59 @@ mod tests {
         assert_eq!(id(Value::Null), "");
     }
 
-    #[test]
-    fn place_is_repo_and_non_default_workspace() {
-        use serde_json::json;
-        let item = |event: Value| Item {
-            id: "a".into(),
+    fn item_with(event: Value) -> Item {
+        Item {
+            id: "i".into(),
             received: 0.0,
             event,
-        };
-        let jj = |workspace: Value| {
-            item(json!({"cwd": "/x/y", "jj": {"repo": "r", "workspace": workspace}}))
-        };
-        assert_eq!(jj(json!("s-1")).place(), "r:s-1");
-        assert_eq!(jj(json!("default")).place(), "r");
-        assert_eq!(jj(json!("")).place(), "r");
-        assert_eq!(jj(Value::Null).place(), "r");
-        assert_eq!(item(json!({"cwd": "/x/y"})).place(), "y");
-        assert_eq!(item(Value::Null).place(), "");
+        }
+    }
+
+    #[test]
+    fn item_workspace_is_the_jj_workspace() {
+        let ws = |event: Value| item_with(event).workspace();
+        assert_eq!(
+            ws(json!({"cwd": "/p/dotfiles", "jj": {"repo": "dotfiles", "workspace": "w-1"}})),
+            "w-1"
+        );
+        // the jj workspace wins over the cwd
+        assert_eq!(
+            ws(json!({"cwd": "/p/a.agents/s-2", "jj": {"repo": "a", "workspace": "w-1"}})),
+            "w-1"
+        );
+    }
+
+    #[test]
+    fn item_workspace_falls_back_to_the_agents_dir_of_the_cwd() {
+        let ws = |event: Value| item_with(event).workspace();
+        // no jj
+        assert_eq!(ws(json!({"cwd": "/p/a.agents/s-2"})), "s-2");
+        assert_eq!(ws(json!({"cwd": "/p/a.agents/s-2/sub"})), "s-2");
+        // the default or an empty jj workspace is no workspace
+        assert_eq!(
+            ws(json!({"cwd": "/p/a.agents/s-2", "jj": {"repo": "a", "workspace": "default"}})),
+            "s-2"
+        );
+        assert_eq!(
+            ws(json!({"cwd": "/p/a.agents/s-2", "jj": {"repo": "a", "workspace": ""}})),
+            "s-2"
+        );
+    }
+
+    #[test]
+    fn item_workspace_is_empty_without_a_workspace() {
+        let ws = |event: Value| item_with(event).workspace();
+        assert_eq!(
+            ws(json!({"cwd": "/p/dotfiles", "jj": {"repo": "dotfiles", "workspace": "default"}})),
+            ""
+        );
+        assert_eq!(
+            ws(json!({"cwd": "/p/dotfiles", "jj": {"repo": "dotfiles", "workspace": ""}})),
+            ""
+        );
+        assert_eq!(ws(json!({"cwd": "/p/dotfiles"})), "");
+        assert_eq!(ws(json!({"cwd": "/p/a.agents/"})), "");
+        assert_eq!(ws(json!({})), "");
     }
 
     #[test]

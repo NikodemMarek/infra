@@ -54,7 +54,9 @@ const SIDE_BY_SIDE: u16 = 100;
 const LIST_MIN_WIDTH: u16 = 30;
 /// Width of the kind badge column in the list.
 const BADGE_WIDTH: usize = 5;
-/// Widest context (merge request and title, or place) column in the lists.
+/// Widest repo column in the lists.
+const REPO_MAX_WIDTH: usize = 20;
+/// Widest context (merge request and title, or workspace) column in the lists.
 const CONTEXT_MAX_WIDTH: usize = 32;
 /// The status of a session that waits for the user.
 const WAITING: &str = "waiting";
@@ -381,16 +383,16 @@ impl App {
         self.origin(file).and_then(client::origin_label)
     }
 
-    /// What the item is about: its origin, else where it comes from.
+    /// What the item is about: its origin, else its workspace.
     fn item_context(&self, item: &Item) -> String {
         let label = self.origin_label(item.origin_file());
-        label.unwrap_or_else(|| item.place())
+        label.unwrap_or_else(|| item.workspace())
     }
 
-    /// What the session is about: its origin, else where it runs.
+    /// What the session is about: its origin, else its workspace.
     fn session_context(&self, session: &Session) -> String {
         let label = self.origin_label(&session.origin_file);
-        label.unwrap_or_else(|| session.place())
+        label.unwrap_or_else(|| session.workspace())
     }
 
     /// The link of the origin read from `file`, if it has an http(s) one (the file is data of a
@@ -1139,6 +1141,10 @@ fn dim() -> Style {
     Style::new().add_modifier(Modifier::DIM)
 }
 
+fn repo_style() -> Style {
+    Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD)
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -1258,7 +1264,7 @@ fn detail_view(app: &App, item: &Item) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(vec![
         Span::styled(badge_text, badge_style),
         Span::raw("  "),
-        Span::styled(clean(&item.project_name()), bold()),
+        Span::styled(clean(&item.project_name()), repo_style()),
         Span::styled(format!("  ·  {}", item.age(app.now)), dim()),
     ])];
     let jj_line = item.jj_line();
@@ -1715,16 +1721,19 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
     let visible = app.visible();
     let block = Block::bordered().border_style(border_style(focused));
     let width = usize::from(block.inner(area).width);
-    let context_width = visible
-        .iter()
-        .map(|i| clean(&app.item_context(i)).chars().count())
-        .max()
-        .unwrap_or(0)
-        .min(CONTEXT_MAX_WIDTH)
-        .min(width / 3);
+    let repo_width = column_width(
+        visible.iter().map(|i| i.project_name()),
+        REPO_MAX_WIDTH,
+        width / 5,
+    );
+    let context_width = column_width(
+        visible.iter().map(|i| app.item_context(i)),
+        CONTEXT_MAX_WIDTH,
+        width / 3,
+    );
     let mut rows: Vec<ListItem> = visible
         .iter()
-        .map(|i| ListItem::new(row(app, i, width, context_width)))
+        .map(|i| ListItem::new(row(app, i, width, repo_width, context_width)))
         .collect();
     if rows.is_empty() {
         rows.push(empty_row(app));
@@ -1737,34 +1746,87 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
-/// marker, badge, context, title, age right-aligned; exactly `width` chars if it fits.
-fn row(app: &App, item: &Item, width: usize, context_width: usize) -> Line<'static> {
+/// The widest of `cells` (as shown), at most `max` and `limit` chars.
+fn column_width(cells: impl Iterator<Item = String>, max: usize, limit: usize) -> usize {
+    cells
+        .map(|c| clean(&c).chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(max)
+        .min(limit)
+}
+
+/// Chars of the repo and context columns with their trailing spaces; a 0-wide context column
+/// takes none.
+fn place_width(repo_width: usize, context_width: usize) -> usize {
+    let context = if context_width == 0 {
+        0
+    } else {
+        context_width + 1
+    };
+    repo_width + 1 + context
+}
+
+/// The repo and context columns of a row, each followed by a space.
+fn place_spans(
+    repo: &str,
+    context: &str,
+    repo_width: usize,
+    context_width: usize,
+) -> Vec<Span<'static>> {
+    let repo = truncate(&clean(repo), repo_width);
+    let mut spans = vec![
+        Span::styled(format!("{:<w$}", repo, w = repo_width), repo_style()),
+        Span::raw(" "),
+    ];
+    if context_width > 0 {
+        let context = truncate(&clean(context), context_width);
+        spans.push(Span::raw(format!("{:<w$}", context, w = context_width)));
+        spans.push(Span::raw(" "));
+    }
+    spans
+}
+
+/// marker, badge, repo, context, title, age right-aligned; exactly `width` chars if it fits.
+fn row(
+    app: &App,
+    item: &Item,
+    width: usize,
+    repo_width: usize,
+    context_width: usize,
+) -> Line<'static> {
     let (badge_text, badge_style) = badge(item.kind());
     let marker = if action(item).is_some() {
         Span::styled("●", bold())
     } else {
         Span::styled("○", dim())
     };
-    let context = truncate(&clean(&app.item_context(item)), context_width);
     let age = item.age(app.now);
-    let head = 2 + BADGE_WIDTH + 1 + context_width + 1;
+    let head = 2 + BADGE_WIDTH + 1 + place_width(repo_width, context_width);
     let age_width = age.chars().count();
     let title = truncate(
         &clean(item.title()),
         width.saturating_sub(head + age_width + 1),
     );
     let pad = width.saturating_sub(head + title.chars().count() + age_width);
-    Line::from(vec![
+    let mut spans = vec![
         marker,
         Span::raw(" "),
         Span::styled(format!("{:<w$}", badge_text, w = BADGE_WIDTH), badge_style),
         Span::raw(" "),
-        Span::raw(format!("{:<w$}", context, w = context_width)),
-        Span::raw(" "),
+    ];
+    spans.extend(place_spans(
+        &item.project_name(),
+        &app.item_context(item),
+        repo_width,
+        context_width,
+    ));
+    spans.extend([
         Span::raw(title),
         Span::raw(" ".repeat(pad)),
         Span::styled(age, dim()),
-    ])
+    ]);
+    Line::from(spans)
 }
 
 /// Text and style of the badge for the status of a session.
@@ -1785,16 +1847,15 @@ fn render_sessions(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::bordered().border_style(border_style(focused));
     let width = usize::from(block.inner(area).width);
     let sessions = app.visible_sessions();
-    let context_width = sessions
-        .iter()
-        .map(|s| clean(&app.session_context(s)).chars().count())
-        .max()
-        .unwrap_or(0)
-        .min(CONTEXT_MAX_WIDTH)
-        .min(width / 3);
+    let repo_width = column_width(sessions.iter().map(|s| s.repo()), REPO_MAX_WIDTH, width / 5);
+    let context_width = column_width(
+        sessions.iter().map(|s| app.session_context(s)),
+        CONTEXT_MAX_WIDTH,
+        width / 3,
+    );
     let mut rows: Vec<ListItem> = sessions
         .iter()
-        .map(|s| ListItem::new(session_row(app, s, width, context_width)))
+        .map(|s| ListItem::new(session_row(app, s, width, repo_width, context_width)))
         .collect();
     if rows.is_empty() {
         rows.push(empty_row(app));
@@ -1807,9 +1868,15 @@ fn render_sessions(f: &mut Frame, app: &App, area: Rect) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
-/// pending items, badge, context, what it waits for, status age right-aligned; exactly `width`
-/// chars if it fits.
-fn session_row(app: &App, session: &Session, width: usize, context_width: usize) -> Line<'static> {
+/// pending items, badge, repo, context, what it waits for, status age right-aligned; exactly
+/// `width` chars if it fits.
+fn session_row(
+    app: &App,
+    session: &Session,
+    width: usize,
+    repo_width: usize,
+    context_width: usize,
+) -> Line<'static> {
     let (badge_text, badge_style) = status_badge(&session.status);
     let pending = app.session_items(session).len();
     let count = if pending == 0 {
@@ -1817,32 +1884,43 @@ fn session_row(app: &App, session: &Session, width: usize, context_width: usize)
     } else {
         format!("{:>2}", pending.min(99))
     };
-    let context = truncate(&clean(&app.session_context(session)), context_width);
     let age = client::age(session.status_at, app.now);
-    let head = 2 + 1 + BADGE_WIDTH + 1 + context_width + 1;
+    let head = 2 + 1 + BADGE_WIDTH + 1 + place_width(repo_width, context_width);
     let age_width = age.chars().count();
     let waiting_for = truncate(
         &clean(&session.waiting_for),
         width.saturating_sub(head + age_width + 1),
     );
     let pad = width.saturating_sub(head + waiting_for.chars().count() + age_width);
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled(count, bold()),
         Span::raw(" "),
         Span::styled(format!("{:<w$}", badge_text, w = BADGE_WIDTH), badge_style),
         Span::raw(" "),
-        Span::raw(format!("{:<w$}", context, w = context_width)),
-        Span::raw(" "),
+    ];
+    spans.extend(place_spans(
+        &session.repo(),
+        &app.session_context(session),
+        repo_width,
+        context_width,
+    ));
+    spans.extend([
         Span::raw(waiting_for),
         Span::raw(" ".repeat(pad)),
         Span::styled(age, dim()),
-    ])
+    ]);
+    Line::from(spans)
 }
 
 /// The detail of `session`: its fields, its pending items and its origin.
 fn session_lines(app: &App, session: &Session) -> Vec<Line<'static>> {
     let (badge_text, badge_style) = status_badge(&session.status);
     let mut head = vec![Span::styled(badge_text, badge_style)];
+    let repo = session.repo();
+    if !repo.is_empty() {
+        head.push(Span::raw("  "));
+        head.push(Span::styled(clean(&repo), repo_style()));
+    }
     if !session.waiting_for.is_empty() {
         head.push(Span::raw(format!("  {}", clean(&session.waiting_for))));
     }
@@ -2655,7 +2733,10 @@ mod tests {
             "change": "abc", "stack": {"index": 2, "size": 3}});
         let s = screen(&app(vec![p]));
         let row = s.lines().find(|l| l.contains("title-p")).unwrap();
-        assert!(row.contains("real:s-1"), "{row}");
+        assert!(
+            row.contains("real s-1 ") && !row.contains("real:s-1"),
+            "{row}"
+        );
         assert!(s.contains("jj: real ws:s-1 @abc 2/3"), "{s}");
         assert!(!s.contains("cwd:"), "{s}");
     }
@@ -2900,7 +2981,7 @@ mod tests {
         assert!(screen(&a).contains("Detail"));
         a.on_key(key('j'));
         // the detail pane has the title of the selected item too: two rows mention it
-        let s = screen(&a);
+        let s = screen_at(&a, 200, 30);
         assert_eq!(s.matches("title-old").count(), 2);
         assert_eq!(s.matches("title-new").count(), 1);
     }
@@ -3805,7 +3886,7 @@ mod tests {
                 .to_string()
         };
         let wait = row(&s, "WAIT");
-        assert!(wait.contains("2 WAIT") && wait.contains("r:w1"), "{wait}");
+        assert!(wait.contains("2 WAIT  r w1 "), "{wait}");
         assert!(
             wait.contains("permission prompt") && wait.contains("10s"),
             "{wait}"
@@ -3826,7 +3907,7 @@ mod tests {
         );
         // detail of the selected (first) session
         for want in [
-            "WAIT  permission prompt  ·  10s",
+            "WAIT  r  permission prompt  ·  10s",
             "cwd: /home/u/projects/r.agents/w1",
             "shpool: jw-1",
             "pid: 1",
@@ -4469,7 +4550,7 @@ mod tests {
         ]);
         let ids: Vec<&str> = a.visible().iter().map(|i| i.id.as_str()).collect();
         assert_eq!(ids, vec!["s", "agent"]);
-        let s = screen(&a);
+        let s = screen_at(&a, 200, 30);
         assert!(
             s.contains("title-agent") && !s.contains("title-hand"),
             "{s}"
@@ -4488,17 +4569,17 @@ mod tests {
         let a = with_origin(a, MR_URL);
         let s = screen_at(&a, 60, 30);
         let row = s.lines().find(|l| l.contains('○')).unwrap();
-        assert!(row.contains("!7 T") && !row.contains("infra"), "{row}");
+        assert!(row.contains("infra") && row.contains("!7 T"), "{row}");
         // sessions
         let a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
         let idle_row = |a: &App| {
             let s = screen(a);
             s.lines().find(|l| l.contains("IDLE")).unwrap().to_string()
         };
-        assert!(idle_row(&a).contains("r:w1"), "{}", idle_row(&a));
+        assert!(idle_row(&a).contains("r w1 "), "{}", idle_row(&a));
         let a = with_origin(a, MR_URL);
         let row = idle_row(&a);
-        assert!(row.contains("!7 T") && !row.contains("r:w1"), "{row}");
+        assert!(row.contains("r !7 T") && !row.contains("w1"), "{row}");
     }
 
     #[test]
@@ -5842,5 +5923,314 @@ mod tests {
         assert_eq!(current_tab(&a), "Sessions");
         a.on_key(back);
         assert_eq!(current_tab(&a), "All");
+    }
+
+    // --- repo and context columns
+
+    fn buffer_at(app: &App, width: u16, height: u16) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| render(f, app)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// The text of every row of the buffer (one symbol per cell).
+    fn buffer_rows(buf: &ratatui::buffer::Buffer) -> Vec<String> {
+        buf.content
+            .chunks(usize::from(buf.area.width))
+            .map(|row| row.iter().map(|c| c.symbol()).collect::<String>())
+            .collect()
+    }
+
+    /// `(x, y)` of the first occurrence of `needle` (single-width text).
+    fn find_text(buf: &ratatui::buffer::Buffer, needle: &str) -> (usize, usize) {
+        let rows = buffer_rows(buf);
+        rows.iter()
+            .enumerate()
+            .find_map(|(y, r)| r.find(needle).map(|b| (r[..b].chars().count(), y)))
+            .unwrap_or_else(|| panic!("no {needle:?} on the screen:\n{}", rows.join("\n")))
+    }
+
+    /// The row (y, text) of the list item whose title is `title`.
+    fn list_row(buf: &ratatui::buffer::Buffer, title: &str) -> (usize, String) {
+        let (_, y) = find_text(buf, title);
+        (y, buffer_rows(buf)[y].clone())
+    }
+
+    /// The column (in chars) of `needle` in `row`.
+    fn col(row: &str, needle: &str) -> usize {
+        row[..row.find(needle).unwrap()].chars().count()
+    }
+
+    fn is_repo_style(c: &ratatui::buffer::Cell) -> bool {
+        c.fg == Color::Magenta && c.modifier.contains(Modifier::BOLD)
+    }
+
+    /// The text of the leftmost run of magenta cells of row `y`, without trailing blanks.
+    fn repo_run(buf: &ratatui::buffer::Buffer, y: usize) -> String {
+        let w = usize::from(buf.area.width);
+        let row = &buf.content[y * w..(y + 1) * w];
+        let start = row
+            .iter()
+            .position(|c| c.fg == Color::Magenta)
+            .unwrap_or_else(|| panic!("no magenta cell in row {y}: {}", buffer_rows(buf)[y]));
+        let run: String = row[start..]
+            .iter()
+            .take_while(|c| c.fg == Color::Magenta)
+            .map(|c| c.symbol())
+            .collect();
+        run.trim_end().to_string()
+    }
+
+    /// A claude.question titled `title` that runs in `cwd`.
+    fn placed(id: &str, title: &str, cwd: &str) -> Item {
+        let mut i = question(id, 990.0);
+        i.event["title"] = json!(title);
+        i.event["cwd"] = json!(cwd);
+        i.event.as_object_mut().unwrap().remove("project");
+        i
+    }
+
+    fn with_jj(mut item: Item, repo: &str, workspace: &str) -> Item {
+        item.event["jj"] = json!({"repo": repo, "workspace": workspace});
+        item
+    }
+
+    /// `ORIGIN_FILE` is the merge request !12 "Fix foo".
+    fn with_mr_12(mut a: App) -> App {
+        let origin = Origin {
+            target: "MergeRequest".into(),
+            iid: Some(12),
+            title: "Fix foo".into(),
+            ..Origin::default()
+        };
+        a.origins.insert(ORIGIN_FILE.into(), Some(origin));
+        a
+    }
+
+    fn session_in_cwd(mut s: Session, cwd: &str) -> Session {
+        s.cwd = cwd.into();
+        s
+    }
+
+    #[test]
+    fn repo_style_is_bold_magenta_and_the_repo_column_is_capped() {
+        assert_eq!(
+            repo_style(),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD)
+        );
+        assert_eq!(REPO_MAX_WIDTH, 20);
+    }
+
+    #[test]
+    fn item_row_shows_repo_then_the_origin_label() {
+        let a = with_mr_12(app(vec![placed(
+            "a",
+            "title-ctx",
+            "/p/home-infra.agents/s-1",
+        )]));
+        let buf = buffer_at(&a, 200, 30);
+        let (y, row) = list_row(&buf, "title-ctx");
+        assert!(row.contains("home-infra !12 Fix foo"), "{row}");
+        // the origin label wins over the workspace, which is not shown on the row
+        let before_title = &row[..row.find("title-ctx").unwrap()];
+        assert!(!before_title.contains("s-1"), "{row}");
+        assert!(col(&row, "!12 Fix foo") < col(&row, "title-ctx"), "{row}");
+        assert!(row.contains("10s"), "{row}");
+        // the repo is bold magenta
+        assert_eq!(repo_run(&buf, y), "home-infra");
+        let x = col(&row, "home-infra");
+        assert!(is_repo_style(&buf[(x as u16, y as u16)]));
+    }
+
+    #[test]
+    fn item_row_without_an_origin_shows_repo_and_workspace_apart() {
+        let a = app(vec![with_jj(
+            placed("a", "title-ws", "/p/dotfiles"),
+            "dotfiles",
+            "w-1",
+        )]);
+        let s = screen_at(&a, 200, 30);
+        let row = s.lines().find(|l| l.contains("title-ws")).unwrap();
+        assert!(row.contains("dotfiles w-1"), "{row}");
+        assert!(!s.contains("dotfiles:w-1"), "{s}");
+    }
+
+    #[test]
+    fn item_row_workspace_comes_from_the_cwd_without_jj() {
+        let a = app(vec![placed("a", "title-ws", "/p/home-infra.agents/s-1")]);
+        let s = screen_at(&a, 200, 30);
+        let row = s.lines().find(|l| l.contains("title-ws")).unwrap();
+        assert!(row.contains("home-infra s-1"), "{row}");
+    }
+
+    #[test]
+    fn context_column_is_dropped_when_every_context_is_empty() {
+        let a = app(vec![
+            placed("a", "title-x", "/p/dotfiles"),
+            placed("b", "title-y", "/p/dotfiles"),
+        ]);
+        let s = screen_at(&a, 200, 30);
+        for title in ["title-x", "title-y"] {
+            let row = s.lines().find(|l| l.contains(title)).unwrap();
+            assert!(row.contains(&format!("dotfiles {title}")), "{row}");
+        }
+    }
+
+    #[test]
+    fn context_column_stays_while_one_visible_row_has_a_context() {
+        let a = app(vec![
+            placed("a", "title-x", "/p/dotfiles"),
+            placed("b", "title-y", "/p/dotfiles.agents/s-1"),
+        ]);
+        let s = screen_at(&a, 200, 30);
+        let x = s.lines().find(|l| l.contains("title-x")).unwrap();
+        let y = s.lines().find(|l| l.contains("title-y")).unwrap();
+        assert!(y.contains("dotfiles s-1"), "{y}");
+        assert!(!x.contains("dotfiles title-x"), "{x}");
+        // the titles line up
+        assert_eq!(col(x, "title-x"), col(y, "title-y"), "{x}\n{y}");
+    }
+
+    #[test]
+    fn repo_column_is_padded_to_the_longest_repo_of_the_visible_rows() {
+        let a = app(vec![
+            placed("a", "title-a", "/p/a.agents/s-1"),
+            placed("b", "title-b", "/p/home-infra.agents/s-22"),
+        ]);
+        let s = screen_at(&a, 200, 30);
+        let ra = s.lines().find(|l| l.contains("title-a")).unwrap();
+        let rb = s.lines().find(|l| l.contains("title-b")).unwrap();
+        assert_eq!(col(ra, "s-1"), col(rb, "s-22"), "{ra}\n{rb}");
+        assert!(rb.contains("home-infra s-22"), "{rb}");
+        assert!(ra.contains("a          s-1"), "{ra}");
+    }
+
+    #[test]
+    fn a_long_repo_is_cut_to_the_cap_with_an_ellipsis() {
+        let repo = "abcdefghijklmnopqrstuvwxyz0123";
+        assert_eq!(repo.chars().count(), 30);
+        let a = app(vec![placed("a", "title-long", &format!("/p/{repo}"))]);
+        // wide enough that neither the pane nor width/5 is the limit
+        let buf = buffer_at(&a, 400, 30);
+        let (y, row) = list_row(&buf, "title-long");
+        assert_eq!(repo_run(&buf, y), format!("{}…", &repo[..19]), "{row}");
+        // the detail pane may show the whole repo; only the list row is capped
+        let list_width = usize::from(panes(buf.area).list.width);
+        let list: String = row.chars().take(list_width).collect();
+        assert!(!list.contains(&repo[..20]), "{row}");
+    }
+
+    #[test]
+    fn the_repo_column_takes_at_most_a_fifth_of_a_narrow_row() {
+        let repo = "abcdefghijklmnopqrstuvwxyz0123";
+        let a = app(vec![placed("a", "title-long", &format!("/p/{repo}"))]);
+        for width in [40u16, 60] {
+            let buf = buffer_at(&a, width, 30);
+            let (y, row) = list_row(&buf, "title-long");
+            let run = repo_run(&buf, y);
+            assert!(
+                run.chars().count() <= usize::from(width) / 5,
+                "{width}: {run:?}\n{row}"
+            );
+            assert!(run.ends_with('…'), "{width}: {run:?}");
+            assert!(run.starts_with("abc"), "{width}: {run:?}");
+        }
+    }
+
+    #[test]
+    fn session_row_shows_repo_then_the_workspace() {
+        let a = sessions_app(
+            vec![],
+            vec![session_in_cwd(
+                session(1, "s-a", WAITING),
+                "/p/home-infra.agents/s-2",
+            )],
+        );
+        let buf = buffer_at(&a, 200, 30);
+        let (y, row) = list_row(&buf, "home-infra s-2");
+        assert!(row.contains("WAIT  home-infra s-2"), "{row}");
+        assert!(col(&row, "s-2") < col(&row, "permission prompt"), "{row}");
+        assert!(row.contains("10s"), "{row}");
+        assert_eq!(repo_run(&buf, y), "home-infra");
+        assert!(!screen_at(&a, 200, 30).contains("home-infra:s-2"));
+    }
+
+    #[test]
+    fn session_row_shows_the_origin_label_instead_of_the_workspace() {
+        let a = sessions_app(
+            vec![],
+            vec![session_in_cwd(
+                session(1, "s-a", WAITING),
+                "/p/home-infra.agents/s-2",
+            )],
+        );
+        let a = with_mr_12(a);
+        let s = screen_at(&a, 200, 30);
+        let row = s
+            .lines()
+            .find(|l| l.contains("permission prompt") && l.contains("WAIT"))
+            .unwrap();
+        assert!(row.contains("home-infra !12 Fix foo"), "{row}");
+        assert!(!row.contains("s-2"), "{row}");
+    }
+
+    #[test]
+    fn session_row_drops_the_context_column_when_every_context_is_empty() {
+        let a = sessions_app(
+            vec![],
+            vec![
+                session_in_cwd(session(1, "s-a", WAITING), "/p/dotfiles"),
+                session_in_cwd(session(2, "s-b", WAITING), "/p/dotfiles"),
+            ],
+        );
+        let s = screen_at(&a, 200, 30);
+        let rows: Vec<&str> = s
+            .lines()
+            .filter(|l| l.contains("WAIT") && l.contains("dotfiles"))
+            .collect();
+        assert_eq!(rows.len(), 2, "{s}");
+        for row in rows {
+            assert!(row.contains("dotfiles permission prompt"), "{row}");
+        }
+    }
+
+    #[test]
+    fn session_detail_starts_with_badge_repo_and_status() {
+        let a = sessions_app(
+            vec![],
+            vec![session_in_cwd(
+                session(1, "s-a", WAITING),
+                "/p/home-infra.agents/s-2",
+            )],
+        );
+        let buf = buffer_at(&a, 200, 30);
+        let head = "WAIT  home-infra  permission prompt  ·  10s";
+        let (x, y) = find_text(&buf, head);
+        let repo_x = x + "WAIT  ".len();
+        for dx in 0.."home-infra".len() {
+            let cell = &buf[((repo_x + dx) as u16, y as u16)];
+            assert!(is_repo_style(cell), "{dx}: {cell:?}");
+        }
+    }
+
+    #[test]
+    fn session_detail_leaves_out_an_empty_repo() {
+        let a = sessions_app(vec![], vec![session_in_cwd(session(1, "s-a", WAITING), "")]);
+        let s = screen_at(&a, 200, 30);
+        assert!(s.contains("WAIT  permission prompt  ·  10s"), "{s}");
+    }
+
+    #[test]
+    fn item_detail_shows_the_repo_in_the_repo_style() {
+        let a = app(vec![placed("a", "title-d", "/p/home-infra.agents/s-1")]);
+        let buf = buffer_at(&a, 200, 30);
+        // the first line of the detail pane: badge, repo, age
+        let (x, y) = find_text(&buf, "home-infra  ·");
+        for dx in 0.."home-infra".len() {
+            let cell = &buf[((x + dx) as u16, y as u16)];
+            assert!(is_repo_style(cell), "{dx}: {cell:?}");
+        }
     }
 }
