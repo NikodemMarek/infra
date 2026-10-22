@@ -20,6 +20,8 @@ Before pushing, it syncs: fetch, rebase onto trunk, and pull commits that exist 
 on a change's remote branch into the change (or, if both sides changed, into a
 "remote changes on <branch>" change after it, and stop).  `jj sync` alone also
 pulls the MR titles and descriptions.
+In a Claude Code session (CLAUDE_CODE_SESSION_ID), the branch of a created MR is recorded at
+${XDG_STATE_HOME:-~/.local/state}/jj-upload/<repo>/<branch>.json with the workspace and session id.
 
 Usage:  jj upload [-r REVSET]... [--draft] [--dry-run]
         jj upload sync                              (alias: jj sync)
@@ -37,11 +39,13 @@ Env: JJ_UPLOAD_GLAB / JJ_UPLOAD_GH override the CLI binaries.
 """
 
 import argparse
+import functools
 import json
 import os
 import re
 import subprocess
 import sys
+import time
 import urllib.parse
 
 DEFAULT_REVSET = 'trunk()..(@::) ~ (empty() & description(exact:""))'
@@ -444,6 +448,49 @@ def upload_media(text, fg):
     return re.sub(r"(!\[[^\]]*\]\()([^)\s]+)", link, text)
 
 
+# ---------------------------------------------------------------- session record
+
+def repo_name(root):
+    """Name of the repo a workspace belongs to: `<repo>.agents/<ws>` workspaces count as <repo>."""
+    parent = os.path.basename(os.path.dirname(root))
+    return parent[:-len(".agents")] if parent.endswith(".agents") else os.path.basename(root)
+
+
+def record_path(state_home, repo, branch):
+    return f"{state_home}/jj-upload/{repo}/{urllib.parse.quote(branch, safe='')}.json"
+
+
+def record_upload(branch, repo, workspace, session_id, now, state_home=None):
+    """Remember which session uploaded the MR of `branch`, so forge events can be routed back to it."""
+    state_home = state_home or os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    path = record_path(state_home, repo, branch)
+    tmp = f"{path}.tmp"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, "w") as f:
+            json.dump({"workspace": workspace, "session_id": session_id, "uploaded_at": now}, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        info(f"jj upload: cannot record the session for {branch}: {e}")
+
+
+@functools.cache
+def workspace_root():
+    return os.path.realpath(jj("root").strip())
+
+
+def record_session(branch: str, now: float | None = None, state_home: str | None = None) -> None:
+    """Record the Claude Code session running this upload; never fails the upload."""
+    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if not session_id:
+        return
+    try:
+        root = workspace_root()
+        record_upload(branch, repo_name(root), root, session_id, now or time.time(), state_home)
+    except (Fatal, OSError) as e:
+        info(f"jj upload: cannot record the session for {branch}: {e}")
+
+
 # ---------------------------------------------------------------- main
 
 def pull_descriptions(commits, fg, prefix, pushed, dry_run):
@@ -738,6 +785,8 @@ def main():
             body = upload_media(e["body"], fg)
             mr = fg.create(e["branch"], e["target"], e["title"], body, draft)
             info(f"  created {mr['ref']}  {mr['url']}")
+            # only on create: the default revset also re-pushes other sessions' changes
+            record_session(e["branch"])
         else:
             # the draft state chosen in the forge is kept
             mr = fg.update(mr, title=e["title"] if mr["title"] != e["title"] else None,
