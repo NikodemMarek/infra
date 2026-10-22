@@ -16,6 +16,15 @@ stdenvNoCC.mkDerivation {
   dontUnpack = true;
   nativeBuildInputs = [ makeWrapper ];
 
+  doCheck = true;
+  checkPhase = ''
+    runHook preCheck
+    cp ${./jj-upload.py} jj_upload.py
+    cp ${./test_jj_upload.py} test_jj_upload.py
+    ${python3}/bin/python3 -m unittest
+    runHook postCheck
+  '';
+
   installPhase = ''
     runHook preInstall
     install -Dm755 ${./jj-upload.py} $out/bin/jj-upload
