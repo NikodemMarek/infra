@@ -69,6 +69,10 @@ spec:
               value: "audiomuseai,lastfm,spotify,deezer"
             - name: ND_DEVARTISTINFOTIMETOLIVE
               value: "1s"
+            # Server and scanner subprocess each inherit this; without it their
+            # heaps grow past the container limit right after startup.
+            - name: GOMEMLIMIT
+              value: "400MiB"
           volumeMounts:
             - name: data
               mountPath: /data
