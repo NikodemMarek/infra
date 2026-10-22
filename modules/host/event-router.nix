@@ -14,7 +14,7 @@
     prompt_prefix = ""
   '';
 in {
-  options.services.event-router.enable = lib.mkEnableOption "the event router and the knowledge curator timer";
+  options.services.event-router.enable = lib.mkEnableOption "the event router, the knowledge curator timer and the idle Claude session reaper";
 
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [pkgs.shpool];
@@ -63,11 +63,22 @@ in {
         };
         startAt = "*-*-* 00/6:15:00";
       };
+
+      jw-reap = {
+        description = "Stop detached Claude shpool sessions idle or stuck on a permission prompt for 4 hours";
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = "${pkgs.jw}/bin/jw reap";
+          TimeoutStartSec = "2min";
+        };
+        startAt = "hourly";
+      };
     };
 
     systemd.user.timers.knowledge-curate.timerConfig = {
       Persistent = true;
       RandomizedDelaySec = "10min";
     };
+    systemd.user.timers.jw-reap.timerConfig.Persistent = true;
   };
 }
