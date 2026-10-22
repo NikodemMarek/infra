@@ -278,7 +278,13 @@ let
           __claude_ws="s-$(${coreutils}/bin/date +%m%d-%H%M%S)-$RANDOM"
         }
         __claude_workspace "$@" || true
-        [ -z "$__claude_ws" ] || set -- --worktree "$__claude_ws" "$@"
+        if [ -n "$__claude_ws" ]; then
+          set -- --worktree "$__claude_ws" "$@"
+        elif [ -t 0 ] && [ -t 1 ]; then
+          # project MCP servers start disabled: avoids the blocking approval dialog (a --worktree
+          # session gets the same from claude-jj-workspace when it creates the workspace)
+          ${claude-hooks}/bin/claude-mcp-defaults "$PWD" || true
+        fi
         unset -f __claude_project __claude_workspace
         unset __claude_ws __claude_root
       '';
