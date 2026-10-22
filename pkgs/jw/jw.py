@@ -28,6 +28,7 @@ BASH = "bash"
 KNOWLEDGE = "knowledge"  # the nix package pins it
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 GITLAB = re.compile(r"^gl-[a-z]+-[0-9]+(-[0-9]+)?$")  # gitlab-context's workspaces: it reuses and cleans them
+IDLE_LIMIT = 4 * 3600  # seconds a detached Claude session must have been idle to be reaped
 
 
 class Fail(Exception):
@@ -321,10 +322,10 @@ def cmd_rm(a):
         print(home)
 
 
-def stat_fields(pid):
+def stat_fields(pid, proc="/proc"):
     """Fields 3.. of /proc/<pid>/stat (the command name, field 2, may contain spaces and parentheses): ppid is
     [1], the start time (field 22) [19]."""
-    with open(f"/proc/{pid}/stat") as f:
+    with open(f"{proc}/{pid}/stat") as f:
         return f.read().rpartition(")")[2].split()
 
 
@@ -432,6 +433,64 @@ def kill_shpool(d, names):
             return
         time.sleep(0.1)
     raise Fail(f"still in use after killing shpool session {', '.join(names)}")
+
+
+def session_top(pid, proc="/proc"):
+    """Whether Claude process pid is the first process of its shpool session (parent comm shpool, or parent comm
+    event-claude-la whose parent is shpool)."""
+    try:
+        parent = stat_fields(pid, proc)[1]
+        with open(f"{proc}/{parent}/comm") as f:
+            comm = f.read().strip()
+        if comm == "event-claude-la":  # comm is cut to 15 characters
+            parent = stat_fields(parent, proc)[1]
+            with open(f"{proc}/{parent}/comm") as f:
+                comm = f.read().strip()
+        return comm == "shpool"
+    except (OSError, IndexError, ValueError):
+        return False
+
+
+def stuck(s):
+    # a session waiting on a permission prompt holds its MR's lock, so later events only queue
+    return s.get("status") == "idle" or (s.get("status") == "waiting" and s.get("waitingFor") == "permission prompt")
+
+
+def idle_sessions(claudes, state, now, proc="/proc"):
+    """[(shpool session, working directory, Claude session id)] of the detached shpool sessions whose Claudes are all
+    idle (or stuck on a permission prompt) for IDLE_LIMIT and the first process of the session, sorted by name."""
+    groups = {}
+    for pid, s, cwd, name in claudes:
+        if name is not None:
+            groups.setdefault(name, []).append((pid, s, cwd))
+    found = []
+    for name, members in sorted(groups.items()):
+        if state.get(name) != "disconnected":
+            continue
+        if all(stuck(s) and isinstance(s.get("statusUpdatedAt"), (int, float))
+               and now - s["statusUpdatedAt"] / 1000 >= IDLE_LIMIT and session_top(pid, proc)
+               for pid, s, _ in members):
+            _, s, cwd = members[0]
+            found.append((name, cwd, s.get("sessionId", "?")))
+    return found
+
+
+def cmd_reap(a):
+    """Stop the Claude shpool sessions that are idle for IDLE_LIMIT and detached; their workspaces stay."""
+    failed = False
+    for name, cwd, sid in idle_sessions(live_claudes(), shpool_status(), time.time()):
+        try:
+            rc = subprocess.run([SHPOOL, "--no-daemonize", "kill", name], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL).returncode
+        except OSError:
+            rc = 1
+        if rc == 0:
+            print(f"stopped {name} in {cwd}: claude --resume {sid}")
+        else:
+            sys.stderr.write(f"jw: shpool kill {name} failed\n")
+            failed = True
+    if failed:
+        raise Fail()
 
 
 def removable(d):
@@ -793,6 +852,8 @@ def parse_args():
     s.set_defaults(func=cmd_clone)
     s = sub.add_parser("prune", help="remove empty, merged and broken workspaces in all repos, and the idle detached Claude shpool sessions in merged ones (killing a session kills its background jobs)")
     s.set_defaults(func=cmd_prune)
+    s = sub.add_parser("reap", help="stop the detached Claude shpool sessions idle or stuck on a permission prompt for 4 hours (their workspaces stay; resume with claude --resume)")
+    s.set_defaults(func=cmd_reap)
     s = sub.add_parser("info", help="print the jj workspace and stack of the current directory as JSON")
     s.set_defaults(func=cmd_info)
     s = sub.add_parser("pick", help="pick a repo (the current one first) and print its name")
