@@ -3,6 +3,8 @@ kind: Gateway
 metadata:
   name: traefik-gateway
   namespace: default
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   gatewayClassName: traefik
   listeners:
