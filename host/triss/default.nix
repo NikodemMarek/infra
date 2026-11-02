@@ -14,6 +14,7 @@
   ];
 
   boot.loader.systemd-boot.configurationLimit = lib.mkForce 1;
+  boot.kernelModules = ["wireguard"];
   networking = {
     hostName = "triss";
   };
