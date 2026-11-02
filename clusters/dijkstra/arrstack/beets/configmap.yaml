@@ -32,6 +32,8 @@ data:
       - duplicates
       - badfiles
       - edit
+      - scrub
+      - replaygain
 
     embedart:
       remove_art_file: yes
@@ -39,6 +41,9 @@ data:
     lyrics:
       synced: yes
       sources: [lrcmux, lrclib, genius]
+
+    replaygain:
+      backend: ffmpeg
 
   server.py: |
     #!/usr/bin/env python3
