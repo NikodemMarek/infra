@@ -38,6 +38,8 @@ clusters/dijkstra/     Kubernetes manifests, reconciled by Flux
 
 `geralt`, `roach`, `regis` and `triss` are deploy-rs nodes (`deploy.nodes` in `flake.nix`): ssh as `maintenance`, interactive sudo.
 
+Cluster access: the dev shell sets `KUBECONFIG` to `kubeconfig.yaml` in the `default` jj workspace root, so `kubectl` works from the workstation. On `triss` itself `k3s.yaml` is root-only (`sudo kubectl`).
+
 ## Game streaming (geralt)
 
 `host/features/optional/wolf.nix` runs [Wolf](https://github.com/games-on-whales/wolf) (Moonlight server) as a docker container, pinned by image digest.
