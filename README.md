@@ -261,7 +261,7 @@ Peers reach only `*.nkmrk.com` and the internet (via Mullvad), never the cluster
    ```
 4. `qrencode -t ansiutf8 < client.conf`, scan it, then delete `p.key` and `client.conf`.
 
-`yenn` is a NixOS peer (`host/yenn/wireguard.nix`); its private key is `WIREGUARD_PRIVATE_KEY` in profile `yenn`. All its internet except the tailnet and directly attached networks goes through the tunnel, and its DNS always goes to the tailnet `dns` resolver. With the tunnel down there is no internet: `sudo networkctl down wg0` (`up` to restore). Behind a captive portal take the tunnel down and run `sudo resolvectl default-route wlan0 yes`; after logging in, `sudo resolvectl default-route wlan0 no` and bring the tunnel back up.
+`yenn` is a NixOS peer (`host/yenn/wireguard.nix`); its private key is `WIREGUARD_PRIVATE_KEY` in profile `yenn`. All its internet except the tailnet and directly attached networks goes through the tunnel, and its DNS always goes to the tailnet `dns` resolver. With the tunnel down there is no internet: `sudo networkctl down wg0` (`up` to restore), or click the waybar WireGuard button. Behind a captive portal take the tunnel down and run `sudo resolvectl default-route wlan0 yes`; after logging in, `sudo resolvectl default-route wlan0 no` and bring the tunnel back up.
 
 ### Backups
 

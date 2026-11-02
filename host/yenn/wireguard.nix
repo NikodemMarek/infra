@@ -3,6 +3,22 @@
 
   networking.firewall.checkReversePath = "loose";
 
+  security.sudo.extraRules = [
+    {
+      groups = ["wheel"];
+      commands = [
+        {
+          command = "/run/current-system/sw/bin/networkctl up wg0";
+          options = ["NOPASSWD"];
+        }
+        {
+          command = "/run/current-system/sw/bin/networkctl down wg0";
+          options = ["NOPASSWD"];
+        }
+      ];
+    }
+  ];
+
   systemd.network = {
     config.networkConfig.ManageForeignRoutingPolicyRules = false;
     netdevs."50-wg0" = {

@@ -8,40 +8,26 @@ pkgs.symlinkJoin {
   paths = [waybar];
   buildInputs = [pkgs.makeWrapper];
   postBuild = let
-    tailscale-status = pkgs.writeShellScriptBin "tailscale-status" ''
-      tailscale status --json | jq --unbuffered --compact-output -c '
-        [ .Peer[] | select(.ExitNode == true) ] as $node
-        | if ($node | length > 0) then
-            {
-              "text": $node[0].HostName,
-              "alt": $node[0].TailscaleIPs[0],
-              "tooltip": "\($node[0].HostName) (\($node[0].TailscaleIPs[0]))",
-              "class": "exit-node-on",
-              "percentage": 100
-            }
-          else
-            {
-              "text": "No Exit Node",
-              "alt": "none",
-              "tooltip": "Standard Routing",
-              "class": "exit-node-off",
-              "percentage": 0
-            }
-          end'
-    '';
-    tailscale-toggle = pkgs.writeShellScriptBin "tailscale-toggle" ''
-      STATUS=$(tailscale-status | jq .percentage)
-      if [ $STATUS -ge 50 ]; then
-        tailscale up --operator=$USER --accept-routes --exit-node-allow-lan-access=false --exit-node=
+    wireguard-status = pkgs.writeShellScriptBin "wireguard-status" ''
+      if ip -j link show wg0 2> /dev/null | jq -e '.[0].flags | index("UP")' > /dev/null; then
+        echo '{"text":"wg0","alt":"on","tooltip":"WireGuard: Mullvad","class":"vpn-on","percentage":100}'
       else
-        EXIT_NODE=$(tailscale exit-node suggest | head -n 1 | awk '{print $4}')
-        tailscale up --operator=$USER --accept-routes --exit-node-allow-lan-access=true --exit-node=$EXIT_NODE
+        echo '{"text":"off","alt":"off","tooltip":"WireGuard: off","class":"vpn-off","percentage":0}'
+      fi
+    '';
+    wireguard-toggle = pkgs.writeShellScriptBin "wireguard-toggle" ''
+      STATUS=$(wireguard-status | jq .percentage)
+      if [ $STATUS -ge 50 ]; then
+        sudo -n /run/current-system/sw/bin/networkctl down wg0
+      else
+        sudo -n /run/current-system/sw/bin/networkctl up wg0
       fi
     '';
     extraPkgs = [
-      pkgs.tailscale
-      tailscale-status
-      tailscale-toggle
+      pkgs.iproute2
+      pkgs.jq
+      wireguard-status
+      wireguard-toggle
     ];
   in ''
     wrapProgram $out/bin/waybar \

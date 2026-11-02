@@ -65,7 +65,7 @@ window#waybar {
     color: @blue;
 }
 
-#custom-tailscale {
+#custom-wireguard {
     background-color: @mantle;
     padding: 5px 0;
     border-radius: 50px;
