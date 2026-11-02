@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wireguard
+  namespace: wireguard
+  labels:
+    app: wireguard
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: wireguard
+  template:
+    metadata:
+      labels:
+        app: wireguard
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: triss
+      serviceAccountName: wireguard-tailscale
+      initContainers:
+        - name: firewall
+          image: docker.io/procustodibus/wireguard:v1.0.20260223
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+          command:
+            - sh
+            - -ec
+            - |
+              ip rule add to 10.43.0.0/16 lookup main pref 5000
+              ip rule add fwmark 51820 lookup main pref 5001
+              ip rule add to 10.13.13.0/24 lookup main pref 5002
+              iptables -A FORWARD -i wg0 -d 100.97.10.25 -p tcp -m multiport --dports 80,443 -j ACCEPT
+              iptables -A FORWARD -i wg0 -d 100.64.0.0/10 -p udp --dport 53 -j ACCEPT
+              iptables -A FORWARD -i wg0 -d 100.64.0.0/10 -p tcp --dport 53 -j ACCEPT
+              iptables -A FORWARD -i wg0 -d 100.64.0.0/10 -j REJECT
+              iptables -A FORWARD -i wg0 ! -o tailscale0 -j REJECT
+              iptables -t nat -A POSTROUTING -s 10.13.13.0/24 -o tailscale0 -j MASQUERADE
+        - name: tailscale
+          image: tailscale/tailscale:v1.92.5
+          restartPolicy: Always
+          env:
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: secrets
+                  key: tailscale_authkey
+            - name: TS_HOSTNAME
+              value: wireguard
+            - name: TS_USERSPACE
+              value: "false"
+            - name: TS_KUBE_SECRET
+              value: "wireguard-tailscale-state"
+            - name: TS_DEBUG_FIREWALL_MODE
+              value: nftables
+            - name: TS_EXTRA_ARGS
+              value: ""
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+          volumeMounts:
+            - name: dev-net-tun
+              mountPath: /dev/net/tun
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+      containers:
+        - name: wireguard
+          image: docker.io/procustodibus/wireguard:v1.0.20260223
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+          ports:
+            - name: wireguard
+              containerPort: 51820
+              hostPort: 51820
+              protocol: UDP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/wireguard
+            - name: key
+              mountPath: /run/wireguard
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "16Mi"
+            limits:
+              cpu: "200m"
+              memory: "64Mi"
+      volumes:
+        - name: config
+          configMap:
+            name: wireguard-config
+            defaultMode: 0400
+        - name: key
+          secret:
+            secretName: secrets
+            items:
+              - key: wireguard_private_key
+                path: private_key
+            defaultMode: 0400
+        - name: dev-net-tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice

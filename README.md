@@ -221,7 +221,7 @@ Flux is bootstrapped in `clusters/dijkstra/flux-system` (do not edit `gotk-*.yam
 flux reconcile kustomization flux-system --namespace flux-system --with-source
 ```
 
-Each app is a directory: `arrstack` (sonarr, radarr, lidarr, prowlarr, bazarr, qbittorrent, beets, flaresolverr), `cert-manager` (Let's Encrypt wildcard for internal HTTPS), `cloudflare` (tunnel), `cnpg` (CloudNativePG operator), `cron`, `dns` (split-DNS resolver for nkmrk.com on the tailnet/WireGuard), `immich`, `intel-gpu-plugin` (exposes regis's iGPU as `gpu.intel.com/i915`), `jellyfin`, `keda`, `navidrome` (with audiomuse-ai), `ollama`, `omniverse` (git-sync, webdav, radicale), `openebs`, `proxy` (traefik, gateway), `shani`, `tailscale` (operator), `velero`. Shared: `storageclass.yaml`.
+Each app is a directory: `arrstack` (sonarr, radarr, lidarr, prowlarr, bazarr, qbittorrent, beets, flaresolverr), `cert-manager` (Let's Encrypt wildcard for internal HTTPS), `cloudflare` (tunnel), `cnpg` (CloudNativePG operator), `cron`, `dns` (split-DNS resolver for nkmrk.com on the tailnet/WireGuard), `immich`, `intel-gpu-plugin` (exposes regis's iGPU as `gpu.intel.com/i915`), `jellyfin`, `keda`, `navidrome` (with audiomuse-ai), `ollama`, `omniverse` (git-sync, webdav, radicale), `openebs`, `proxy` (traefik, gateway), `shani`, `tailscale` (operator), `velero`, `wireguard` (WireGuard server on `triss`, egress via Mullvad). Shared: `storageclass.yaml`.
 
 AudioMuse-AI (`navidrome/audiomuse-ai`) keeps its settings (Navidrome login, auth/API token, AI provider) in its own database, set in its web UI at `http://audiomuse-ai/` (Tailscale). Navidrome's `audiomuseai` plugin is configured in Navidrome's UI with that token.
 
@@ -238,6 +238,28 @@ To remove a subscription, delete its line, then delete the calendar (read-only o
 ```bash
 kubectl -n omniverse exec deploy/radicale -- rm -r /data/collection-root/nikodem/sub-<name>
 ```
+
+### WireGuard peers
+
+Peers reach only `*.nkmrk.com` and the internet (via Mullvad), never the cluster network. The pod's firewall enforces this, and the tailnet policy backs it up: `tag:wireguard` may reach only `triss:80,443`, `tag:dns:53` and `autogroup:internet`, and has the `mullvad` node attribute. The sidecar's auth key is tagged `tag:wireguard`.
+
+1. Generate a key pair: `umask 077; wg genkey > p.key; wg pubkey < p.key`.
+2. Add a `[Peer]` (name comment, `PublicKey`, next free `10.13.13.N/32`) to `clusters/dijkstra/wireguard/wg0.conf`, commit and push; the pod restarts with it.
+3. Write the client config `client.conf`:
+   ```ini
+   [Interface]
+   PrivateKey = <p.key>
+   Address = 10.13.13.N/32
+   DNS = <tailscale ip -4 dns>
+   MTU = 1200
+
+   [Peer]
+   PublicKey = <server public key, see wg0.conf>
+   Endpoint = vpn.nkmrk.com:51820
+   AllowedIPs = 0.0.0.0/0, ::/0
+   PersistentKeepalive = 25
+   ```
+4. `qrencode -t ansiutf8 < client.conf`, scan it, then delete `p.key` and `client.conf`.
 
 ### Backups
 
