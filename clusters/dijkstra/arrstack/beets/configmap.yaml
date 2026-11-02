@@ -36,8 +36,12 @@ data:
       - zero
       - replaygain
 
+    fetchart:
+      maxwidth: 1000
+
     embedart:
       remove_art_file: yes
+      maxwidth: 1000
 
     lyrics:
       synced: yes
