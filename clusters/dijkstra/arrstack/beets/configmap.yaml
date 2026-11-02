@@ -33,6 +33,7 @@ data:
       - badfiles
       - edit
       - scrub
+      - zero
       - replaygain
 
     embedart:
@@ -44,6 +45,12 @@ data:
 
     replaygain:
       backend: ffmpeg
+
+    # Drop YouTube's auto-generated description, keep plain URLs and other comments.
+    zero:
+      fields: comments
+      comments: ['Provided to YouTube']
+      update_database: yes
 
   server.py: |
     #!/usr/bin/env python3
