@@ -10,7 +10,7 @@
         "battery",
         "network",
         "bluetooth",
-        "custom/tailscale"
+        "custom/wireguard"
     ],
     "clock": {
         "format": "{:%H\n%M}",
@@ -91,17 +91,17 @@
         "tooltip-format-enumerate-connected-battery": "{device_address} | Battery: {device_battery_percentage}%",
         "on-click": "rfkill toggle bluetooth"
     },
-    "custom/tailscale": {
+    "custom/wireguard": {
         "format": "{icon}",
         "format-icons": [
             "",
             ""
         ],
-        "exec": "tailscale-status",
+        "exec": "wireguard-status",
         "return-type": "json",
         "interval": 5,
         "tooltip": true,
-        "on-click": "tailscale-toggle"
+        "on-click": "wireguard-toggle"
     },
     "modules-center": [
         "hyprland/workspaces"
