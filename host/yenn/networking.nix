@@ -2,7 +2,10 @@
   imports = [
     ../features/optional/tailscale.nix
     ../features/optional/zerotier.nix
+    ./wireguard.nix
   ];
+
+  networking.nameservers = ["100.118.32.72"];
 
   systemd.network = {
     links = {
@@ -19,8 +22,14 @@
         matchConfig.Type = "ether wlan wwan";
         networkConfig = {
           DHCP = "yes";
+          DNSDefaultRoute = false;
+          Domains = ["~vpn.nkmrk.com"];
           IPv6AcceptRA = "yes";
           IgnoreCarrierLoss = "3s";
+        };
+        dhcpV4Config = {
+          UseRoutes = false;
+          UseGateway = true;
         };
       };
       "80-forward" = {
