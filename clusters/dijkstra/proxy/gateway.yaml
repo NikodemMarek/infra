@@ -14,3 +14,15 @@ spec:
       allowedRoutes:
         namespaces:
           from: All
+    - name: websecure
+      port: 8443
+      protocol: HTTPS
+      hostname: "*.nkmrk.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: nkmrk-com-tls
+      allowedRoutes:
+        namespaces:
+          from: All

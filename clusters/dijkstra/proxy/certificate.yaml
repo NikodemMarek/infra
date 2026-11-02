@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: nkmrk-com
+  namespace: default
+spec:
+  secretName: nkmrk-com-tls
+  dnsNames:
+    - "*.nkmrk.com"
+  issuerRef:
+    kind: ClusterIssuer
+    name: letsencrypt
