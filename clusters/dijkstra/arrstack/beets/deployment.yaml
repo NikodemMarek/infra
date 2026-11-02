@@ -35,11 +35,12 @@ spec:
         - name: beets
           image: lscr.io/linuxserver/beets:latest
           command: ["python3", "/config/server.py"]
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
           env:
-            - name: PUID
-              value: "1000"
-            - name: PGID
-              value: "1000"
+            - name: BEETSDIR
+              value: /data
             - name: PORT
               value: "8000"
           ports:
