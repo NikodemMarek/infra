@@ -57,8 +57,6 @@ spec:
               value: "wireguard-tailscale-state"
             - name: TS_DEBUG_FIREWALL_MODE
               value: nftables
-            - name: TS_EXTRA_ARGS
-              value: "--exit-node=de-fra-wg-201.mullvad.ts.net"
           securityContext:
             capabilities:
               add:
