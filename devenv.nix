@@ -119,6 +119,8 @@ in {
     pkgs.k9s
     pkgs.k3s
     pkgs.pv-migrate
+    pkgs.wireguard-tools
+    pkgs.qrencode
   ];
 
   scripts = {

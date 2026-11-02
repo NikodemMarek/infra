@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wireguard-tailscale
+  namespace: wireguard
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: wireguard-tailscale
+  namespace: wireguard
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["wireguard-tailscale-state"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wireguard-tailscale
+  namespace: wireguard
+subjects:
+  - kind: ServiceAccount
+    name: wireguard-tailscale
+    namespace: wireguard
+roleRef:
+  kind: Role
+  name: wireguard-tailscale
+  apiGroup: rbac.authorization.k8s.io
