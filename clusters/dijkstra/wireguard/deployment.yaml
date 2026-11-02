@@ -58,7 +58,7 @@ spec:
             - name: TS_DEBUG_FIREWALL_MODE
               value: nftables
             - name: TS_EXTRA_ARGS
-              value: ""
+              value: "--exit-node=auto:any"
           securityContext:
             capabilities:
               add:
