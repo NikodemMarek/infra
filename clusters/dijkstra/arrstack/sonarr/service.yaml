@@ -3,9 +3,6 @@ kind: Service
 metadata:
   name: sonarr
   namespace: arrstack
-  annotations:
-    tailscale.com/expose: "true"
-    tailscale.com/hostname: "sonarr"
 spec:
   selector:
     app: sonarr

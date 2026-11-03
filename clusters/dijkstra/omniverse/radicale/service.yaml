@@ -3,9 +3,6 @@ kind: Service
 metadata:
   name: radicale
   namespace: omniverse
-  annotations:
-    tailscale.com/expose: "true"
-    tailscale.com/hostname: "radicale"
 spec:
   selector:
     app: radicale

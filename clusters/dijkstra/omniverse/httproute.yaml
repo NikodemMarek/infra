@@ -1,0 +1,20 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: omniverse
+  namespace: omniverse
+spec:
+  parentRefs:
+    - name: traefik-gateway
+      namespace: default
+      sectionName: internal
+  hostnames:
+    - "omniverse.nkmrk.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: webdav
+          port: 80

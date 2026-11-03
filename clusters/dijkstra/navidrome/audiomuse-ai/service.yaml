@@ -3,9 +3,6 @@ kind: Service
 metadata:
   name: audiomuse-ai
   namespace: navidrome
-  annotations:
-    tailscale.com/expose: "true"
-    tailscale.com/hostname: "audiomuse-ai"
 spec:
   selector:
     app.kubernetes.io/name: audiomuse-ai

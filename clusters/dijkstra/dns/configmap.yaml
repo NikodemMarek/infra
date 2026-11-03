@@ -34,9 +34,9 @@ data:
         rewrite name exact shani.nkmrk.com. shani-service.shani.svc.cluster.local. answer auto
         forward . 10.43.0.10
     }
-    radicale.nkmrk.com {
+    radicale.nkmrk.com sonarr.nkmrk.com radarr.nkmrk.com lidarr.nkmrk.com qbittorrent.nkmrk.com bazarr.nkmrk.com prowlarr.nkmrk.com ollama.nkmrk.com audiomuse-ai.nkmrk.com omniverse.nkmrk.com {
         errors
-        rewrite name exact radicale.nkmrk.com. traefik-internal.default.svc.cluster.local. answer auto
+        rewrite name regex .* traefik-internal.default.svc.cluster.local. answer auto
         forward . 10.43.0.10
     }
     cluster.local {

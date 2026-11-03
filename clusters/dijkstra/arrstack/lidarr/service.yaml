@@ -3,9 +3,6 @@ kind: Service
 metadata:
   name: lidarr
   namespace: arrstack
-  annotations:
-    tailscale.com/expose: "true"
-    tailscale.com/hostname: "lidarr"
 spec:
   selector:
     app: lidarr
