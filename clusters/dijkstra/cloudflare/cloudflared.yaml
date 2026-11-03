@@ -12,7 +12,13 @@ data:
     protocol: http2
 
     ingress:
-      - hostname: "*.nkmrk.com"
+      - hostname: jellyfin.nkmrk.com
+        service: http://traefik.default.svc.cluster.local:80
+      - hostname: seerr.nkmrk.com
+        service: http://traefik.default.svc.cluster.local:80
+      - hostname: subsonic.nkmrk.com
+        service: http://traefik.default.svc.cluster.local:80
+      - hostname: books.nkmrk.com
         service: http://traefik.default.svc.cluster.local:80
       - service: http_status:404
 ---
