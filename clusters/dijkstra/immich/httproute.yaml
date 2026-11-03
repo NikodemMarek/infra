@@ -7,7 +7,7 @@ spec:
   parentRefs:
     - name: traefik-gateway
       namespace: default
-      sectionName: websecure
+      sectionName: internal
   hostnames:
     - "photos.nkmrk.com"
   rules:
