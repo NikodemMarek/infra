@@ -3,9 +3,6 @@ kind: Service
 metadata:
   name: immich
   namespace: immich
-  annotations:
-    tailscale.com/expose: "true"
-    tailscale.com/hostname: "immich"
 spec:
   selector:
     app: immich

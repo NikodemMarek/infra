@@ -9,7 +9,7 @@ spec:
       namespace: default
       sectionName: websecure
   hostnames:
-    - "jellyfin.nkmrk.com"
+    - "movies.nkmrk.com"
   rules:
     - matches:
         - path:
