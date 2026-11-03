@@ -3,9 +3,6 @@ kind: Service
 metadata:
   name: jellyfin
   namespace: jellyfin
-  annotations:
-    tailscale.com/expose: "true"
-    tailscale.com/hostname: "jellyfin"
 spec:
   selector:
     app: jellyfin

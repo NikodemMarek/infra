@@ -14,11 +14,11 @@ data:
       matchSNItoHost: true
 
     ingress:
-      - hostname: jellyfin.nkmrk.com
+      - hostname: movies.nkmrk.com
         service: https://traefik.default.svc.cluster.local:443
       - hostname: seerr.nkmrk.com
         service: https://traefik.default.svc.cluster.local:443
-      - hostname: subsonic.nkmrk.com
+      - hostname: music.nkmrk.com
         service: https://traefik.default.svc.cluster.local:443
       - hostname: books.nkmrk.com
         service: https://traefik.default.svc.cluster.local:443
