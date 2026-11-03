@@ -129,6 +129,17 @@
               atime = "off";
             };
           };
+          "projects" = {
+            type = "zfs_fs";
+            mountpoint = "/mnt/projects";
+            mountOptions = ["nofail"];
+            options = {
+              recordsize = "128K";
+              overlay = "on";
+              atime = "off";
+              quota = "500G";
+            };
+          };
         };
       };
 
