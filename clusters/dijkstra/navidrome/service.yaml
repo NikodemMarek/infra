@@ -5,9 +5,6 @@ metadata:
   namespace: navidrome
   labels:
     app: navidrome
-  annotations:
-    tailscale.com/expose: "true"
-    tailscale.com/hostname: "navidrome"
 spec:
   selector:
     app: navidrome

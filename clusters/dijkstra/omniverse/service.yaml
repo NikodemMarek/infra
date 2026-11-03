@@ -3,9 +3,6 @@ kind: Service
 metadata:
   name: webdav
   namespace: omniverse
-  annotations:
-    tailscale.com/expose: "true"
-    tailscale.com/hostname: "omniverse-webdav"
 spec:
   selector:
     app: webdav

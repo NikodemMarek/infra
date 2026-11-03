@@ -9,6 +9,7 @@ spec:
     - prowlarr.arrstack
     - prowlarr.arrstack.svc
     - prowlarr.arrstack.svc.cluster.local
+    - prowlarr.nkmrk.com
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment

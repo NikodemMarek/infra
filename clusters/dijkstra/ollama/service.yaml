@@ -3,9 +3,6 @@ kind: Service
 metadata:
   name: ollama-service
   namespace: ollama
-  annotations:
-    tailscale.com/expose: "true"
-    tailscale.com/hostname: "ollama"
 spec:
   type: ClusterIP
   selector:
