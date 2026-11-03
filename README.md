@@ -221,7 +221,7 @@ Flux is bootstrapped in `clusters/dijkstra/flux-system` (do not edit `gotk-*.yam
 flux reconcile kustomization flux-system --namespace flux-system --with-source
 ```
 
-Each app is a directory: `arrstack` (sonarr, radarr, lidarr, prowlarr, bazarr, qbittorrent, beets, flaresolverr), `cert-manager` (Let's Encrypt wildcard for internal HTTPS), `cloudflare` (tunnel; only the hostnames listed in `cloudflared.yaml` are public), `cnpg` (CloudNativePG operator), `cron`, `dns` (split-DNS resolver for nkmrk.com on the tailnet/WireGuard), `immich`, `intel-gpu-plugin` (exposes regis's iGPU as `gpu.intel.com/i915`), `jellyfin`, `keda`, `navidrome` (with audiomuse-ai), `ollama`, `omniverse` (git-sync, webdav, radicale), `openebs`, `proxy` (traefik, gateway), `shani` (SSH at `shani.nkmrk.com`, full WireGuard peers), `tailscale` (operator), `velero`, `wireguard` (WireGuard server on `triss`, egress via Mullvad). Shared: `storageclass.yaml`.
+Each app is a directory: `arrstack` (sonarr, radarr, lidarr, prowlarr, bazarr, qbittorrent, beets, flaresolverr), `cert-manager` (Let's Encrypt wildcard for internal HTTPS), `cloudflare` (tunnel; only the hostnames listed in `cloudflared.yaml` are public), `cnpg` (CloudNativePG operator), `cron`, `dns` (split-DNS resolver for nkmrk.com for WireGuard peers, at `10.43.0.53`), `immich`, `intel-gpu-plugin` (exposes regis's iGPU as `gpu.intel.com/i915`), `jellyfin`, `keda`, `navidrome` (with audiomuse-ai), `ollama`, `omniverse` (git-sync, webdav, radicale), `openebs`, `proxy` (traefik, gateway), `shani` (SSH at `shani.nkmrk.com`, full WireGuard peers), `tailscale` (operator), `velero`, `wireguard` (WireGuard server on `triss`, egress via Mullvad). Shared: `storageclass.yaml`.
 
 AudioMuse-AI (`navidrome/audiomuse-ai`) keeps its settings (Navidrome login, auth/API token, AI provider) in its own database, set in its web UI at `http://audiomuse-ai/` (Tailscale). Navidrome's `audiomuseai` plugin is configured in Navidrome's UI with that token.
 
@@ -241,7 +241,7 @@ kubectl -n omniverse exec deploy/radicale -- rm -r /data/collection-root/nikodem
 
 ### WireGuard peers
 
-Peers have one of two tiers, set by their address. Limited peers (`10.13.13.2-127`) reach only `*.nkmrk.com`, tailnet DNS and the internet (via Mullvad), never the cluster network. Full peers (`10.13.13.128-254`) also reach the cluster's pod and service networks (`10.42.0.0/15`). The pod's firewall enforces the tiers. The tailnet policy lets `tag:wireguard` reach only `triss:80,443`, `tag:dns:53` and `autogroup:internet`, and gives it the `mullvad` node attribute; tailscale's own forward rules accept all traffic into the tailnet, so this policy, not the pod's firewall, keeps peers off the rest of the tailnet. The sidecar's auth key is tagged `tag:wireguard`.
+Peers have one of two tiers, set by their address. Limited peers (`10.13.13.2-127`) reach only `*.nkmrk.com`, the cluster DNS server (`10.43.0.53`) and the internet (via Mullvad), never the cluster network. Full peers (`10.13.13.128-254`) also reach the cluster's pod and service networks (`10.42.0.0/15`). The pod's firewall enforces the tiers. The tailnet policy lets `tag:wireguard` reach only `triss:80,443` and `autogroup:internet`, and gives it the `mullvad` node attribute; tailscale's own forward rules accept all traffic into the tailnet, so this policy, not the pod's firewall, keeps peers off the rest of the tailnet. The sidecar's auth key is tagged `tag:wireguard`.
 
 1. Generate a key pair: `umask 077; wg genkey > p.key; wg pubkey < p.key`.
 2. Add a `[Peer]` (name comment, `PublicKey`, next free `10.13.13.N/32` in its tier) to `clusters/dijkstra/wireguard/wg0.conf`, commit and push; the pod restarts with it.
@@ -250,7 +250,7 @@ Peers have one of two tiers, set by their address. Limited peers (`10.13.13.2-12
    [Interface]
    PrivateKey = <p.key>
    Address = 10.13.13.N/32
-   DNS = <tailscale ip -4 dns>
+   DNS = 10.43.0.53
    MTU = 1200
 
    [Peer]
@@ -261,7 +261,7 @@ Peers have one of two tiers, set by their address. Limited peers (`10.13.13.2-12
    ```
 4. `qrencode -t ansiutf8 < client.conf`, scan it, then delete `p.key` and `client.conf`.
 
-`yenn` is a NixOS peer (`host/yenn/wireguard.nix`); its private key is `WIREGUARD_PRIVATE_KEY` in profile `yenn`. All its internet except the tailnet and directly attached networks goes through the tunnel, and its DNS always goes to the tailnet `dns` resolver, which also resolves cluster services as `<service>.<namespace>.svc.cluster.local`. With the tunnel down there is no internet: `sudo networkctl down wg0` (`up` to restore), or click the waybar WireGuard button. Behind a captive portal take the tunnel down and run `sudo resolvectl default-route wlan0 yes`; after logging in, `sudo resolvectl default-route wlan0 no` and bring the tunnel back up.
+`yenn` is a NixOS peer (`host/yenn/wireguard.nix`); its private key is `WIREGUARD_PRIVATE_KEY` in profile `yenn`. All its internet except the tailnet and directly attached networks goes through the tunnel, and its DNS always goes to the cluster `dns` resolver at `10.43.0.53`, which also resolves cluster services as `<service>.<namespace>.svc.cluster.local`. With the tunnel down there is no internet: `sudo networkctl down wg0` (`up` to restore), or click the waybar WireGuard button. Behind a captive portal take the tunnel down and run `sudo resolvectl default-route wlan0 yes`; after logging in, `sudo resolvectl default-route wlan0 no` and bring the tunnel back up.
 
 ### Backups
 
