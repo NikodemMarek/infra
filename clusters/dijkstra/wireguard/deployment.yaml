@@ -19,7 +19,6 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/hostname: triss
-      serviceAccountName: wireguard-tailscale
       initContainers:
         - name: firewall
           image: docker.io/procustodibus/wireguard:v1.0.20260223
@@ -31,51 +30,31 @@ spec:
             - sh
             - -ec
             - |
+              ip link del wg-mullvad 2>/dev/null || true
+              for p in 5000 5001 5002 5003; do ip rule del pref $p 2>/dev/null || true; done
+              iptables -F FORWARD
+              iptables -t nat -F POSTROUTING
+              ip link add wg-mullvad type wireguard
+              wg set wg-mullvad private-key /run/wireguard/mullvad_private_key peer HQHCrq4J6bSpdW1fI5hR/bvcrYa6HgGgwaa5ZY749ik= endpoint 185.213.155.73:51820 allowed-ips 0.0.0.0/0 persistent-keepalive 25
+              ip address add "$(cat /run/wireguard/mullvad_address)" dev wg-mullvad
+              ip link set wg-mullvad mtu 1200 up
+              ip route add default dev wg-mullvad table 51821
               ip rule add to 10.42.0.0/15 lookup main pref 5000
-              ip rule add fwmark 51820 lookup main pref 5001
+              ip rule add to 100.97.10.25 lookup main pref 5001
               ip rule add to 10.13.13.0/24 lookup main pref 5002
+              ip rule add from 10.13.13.0/24 lookup 51821 pref 5003
+              iptables -A FORWARD -o wg0 -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
+              iptables -A FORWARD -i wg0 -o wg-mullvad -j ACCEPT
               iptables -A FORWARD -i wg0 -s 10.13.13.128/25 -o eth0 -d 10.42.0.0/15 -j ACCEPT
-              iptables -A FORWARD -i wg0 -d 100.97.10.25 -p tcp -m multiport --dports 80,443 -j ACCEPT
+              iptables -A FORWARD -i wg0 -o eth0 -d 100.97.10.25 -p tcp -m multiport --dports 80,443 -j ACCEPT
               iptables -A FORWARD -i wg0 -o eth0 -d 10.43.0.53 -p udp --dport 53 -j ACCEPT
               iptables -A FORWARD -i wg0 -o eth0 -d 10.43.0.53 -p tcp --dport 53 -j ACCEPT
-              iptables -A FORWARD -i wg0 -d 100.64.0.0/10 -j REJECT
-              iptables -A FORWARD -i wg0 ! -o tailscale0 -j REJECT
-              iptables -t nat -A POSTROUTING -s 10.13.13.0/24 -o tailscale0 -j MASQUERADE
-              iptables -t nat -A POSTROUTING -s 10.13.13.128/25 -o eth0 -d 10.42.0.0/15 -j MASQUERADE
-              iptables -t nat -A POSTROUTING -s 10.13.13.0/24 -o eth0 -d 10.43.0.53 -j MASQUERADE
-        - name: tailscale
-          image: tailscale/tailscale:v1.92.5
-          restartPolicy: Always
-          env:
-            - name: TS_AUTHKEY
-              valueFrom:
-                secretKeyRef:
-                  name: secrets
-                  key: tailscale_authkey
-            - name: TS_HOSTNAME
-              value: wireguard
-            - name: TS_USERSPACE
-              value: "false"
-            - name: TS_KUBE_SECRET
-              value: "wireguard-tailscale-state"
-            - name: TS_DEBUG_FIREWALL_MODE
-              value: nftables
-            - name: TS_EXTRA_ARGS
-              value: "--exit-node=100.72.209.107"
-          securityContext:
-            capabilities:
-              add:
-                - NET_ADMIN
+              iptables -A FORWARD -i wg0 -j REJECT
+              iptables -t nat -A POSTROUTING -s 10.13.13.0/24 ! -o wg0 -j MASQUERADE
           volumeMounts:
-            - name: dev-net-tun
-              mountPath: /dev/net/tun
-          resources:
-            requests:
-              cpu: "10m"
-              memory: "32Mi"
-            limits:
-              cpu: "500m"
-              memory: "256Mi"
+            - name: key
+              mountPath: /run/wireguard
+              readOnly: true
       containers:
         - name: wireguard
           image: docker.io/procustodibus/wireguard:v1.0.20260223
@@ -111,8 +90,8 @@ spec:
             items:
               - key: wireguard_private_key
                 path: private_key
+              - key: mullvad_private_key
+                path: mullvad_private_key
+              - key: mullvad_address
+                path: mullvad_address
             defaultMode: 0400
-        - name: dev-net-tun
-          hostPath:
-            path: /dev/net/tun
-            type: CharDevice
