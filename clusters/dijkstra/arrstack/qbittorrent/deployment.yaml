@@ -44,6 +44,8 @@ spec:
                   key: mullvad_address
             - name: WIREGUARD_MTU
               value: "1200"
+            - name: WIREGUARD_ALLOWED_IPS
+              value: 0.0.0.0/0
             - name: SERVER_CITIES
               value: Sofia
             - name: FIREWALL_INPUT_PORTS
