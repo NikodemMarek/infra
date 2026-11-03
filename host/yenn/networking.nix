@@ -5,8 +5,6 @@
     ./wireguard.nix
   ];
 
-  networking.nameservers = ["10.43.0.53"];
-
   systemd.network = {
     links = {
       "10-random-mac" = {
@@ -22,7 +20,7 @@
         matchConfig.Type = "ether wlan wwan";
         networkConfig = {
           DHCP = "yes";
-          DNSDefaultRoute = false;
+          DNSDefaultRoute = true;
           Domains = ["~vpn.nkmrk.com"];
           IPv6AcceptRA = "yes";
           IgnoreCarrierLoss = "3s";
