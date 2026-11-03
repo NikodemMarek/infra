@@ -11,3 +11,19 @@ spec:
   resources:
     requests:
       storage: 20Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: projects-pvc
+  namespace: shani
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: nfs
+  volumeMode: Filesystem
+  resources:
+    requests:
+      storage: 500Gi
+  volumeName: projects-pv
