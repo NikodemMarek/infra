@@ -119,16 +119,6 @@
               atime = "off";
             };
           };
-          "models" = {
-            type = "zfs_fs";
-            mountpoint = "/mnt/models";
-            mountOptions = ["nofail"];
-            options = {
-              recordsize = "1M";
-              overlay = "on";
-              atime = "off";
-            };
-          };
           "projects" = {
             type = "zfs_fs";
             mountpoint = "/mnt/projects";
