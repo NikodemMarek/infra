@@ -34,13 +34,19 @@ spec:
               ip rule add to 10.42.0.0/15 lookup main pref 5000
               ip rule add fwmark 51820 lookup main pref 5001
               ip rule add to 10.13.13.0/24 lookup main pref 5002
-              iptables -A FORWARD -i wg0 -s 10.13.13.128/25 -o eth0 -d 10.42.0.0/15 -j ACCEPT
-              iptables -A FORWARD -i wg0 -s 10.13.13.128/25 -o tailscale0 -d 100.64.0.0/10 -j ACCEPT
-              iptables -A FORWARD -i wg0 -d 100.97.10.25 -p tcp -m multiport --dports 80,443 -j ACCEPT
-              iptables -A FORWARD -i wg0 -d 100.64.0.0/10 -p udp --dport 53 -j ACCEPT
-              iptables -A FORWARD -i wg0 -d 100.64.0.0/10 -p tcp --dport 53 -j ACCEPT
-              iptables -A FORWARD -i wg0 -d 100.64.0.0/10 -j REJECT
-              iptables -A FORWARD -i wg0 ! -o tailscale0 -j REJECT
+              nft -f - <<'EOF'
+              table inet wireguard {
+                chain forward {
+                  type filter hook forward priority -10; policy accept;
+                  iifname "wg0" ip saddr 10.13.13.128/25 oifname "eth0" ip daddr 10.42.0.0/15 accept
+                  iifname "wg0" ip saddr 10.13.13.128/25 oifname "tailscale0" ip daddr 100.64.0.0/10 accept
+                  iifname "wg0" ip daddr 100.97.10.25 tcp dport { 80, 443 } accept
+                  iifname "wg0" ip daddr 100.64.0.0/10 meta l4proto { tcp, udp } th dport 53 accept
+                  iifname "wg0" ip daddr 100.64.0.0/10 reject
+                  iifname "wg0" oifname != "tailscale0" reject
+                }
+              }
+              EOF
               iptables -t nat -A POSTROUTING -s 10.13.13.0/24 -o tailscale0 -j MASQUERADE
               iptables -t nat -A POSTROUTING -s 10.13.13.128/25 -o eth0 -d 10.42.0.0/15 -j MASQUERADE
         - name: tailscale
