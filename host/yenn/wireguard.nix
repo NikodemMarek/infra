@@ -44,6 +44,11 @@
     networks."50-wg0" = {
       matchConfig.Name = "wg0";
       address = ["10.13.13.130/32"];
+      networkConfig = {
+        DNS = ["10.43.0.53"];
+        Domains = ["~."];
+        DNSDefaultRoute = true;
+      };
       routes = [
         {
           Destination = "::/0";
