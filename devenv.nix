@@ -121,6 +121,7 @@ in {
     pkgs.pv-migrate
     pkgs.wireguard-tools
     pkgs.qrencode
+    pkgs.bitwarden-cli
   ];
 
   scripts = {
@@ -487,7 +488,10 @@ in {
   };
 
   enterShell = ''
-    export KUBECONFIG="$(jj workspace root --name default --ignore-working-copy 2>/dev/null || echo "$DEVENV_ROOT")/kubeconfig.yaml"
+    repo_root="$(jj workspace root --name default --ignore-working-copy 2>/dev/null || echo "$DEVENV_ROOT")"
+    export KUBECONFIG="$repo_root/kubeconfig.yaml"
+    export BITWARDENCLI_APPDATA_DIR="$repo_root/.bitwarden"
+    mkdir -p -m 0700 "$BITWARDENCLI_APPDATA_DIR"
 
     printf "\e[33m
     ${lib.concatStringsSep "\n" (lib.mapAttrsToList (name: script: "\\e[1m${name}\\e[0m\\e[33m \t\t -> ${script.description}") config.scripts)}

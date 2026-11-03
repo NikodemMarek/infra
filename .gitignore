@@ -15,6 +15,7 @@ devenv.local.yaml
 
 # configs
 kubeconfig.yaml
+.bitwarden/
 
 # cluster-secrets-build, left behind by an interrupted run
 clusters/dijkstra/secrets/.build.tmp
