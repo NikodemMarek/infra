@@ -6,8 +6,8 @@ metadata:
 data:
   Corefile: |
     (upstream) {
-        forward . tls://194.242.2.2 {
-            tls_servername dns.mullvad.net
+        forward . tls://9.9.9.9 tls://149.112.112.112 {
+            tls_servername dns.quad9.net
         }
         cache 300
     }
