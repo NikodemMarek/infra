@@ -7,9 +7,6 @@ spec:
   parentRefs:
     - name: traefik-gateway
       namespace: default
-      sectionName: web
-    - name: traefik-gateway
-      namespace: default
       sectionName: websecure
   hostnames:
     - "subsonic.nkmrk.com"

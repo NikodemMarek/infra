@@ -7,9 +7,6 @@ spec:
   parentRefs:
     - name: traefik-gateway
       namespace: default
-      sectionName: web
-    - name: traefik-gateway
-      namespace: default
       sectionName: websecure
   hostnames:
     - "jellyfin.nkmrk.com"
@@ -29,9 +26,6 @@ metadata:
   namespace: jellyfin
 spec:
   parentRefs:
-    - name: traefik-gateway
-      namespace: default
-      sectionName: web
     - name: traefik-gateway
       namespace: default
       sectionName: websecure
