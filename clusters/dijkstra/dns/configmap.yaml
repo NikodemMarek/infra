@@ -29,6 +29,16 @@ data:
         }
         import upstream
     }
+    shani.nkmrk.com {
+        errors
+        rewrite name exact shani.nkmrk.com. shani-service.shani.svc.cluster.local. answer auto
+        forward . 10.43.0.10
+    }
+    cluster.local {
+        errors
+        forward . 10.43.0.10
+        cache 30
+    }
     . {
         errors
         health :8080
