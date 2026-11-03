@@ -34,6 +34,11 @@ data:
         rewrite name exact shani.nkmrk.com. shani-service.shani.svc.cluster.local. answer auto
         forward . 10.43.0.10
     }
+    radicale.nkmrk.com {
+        errors
+        rewrite name exact radicale.nkmrk.com. radicale.omniverse.svc.cluster.local. answer auto
+        forward . 10.43.0.10
+    }
     cluster.local {
         errors
         forward . 10.43.0.10
