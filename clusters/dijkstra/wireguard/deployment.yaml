@@ -31,15 +31,18 @@ spec:
             - sh
             - -ec
             - |
-              ip rule add to 10.43.0.0/16 lookup main pref 5000
+              ip rule add to 10.42.0.0/15 lookup main pref 5000
               ip rule add fwmark 51820 lookup main pref 5001
               ip rule add to 10.13.13.0/24 lookup main pref 5002
+              iptables -A FORWARD -i wg0 -s 10.13.13.128/25 -o eth0 -d 10.42.0.0/15 -j ACCEPT
+              iptables -A FORWARD -i wg0 -s 10.13.13.128/25 -o tailscale0 -d 100.64.0.0/10 -j ACCEPT
               iptables -A FORWARD -i wg0 -d 100.97.10.25 -p tcp -m multiport --dports 80,443 -j ACCEPT
               iptables -A FORWARD -i wg0 -d 100.64.0.0/10 -p udp --dport 53 -j ACCEPT
               iptables -A FORWARD -i wg0 -d 100.64.0.0/10 -p tcp --dport 53 -j ACCEPT
               iptables -A FORWARD -i wg0 -d 100.64.0.0/10 -j REJECT
               iptables -A FORWARD -i wg0 ! -o tailscale0 -j REJECT
               iptables -t nat -A POSTROUTING -s 10.13.13.0/24 -o tailscale0 -j MASQUERADE
+              iptables -t nat -A POSTROUTING -s 10.13.13.128/25 -o eth0 -d 10.42.0.0/15 -j MASQUERADE
         - name: tailscale
           image: tailscale/tailscale:v1.92.5
           restartPolicy: Always

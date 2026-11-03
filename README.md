@@ -241,10 +241,10 @@ kubectl -n omniverse exec deploy/radicale -- rm -r /data/collection-root/nikodem
 
 ### WireGuard peers
 
-Peers reach only `*.nkmrk.com` and the internet (via Mullvad), never the cluster network. The pod's firewall enforces this, and the tailnet policy backs it up: `tag:wireguard` may reach only `triss:80,443`, `tag:dns:53` and `autogroup:internet`, and has the `mullvad` node attribute. The sidecar's auth key is tagged `tag:wireguard`.
+Peers have one of two tiers, set by their address. Limited peers (`10.13.13.2-127`) reach only `*.nkmrk.com`, tailnet DNS and the internet (via Mullvad), never the cluster network. Full peers (`10.13.13.128-254`) also reach the cluster's pod and service networks (`10.42.0.0/15`) and the tailnet, as far as its policy allows. The pod's firewall enforces the tiers. The tailnet policy lets `tag:wireguard` reach `triss:80,443`, `tag:dns:53`, `autogroup:internet` and the cluster nodes, and gives it the `mullvad` node attribute. The sidecar's auth key is tagged `tag:wireguard`.
 
 1. Generate a key pair: `umask 077; wg genkey > p.key; wg pubkey < p.key`.
-2. Add a `[Peer]` (name comment, `PublicKey`, next free `10.13.13.N/32`) to `clusters/dijkstra/wireguard/wg0.conf`, commit and push; the pod restarts with it.
+2. Add a `[Peer]` (name comment, `PublicKey`, next free `10.13.13.N/32` in its tier) to `clusters/dijkstra/wireguard/wg0.conf`, commit and push; the pod restarts with it.
 3. Write the client config `client.conf`:
    ```ini
    [Interface]
