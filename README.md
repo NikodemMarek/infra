@@ -51,7 +51,7 @@ Cluster access: the dev shell sets `KUBECONFIG` to `kubeconfig.yaml` in the `def
 
 ## Dev shell
 
-`devenv` is loaded by direnv (`.envrc`), or run `devenv shell`. Entering the shell prints the script list and sets `KUBECONFIG=kubeconfig.yaml` (git-ignored). Scripts that touch secrets unlock Bitwarden (`bw`) once and lock it again on exit.
+`devenv` is loaded by direnv (`.envrc`), or run `devenv shell`. Entering the shell prints the script list and sets `KUBECONFIG=kubeconfig.yaml` (git-ignored). It brings its own `bw`, logged in separately from any other on the machine: its state is `.bitwarden/` (git-ignored), next to the kubeconfig in the default workspace, so `bw login` once per machine. Scripts that touch secrets unlock Bitwarden once and lock it again on exit.
 
 | Script | What it does |
 |--------|--------------|
