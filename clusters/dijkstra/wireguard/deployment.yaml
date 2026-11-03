@@ -35,7 +35,6 @@ spec:
               ip rule add fwmark 51820 lookup main pref 5001
               ip rule add to 10.13.13.0/24 lookup main pref 5002
               iptables -A FORWARD -i wg0 -s 10.13.13.128/25 -o eth0 -d 10.42.0.0/15 -j ACCEPT
-              iptables -A FORWARD -i wg0 -s 10.13.13.128/25 -o tailscale0 -d 100.64.0.0/10 -j ACCEPT
               iptables -A FORWARD -i wg0 -d 100.97.10.25 -p tcp -m multiport --dports 80,443 -j ACCEPT
               iptables -A FORWARD -i wg0 -d 100.64.0.0/10 -p udp --dport 53 -j ACCEPT
               iptables -A FORWARD -i wg0 -d 100.64.0.0/10 -p tcp --dport 53 -j ACCEPT
