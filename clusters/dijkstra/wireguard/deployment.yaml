@@ -36,12 +36,13 @@ spec:
               ip rule add to 10.13.13.0/24 lookup main pref 5002
               iptables -A FORWARD -i wg0 -s 10.13.13.128/25 -o eth0 -d 10.42.0.0/15 -j ACCEPT
               iptables -A FORWARD -i wg0 -d 100.97.10.25 -p tcp -m multiport --dports 80,443 -j ACCEPT
-              iptables -A FORWARD -i wg0 -d 100.64.0.0/10 -p udp --dport 53 -j ACCEPT
-              iptables -A FORWARD -i wg0 -d 100.64.0.0/10 -p tcp --dport 53 -j ACCEPT
+              iptables -A FORWARD -i wg0 -o eth0 -d 10.43.0.53 -p udp --dport 53 -j ACCEPT
+              iptables -A FORWARD -i wg0 -o eth0 -d 10.43.0.53 -p tcp --dport 53 -j ACCEPT
               iptables -A FORWARD -i wg0 -d 100.64.0.0/10 -j REJECT
               iptables -A FORWARD -i wg0 ! -o tailscale0 -j REJECT
               iptables -t nat -A POSTROUTING -s 10.13.13.0/24 -o tailscale0 -j MASQUERADE
               iptables -t nat -A POSTROUTING -s 10.13.13.128/25 -o eth0 -d 10.42.0.0/15 -j MASQUERADE
+              iptables -t nat -A POSTROUTING -s 10.13.13.0/24 -o eth0 -d 10.43.0.53 -j MASQUERADE
         - name: tailscale
           image: tailscale/tailscale:v1.92.5
           restartPolicy: Always

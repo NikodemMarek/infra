@@ -5,7 +5,7 @@
     ./wireguard.nix
   ];
 
-  networking.nameservers = ["100.118.32.72"];
+  networking.nameservers = ["10.43.0.53"];
 
   systemd.network = {
     links = {

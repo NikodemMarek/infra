@@ -3,11 +3,8 @@ kind: Service
 metadata:
   name: dns
   namespace: dns
-  annotations:
-    tailscale.com/expose: "true"
-    tailscale.com/hostname: "dns"
-    tailscale.com/tags: "tag:dns"
 spec:
+  clusterIP: 10.43.0.53
   selector:
     app: dns
   ports:
