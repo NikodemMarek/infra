@@ -33,6 +33,10 @@ spec:
       web:
         port: 80
         nodePort: 30000
+      internal:
+        port: 9443
+        expose:
+          default: false
     service:
       spec:
         loadBalancerSourceRanges:

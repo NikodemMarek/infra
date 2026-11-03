@@ -36,7 +36,7 @@ data:
     }
     radicale.nkmrk.com {
         errors
-        rewrite name exact radicale.nkmrk.com. radicale.omniverse.svc.cluster.local. answer auto
+        rewrite name exact radicale.nkmrk.com. traefik-internal.default.svc.cluster.local. answer auto
         forward . 10.43.0.10
     }
     cluster.local {
