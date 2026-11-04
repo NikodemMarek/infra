@@ -57,4 +57,6 @@
   tm-image = pkgs.callPackage ./tm/image.nix {};
 
   event-handlers = pkgs.callPackage ./event-handlers {};
+
+  secret-broker = pkgs.callPackage ./secret-broker {};
 }
