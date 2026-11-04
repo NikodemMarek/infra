@@ -19,9 +19,6 @@ kind: Service
 metadata:
   name: flaresolverr
   namespace: arrstack
-  annotations:
-    # Recreate instead of failing on the ClusterIP -> ExternalName change.
-    kustomize.toolkit.fluxcd.io/force: enabled
 spec:
   type: ExternalName
   externalName: arrstack-interceptor.keda.svc.cluster.local

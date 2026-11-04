@@ -92,8 +92,7 @@ data:
     BAD='[/\\:*"<>|]'
     SUFFIX='[[:space:]]+(Jr\.?|Sr\.?|I{1,3}|IV|VI{0,3})$'
 
-    # The old script used exiftool -s3, sed, tr, cut and awk, which work on bytes;
-    # clean and initial run with LC_ALL=C to name things the same way.
+    # clean and initial run with LC_ALL=C (byte-wise) so names match the existing links.
 
     # Sets CLEAN: $1 with control characters replaced by "." (as exiftool's text
     # output does), / \ : * " < > | removed and trimmed of whitespace.

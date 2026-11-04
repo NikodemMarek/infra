@@ -32,7 +32,6 @@ spec:
         - name: youtube-cookies
           secret:
             secretName: secrets
-            optional: true
             items:
               - key: youtube_cookies
                 path: cookies.txt

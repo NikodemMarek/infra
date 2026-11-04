@@ -29,15 +29,18 @@ kind: Deployment
 metadata:
   name: cloudflared
   namespace: cloudflare
+  annotations:
+    # Recreate instead of failing on the immutable selector change (pod -> app).
+    kustomize.toolkit.fluxcd.io/force: enabled
 spec:
   replicas: 2
   selector:
     matchLabels:
-      pod: cloudflared
+      app: cloudflared
   template:
     metadata:
       labels:
-        pod: cloudflared
+        app: cloudflared
     spec:
       securityContext:
         sysctls:
