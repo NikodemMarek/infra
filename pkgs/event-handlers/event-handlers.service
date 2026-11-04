@@ -1,0 +1,15 @@
+[Unit]
+Description=Event handlers (NATS subscribers)
+After=graphical-session.target
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=@out@/bin/event-handlers
+Restart=always
+RestartSec=2
+# handlers may leave detached processes (a notification waiting for its action);
+# a restart must not take them down
+KillMode=process
+
+[Install]
+WantedBy=default.target

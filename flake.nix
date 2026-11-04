@@ -88,10 +88,9 @@
 
     overlays = allOverlays;
     # everything the additions overlay adds; flake packages must be derivations, so
-    # the jail function is left out and the event-handlers set is flattened
+    # the jail function is left out; the event handlers are `.#event-handlers.<name>`
     packages = forEachSystem (pkgs:
-      removeAttrs (builtins.intersectAttrs (allOverlays.additions pkgs pkgs) pkgs) ["jail" "event-handlers"]
-      // lib.mapAttrs' (name: lib.nameValuePair "event-handler-${name}") pkgs.event-handlers);
+      removeAttrs (builtins.intersectAttrs (allOverlays.additions pkgs pkgs) pkgs) ["jail"]);
 
     nixosConfigurations = let
       mkHost = host: system:
