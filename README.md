@@ -243,11 +243,11 @@ Flux is bootstrapped in `clusters/dijkstra/flux-system` (do not edit `gotk-*.yam
 flux reconcile kustomization flux-system --namespace flux-system --with-source
 ```
 
-Each app is a directory: `arrstack` (sonarr, radarr, lidarr, prowlarr, bazarr, qbittorrent (egress via gluetun/Mullvad), beets, flaresolverr), `cert-manager` (Let's Encrypt wildcard for internal HTTPS), `cloudflare` (tunnel; only the hostnames listed in `cloudflared.yaml` are public), `cnpg` (CloudNativePG operator), `cron`, `dns` (split-DNS resolver for nkmrk.com for WireGuard peers, at `10.43.0.53`), `immich` (`photos.nkmrk.com`), `intel-gpu-plugin` (exposes regis's iGPU as `gpu.intel.com/i915`), `jellyfin` (`movies.nkmrk.com`, with seerr at `seerr.nkmrk.com`), `keda`, `navidrome` (`music.nkmrk.com`, with audiomuse-ai), `ollama`, `omniverse` (git-sync, webdav, radicale, tasks), `openebs`, `proxy` (traefik, gateway), `shani` (SSH at `shani.nkmrk.com`, full WireGuard peers), `velero`, `webdav` (books, `books.nkmrk.com`, public through cloudflared), `wireguard` (WireGuard server on `triss`, egress via Mullvad). Shared: `storageclass.yaml`.
+Each app is a directory: `arrstack` (sonarr, radarr, lidarr, prowlarr, bazarr, qbittorrent (egress via gluetun/Mullvad), beets, flaresolverr), `cert-manager` (Let's Encrypt wildcard for internal HTTPS), `cloudflare` (tunnel; only the hostnames listed in `cloudflared.yaml` are public), `cnpg` (CloudNativePG operator), `cron`, `dns` (split-DNS resolver for nkmrk.com for WireGuard peers, at `10.43.0.53`), `immich` (`photos.nkmrk.com`), `intel-gpu-plugin` (exposes regis's iGPU as `gpu.intel.com/i915`), `jellyfin` (`movies.nkmrk.com`, with seerr at `seerr.nkmrk.com`), `keda`, `matrix` (Synapse, `matrix.nkmrk.com`), `navidrome` (`music.nkmrk.com`, with audiomuse-ai), `ollama`, `omniverse` (git-sync, webdav, radicale, tasks), `openebs`, `proxy` (traefik, gateway), `shani` (SSH at `shani.nkmrk.com`, full WireGuard peers), `velero`, `webdav` (books, `books.nkmrk.com`, public through cloudflared), `wireguard` (WireGuard server on `triss`, egress via Mullvad). Shared: `storageclass.yaml`.
 
 The `shani` image is built and imported onto `triss` by hand (the deployment uses `imagePullPolicy: Never`, `clusters/dijkstra/shani/deployment.yaml`), so a new image needs its tag set in the manifest and importing on `triss` before the pod can start.
 
-Services on the gateway's `internal` listener (full WireGuard peers only, HTTPS; `dns` resolves these names to `traefik-internal`): `radicale`, `sonarr`, `radarr`, `lidarr`, `qbittorrent`, `bazarr`, `prowlarr`, `ollama`, `audiomuse-ai`, `tasks` (tm MCP) and `omniverse` (WebDAV), each at `<name>.nkmrk.com`, and immich at `photos.nkmrk.com`. `bazarr` and `prowlarr` go through the KEDA interceptor (`keda/httproute.yaml`), so their host is also listed in their `HTTPScaledObject`. A new internal name needs an HTTPRoute on `sectionName: internal` and an entry in the `dns` Corefile.
+Services on the gateway's `internal` listener (full WireGuard peers only, HTTPS; `dns` resolves these names to `traefik-internal`): `radicale`, `sonarr`, `radarr`, `lidarr`, `qbittorrent`, `bazarr`, `prowlarr`, `ollama`, `audiomuse-ai`, `tasks` (tm MCP), `matrix` (Synapse) and `omniverse` (WebDAV), each at `<name>.nkmrk.com`, and immich at `photos.nkmrk.com`. `bazarr` and `prowlarr` go through the KEDA interceptor (`keda/httproute.yaml`), so their host is also listed in their `HTTPScaledObject`. A new internal name needs an HTTPRoute on `sectionName: internal` and an entry in the `dns` Corefile.
 
 AudioMuse-AI (`navidrome/audiomuse-ai`) keeps its settings (Navidrome login, auth/API token, AI provider) in its own database, set in its web UI at `https://audiomuse-ai.nkmrk.com/`. Navidrome's `audiomuseai` plugin is configured in Navidrome's UI with that token.
 
@@ -266,6 +266,14 @@ To remove a subscription, delete its line, then delete the calendar (read-only o
 ```bash
 kubectl -n omniverse exec deploy/radicale -- rm -r /data/collection-root/nikodem/sub-<name>
 ```
+
+Matrix (`matrix/synapse`) is a private, non-federated Synapse (`server_name` `nkmrk.com`, permanent) at `https://matrix.nkmrk.com/` (full WireGuard peers only, through the gateway's `internal` listener, client API only: `/_synapse` admin is not routed through the gateway). Log in by typing `matrix.nkmrk.com` as the homeserver. Registration is closed; create users with the shared secret (`REGISTRATION_SHARED_SECRET`, profile `dijkstra-matrix`):
+
+```bash
+kubectl -n matrix exec -it deploy/synapse -- register_new_matrix_user -c /config/homeserver.yaml http://localhost:8008
+```
+
+Its database is the CloudNativePG cluster `matrix-postgres`, backed up and restored like the Immich database (a `pg_dump` pre-hook, `synapse.dump`; database and owner `synapse`); the signing key and media are on the PVC `synapse-data`.
 
 ### WireGuard peers
 

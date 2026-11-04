@@ -70,3 +70,4 @@ spec:
       - "--entrypoints.websecure.http.encodedcharacters.allowencodedquestionmark=true"
       - "--entrypoints.internal.http.encodedcharacters.allowencodedslash=true"
       - "--entrypoints.internal.http.encodedcharacters.allowencodedquestionmark=true"
+      - "--entrypoints.internal.http.encodedcharacters.allowencodedhash=true"
