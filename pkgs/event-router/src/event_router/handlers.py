@@ -26,9 +26,13 @@ def find(handlers_dir: Path | None, event: Event) -> Path | None:
     parts = event.type.split(".")
     for name in [".".join(parts[:i]) for i in range(len(parts), 0, -1)] + ["default"]:
         p = handlers_dir / name
-        if p.is_file() and os.access(p, os.X_OK):
+        if _runnable(p):
             return p
     return None
+
+
+def _runnable(p: Path) -> bool:
+    return p.is_file() and os.access(p, os.X_OK)
 
 
 def _env(event: Event) -> dict[str, str]:
@@ -49,6 +53,19 @@ class Dispatcher:
         if handler is None:
             log.warning("no handler for %s", event.describe())
             return False
+        return self._start(handler, event)
+
+    def dispatch_default(self, event: Event) -> bool:
+        """Start only `<handlers_dir>/default` (a regular executable file), exactly
+        like `dispatch`; never looks up type-named handlers. False if there is no
+        default or it can't be started."""
+        handler = self.handlers_dir / "default" if self.handlers_dir is not None else None
+        if handler is None or not _runnable(handler):
+            log.warning("no default handler for %s", event.describe())
+            return False
+        return self._start(handler, event)
+
+    def _start(self, handler: Path, event: Event) -> bool:
         # event goes through a temp file, not a pipe: a handler that never reads
         # stdin can't block us on a full pipe buffer
         with tempfile.TemporaryFile() as stdin:
