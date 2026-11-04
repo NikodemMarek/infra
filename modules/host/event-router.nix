@@ -14,10 +14,36 @@
     prompt_prefix = ""
   '';
 in {
-  options.services.event-router.enable = lib.mkEnableOption "the event router, the knowledge curator timer and the idle Claude session reaper";
+  options.services.event-router.enable = lib.mkEnableOption "the event router, the local NATS server, the knowledge curator timer and the idle Claude session reaper";
 
   config = lib.mkIf cfg.enable {
-    environment.systemPackages = [pkgs.shpool];
+    environment.systemPackages = [pkgs.shpool pkgs.natscli];
+
+    services.nats = {
+      enable = true;
+      jetstream = true;
+      serverName = config.networking.hostName;
+      settings = {
+        host = "127.0.0.1";
+        http = "127.0.0.1:8222";
+        lame_duck_duration = "30s";
+        lame_duck_grace_period = "1s";
+        reconnect_error_reports = 3600;
+        jetstream = {
+          domain = config.networking.hostName;
+          max_file_store = "1G";
+        };
+      };
+    };
+
+    persist.generated.directories = [
+      {
+        directory = "/var/lib/nats";
+        user = "nats";
+        group = "nats";
+        mode = "750";
+      }
+    ];
 
     # the event handler for claude sessions runs them in shpool sessions
     systemd.user.sockets.shpool = {
