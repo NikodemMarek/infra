@@ -39,6 +39,8 @@ spec:
                 path: registration_shared_secret
               - key: whatsapp_registration
                 path: whatsapp_registration
+              - key: meta_registration
+                path: meta_registration
             defaultMode: 0440
       containers:
         - name: synapse
