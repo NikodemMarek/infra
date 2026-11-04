@@ -1,8 +1,7 @@
-# Backend service the KEDA interceptor forwards to.
 apiVersion: v1
 kind: Service
 metadata:
-  name: beets-app
+  name: beets
   namespace: arrstack
   labels:
     app: beets
@@ -14,16 +13,3 @@ spec:
       protocol: TCP
       port: 80
       targetPort: 8000
----
-# Keeps the in-cluster name working; traffic goes through the interceptor so it can wake the app.
-apiVersion: v1
-kind: Service
-metadata:
-  name: beets
-  namespace: arrstack
-  annotations:
-    # Recreate instead of failing on the ClusterIP -> ExternalName change.
-    kustomize.toolkit.fluxcd.io/force: enabled
-spec:
-  type: ExternalName
-  externalName: arrstack-interceptor.keda.svc.cluster.local

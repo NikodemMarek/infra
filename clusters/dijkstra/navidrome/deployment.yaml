@@ -53,8 +53,6 @@ spec:
           env:
             - name: ND_ENABLEINSIGHTSCOLLECTOR
               value: "false"
-            - name: ND_PROMETHEUS_ENABLED
-              value: "true"
             - name: ND_LOGLEVEL
               value: "info"
             - name: ND_MUSICFOLDER

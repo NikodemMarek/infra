@@ -4,7 +4,7 @@ metadata:
   name: volume-policy
   namespace: velero
 data:
-  # local-storage and nfs PVs are the media and model datasets on tank: too big, and already on regis
+  # local-storage = media on tank; nfs = shared projects
   # PVCs labelled backup=skip hold throwaway/cache data (in-flight downloads, caches, model caches)
   policy.yaml: |
     version: v1

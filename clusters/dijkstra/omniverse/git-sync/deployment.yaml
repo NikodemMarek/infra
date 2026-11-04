@@ -65,11 +65,11 @@ spec:
                 git clone https://${GIT_USER}:${GIT_TOKEN}@github.com/${GIT_USER}/omniverse.git .
               fi
 
-              # Prevent the Megabyte rounding error (90 MiB = 94371840 bytes)
+              # Files >= 90 MiB are skipped; find -size rounds up to whole units, so compare in bytes.
               export SIZE_LIMIT="94371840c"
 
               while true; do
-                # Ignore rules live in the omniverse-gitignore ConfigMap; files >= 90 MiB are skipped.
+                # Ignore rules live in the omniverse-gitignore ConfigMap.
                 # Only untracked, non-ignored paths are passed to git add (it errors on ignored ones).
                 git ls-files -z --others --exclude-standard \
                   | xargs -0 -r sh -c 'find "$@" -maxdepth 0 -type f -size -"$SIZE_LIMIT" -print0' sh \
@@ -87,64 +87,3 @@ spec:
 
                 sleep 60
               done
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: webdav
-  namespace: omniverse
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: webdav
-  template:
-    metadata:
-      labels:
-        app: webdav
-    spec:
-      nodeSelector:
-        kubernetes.io/hostname: triss
-      volumes:
-        - name: omniverse-volume
-          persistentVolumeClaim:
-            claimName: omniverse-pvc
-      containers:
-        - name: webdav
-          image: rclone/rclone:latest
-          args:
-            - serve
-            - webdav
-            - /omniverse
-            - --copy-links
-            - --exclude
-            - .git/
-            - --exclude
-            - /dav/
-            - --addr
-            - :80
-            - --user
-            - $(DAV_USER)
-            - --pass
-            - $(DAV_PASS)
-          env:
-            - name: DAV_USER
-              valueFrom:
-                secretKeyRef:
-                  name: secrets
-                  key: webdav_user
-            - name: DAV_PASS
-              valueFrom:
-                secretKeyRef:
-                  name: secrets
-                  key: webdav_password
-          volumeMounts:
-            - name: omniverse-volume
-              mountPath: /omniverse
-          resources:
-            requests:
-              memory: "128Mi"
-              cpu: "10m"
-            limits:
-              memory: "512Mi"
-              cpu: "300m"

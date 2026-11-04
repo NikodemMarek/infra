@@ -59,19 +59,14 @@ spec:
     gatewayClass:
       enabled: false
     metrics:
-      prometheus:
-        # Per-router metrics in addition to the default entrypoint/service labels.
-        addRoutersLabels: true
-        # Dedicated metrics service + ServiceMonitor for Prometheus to scrape.
-        service:
-          enabled: true
-        serviceMonitor:
-          enabled: true
+      prometheus: null
     logs:
       general:
         level: INFO
       access:
         enabled: true
     additionalArguments:
-      - "--entrypoints.web.http.encodedcharacters.allowencodedslash=true"
-      - "--entrypoints.web.http.encodedcharacters.allowencodedquestionmark=true"
+      - "--entrypoints.websecure.http.encodedcharacters.allowencodedslash=true"
+      - "--entrypoints.websecure.http.encodedcharacters.allowencodedquestionmark=true"
+      - "--entrypoints.internal.http.encodedcharacters.allowencodedslash=true"
+      - "--entrypoints.internal.http.encodedcharacters.allowencodedquestionmark=true"
