@@ -275,7 +275,7 @@ kubectl -n matrix exec -it deploy/synapse -- register_new_matrix_user -c /config
 
 Its database is the CloudNativePG cluster `matrix-postgres`, backed up and restored like the Immich database (a `pg_dump` pre-hook, `synapse.dump`; database and owner `synapse`); the signing key and media are on the PVC `synapse-data`.
 
-Bridges are mautrix appservices in `matrix/<network>`, one per network (`whatsapp`, `meta`, pinned image, SQLite on its own PVC). For WhatsApp, DM `@whatsappbot:nkmrk.com` and send `login qr`; for Messenger, DM `@metabot:nkmrk.com`, send `login` and pick Messenger. Bump the bridge images about monthly: a "client outdated" notice in the bridge room is the cue.
+Bridges are mautrix appservices in `matrix/<network>`, one per network (`whatsapp`, `meta`, `signal`, pinned image, SQLite on its own PVC). For WhatsApp, DM `@whatsappbot:nkmrk.com` and send `login qr`; for Messenger, DM `@metabot:nkmrk.com`, send `login` and pick Messenger; for Signal, DM `@signalbot:nkmrk.com`, send `login` and scan the QR from Signal's linked devices. Bump the bridge images about monthly: a "client outdated" notice in the bridge room is the cue.
 
 ### WireGuard peers
 

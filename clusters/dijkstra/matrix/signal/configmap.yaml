@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: signal-config
+  namespace: matrix
+data:
+  config.yaml: |
+    env_config_prefix: BRIDGE_
+
+    homeserver:
+      address: http://synapse.matrix.svc.cluster.local:8008
+      domain: nkmrk.com
+
+    appservice:
+      address: http://signal.matrix.svc.cluster.local:29328
+      hostname: 0.0.0.0
+      port: 29328
+      id: signal
+      bot:
+        username: signalbot
+      username_template: "signal_{{.}}"
+
+    database:
+      type: sqlite3-fk-wal
+      uri: file:/data/signal.db?_txlock=immediate
+
+    bridge:
+      permissions:
+        "@nikodem:nkmrk.com": admin
+
+    encryption:
+      allow: false
+
+    provisioning:
+      shared_secret: disable
+
+    logging:
+      min_level: info
+      writers:
+        - type: stdout
+          format: json
