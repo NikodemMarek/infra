@@ -10,7 +10,7 @@ nix build .#claude                                # build it (from the repo root
 ## Layout
 
 - `pkgs/claude/` - the wrapper (`default.nix`), `CLAUDE.md`, `agents/*.md`, `settings.nix` (rendered to `settings.json`), `permissions.nix` (imported by `settings.nix`) and this README
-- `pkgs/agent-skills/skills/` - `*/SKILL.md`, tool-agnostic skills shared by Claude and other tools (`jj`, `atomic-commits`, `commit`, `knowledge`); `claude` takes them from the `agent-skills` package
+- `pkgs/agent-skills/skills/` - `*/SKILL.md`, tool-agnostic skills shared by Claude and other tools (`jj`, `atomic-commits`, `commit`, `knowledge`, `drill-me`); `claude` takes them from the `agent-skills` package
 - `pkgs/knowledge` - the knowledge CLI: `knowledge submit` (queue a note), `curate`, `skills`, `route`, hooks
 - `pkgs/jj-upload`, `pkgs/claude-hooks`, `pkgs/claude-statusline`, `pkgs/agent-skills` - the other tools
 - `pkgs/default.nix` - registers `claude` and the tools; `overlays/default.nix` exposes them as the `additions` overlay and `flake.nix` exports them as `packages`
@@ -81,7 +81,7 @@ Use the overlay, not `dotfiles.packages.<system>.claude`: the overlay builds the
 xdg.configFile."opencode/skills".source = "${pkgs.agent-skills}";
 ```
 
-Claude-only frontmatter (`allowed-tools`, and `disable-model-invocation` in `commit`) is ignored by other tools. `pkgs/agent-skills/skills/knowledge` ships with a literal `@memoryDir@` in `agent-skills` (only the `claude` build substitutes it).
+Claude-only frontmatter (`allowed-tools`, and `disable-model-invocation` in `commit` and `drill-me`) is ignored by other tools. `pkgs/agent-skills/skills/knowledge` ships with a literal `@memoryDir@` in `agent-skills` (only the `claude` build substitutes it).
 
 ## Data dir
 
