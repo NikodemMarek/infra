@@ -6,13 +6,18 @@
   ...
 }: let
   # Runs a command and answers deploy-rs's interactive sudo prompts with
-  # SUDO_PASSWORD_<host>, asking on the terminal for hosts without one
+  # the passwords read from fd 3 (lines of `host password`), asking on the terminal for hosts
+  # without one. Read to the end before spawning, so the child inherits a drained pipe.
   sudoExpect = pkgs.writeText "deploy-sudo.exp" ''
     set timeout -1
-    foreach name [array names env SUDO_PASSWORD_*] {
-      set password([string range $name 14 end]) $env($name)
-      unset env($name)
+    set passwords [open /dev/fd/3 r]
+    foreach line [split [read $passwords] "\n"] {
+      set space [string first " " $line]
+      if {$space > 0} {
+        set password([string range $line 0 [expr {$space - 1}]]) [string range $line [expr {$space + 1}] end]
+      }
     }
+    close $passwords
 
     spawn -noecho {*}$argv
     expect {
@@ -48,24 +53,42 @@
     trap 'for c in "''${_cleanups[@]}"; do eval "$c"; done' EXIT
     on_exit() { _cleanups+=("$1"); }
 
-    # unlock once, nested scripts inherit BW_SESSION and skip this
-    bw_unlock() {
-      if [ -z "''${BW_SESSION:-}" ]; then
-        BW_SESSION=$(bw unlock --raw)
-        on_exit 'bw lock > /dev/null'
-      fi
-      export BW_SESSION
+    # Bitwarden is only reached through the secret broker: `secret export` prints
+    # {"<profile>": {"<KEY>": "<value>"}} after the user approved on the broker console.
+    # $exported holds that json; it is never exported, so no child process sees it.
+
+    # [host] {"<secret>": "<profile>"} of the secrets the host's config declares
+    secret_profiles() { nix eval --json ".#nixosConfigurations.$1.config.secrets" --apply 'builtins.mapAttrs (_: s: s.profile)'; }
+
+    # [host...] sets $exported to the secrets of all profiles the hosts' configs use
+    export_hosts() {
+      local h p profiles=""
+      for h in "$@"; do
+        # assigned first, set -e ignores a failing $(...) inside the arguments below
+        p=$(secret_profiles "$h" | jq -r '[.[]] | unique[]')
+        profiles+=$p$'\n'
+      done
+      # unquoted on purpose: one argument per profile, names are [a-z0-9-]
+      profiles=$(printf '%s' "$profiles" | sort -u)
+      exported=$(secret export $profiles)
     }
 
-    # [host...] builds encrypted secrets for the hosts into $secrets
+    # [profile] the exported secrets of one profile as json
+    exported_profile() {
+      printf '%s' "$exported" | jq --arg p "$1" '.[$p] // error("profile \($p) was not exported")'
+    }
+
+    # [host...] builds encrypted secrets for the hosts from $exported into $secrets
     build_secrets() {
       secrets=$(mktemp -d "''${XDG_RUNTIME_DIR:-/tmp}/secrets.XXXXXX")
       on_exit "rm -rf '$secrets'"
-      secrets-build "$secrets" "$@"
+      printf '%s' "$exported" | secrets-build "$secrets" "$@"
     }
 
-    # [host user] login password from bitwarden, fails if there is none
-    user_password() { secretspec get --profile "$1" "USERS_''${2^^}_PASSWORD" 2> /dev/null; }
+    # [host user] login password from $exported, fails if there is none
+    user_password() {
+      exported_profile "$1" 2> /dev/null | jq -er --arg k "USERS_''${2^^}_PASSWORD" '.[$k] // empty | select(. != "")'
+    }
 
     # [file] key type and body of a public key (from stdin without a file), without the comment
     pubkey() { cut -d' ' -f1-2 "$@"; }
@@ -74,7 +97,7 @@
     sops_recipient() { sed -n "s/.*&$1 \(age1[0-9a-z]*\).*/\1/p" .sops.yaml; }
   '';
 
-  # Input: `secretspec export` of one profile. $names: the secrets taken from it.
+  # Input: one profile of `secret export`. $names: the secrets taken from it.
   # Output: exactly those secrets, with lowercase names; fails if one is missing or empty.
   selectSecrets = pkgs.writeText "select-secrets.jq" ''
     with_entries(.key |= ascii_downcase)
@@ -134,18 +157,18 @@ in {
         fi
 
         # [json key] value of one secret
-        secret() { printf '%s' "$1" | jq -r --arg k "$2" '.[$k]'; }
+        secret_value() { printf '%s' "$1" | jq -r --arg k "$2" '.[$k]'; }
 
-        # [host] the host's secrets from bitwarden as json, exactly the ones its config declares,
-        # each exported from the profile that holds it
+        # [host] the host's secrets from $exported as json, exactly the ones its config declares,
+        # each taken from the profile that holds it
         fetch_secrets() {
           local profile_of profiles p names part parts=""
           # assigned first, set -e ignores a failing $(...) inside the arguments below
-          profile_of=$(nix eval --json ".#nixosConfigurations.$1.config.secrets" --apply 'builtins.mapAttrs (_: s: s.profile)')
+          profile_of=$(secret_profiles "$1")
           profiles=$(printf '%s' "$profile_of" | jq -r '[.[]] | unique[]')
           for p in $profiles; do
             names=$(printf '%s' "$profile_of" | jq -c --arg p "$p" '[to_entries[] | select(.value == $p) | .key]')
-            part=$(secretspec export --profile "$p" --format json | jq --argjson names "$names" -f ${selectSecrets})
+            part=$(exported_profile "$p" | jq --argjson names "$names" -f ${selectSecrets})
             parts+=$part$'\n'
           done
           printf '%s' "$parts" | jq -s 'add // {}'
@@ -168,7 +191,7 @@ in {
           local key file
           for key in $(printf '%s' "$2" | jq -r 'keys[] | select(. == "host_ssh_ed25519_priv" or test("^users_.+_ssh_id_ed25519$"))'); do
             file=$(pub_file "$1" "$key")
-            if [ "$(secret "$2" "$key" | ssh-keygen -y -f /dev/stdin | pubkey)" != "$(pubkey "$file" 2> /dev/null || true)" ]; then
+            if [ "$(secret_value "$2" "$key" | ssh-keygen -y -f /dev/stdin | pubkey)" != "$(pubkey "$file" 2> /dev/null || true)" ]; then
               echo "$1: $key in bitwarden does not match $file" >&2
               exit 1
             fi
@@ -194,7 +217,7 @@ in {
           if [ "$(printf '%s' "$2" | jq 'has("flux_sops_age_key")')" = false ]; then
             return
           fi
-          have=$(secret "$2" flux_sops_age_key | age-keygen -y)
+          have=$(secret_value "$2" flux_sops_age_key | age-keygen -y)
           want=$(sops_recipient dijkstra_cluster)
           if [ "$have" != "$want" ]; then
             echo "$1: flux_sops_age_key in bitwarden is $have, but .sops.yaml has ''${want:-nothing}" >&2
@@ -206,8 +229,8 @@ in {
         hash_passwords() {
           local json=$1 key hash
           for key in $(printf '%s' "$json" | jq -r 'keys[] | select(test("^users_.+_password$"))'); do
-            hash=$(secret "$json" "$key" | mkpasswd -s)
-            json=$(printf '%s' "$json" | HASH=$hash jq --arg k "$key" '.[$k] = env.HASH')
+            hash=$(secret_value "$json" "$key" | mkpasswd -s)
+            json=$(printf '%s' "$json" | jq --arg k "$key" --rawfile hash /dev/fd/3 '.[$k] = $hash' 3< <(printf '%s' "$hash"))
           done
           printf '%s' "$json"
         }
@@ -223,8 +246,16 @@ in {
         mkdir -p "$outdir"
         chmod 700 "$outdir"
 
-        bw_unlock
-        bw sync > /dev/null
+        # the callers pipe the exported json in, run by hand it is exported here
+        if [ -t 0 ]; then
+          export_hosts "$@"
+        else
+          exported=$(cat)
+        fi
+        if [ -z "$exported" ]; then
+          echo "no exported secrets on stdin" >&2
+          exit 1
+        fi
 
         # plaintext only ever lives in memory and pipes, never touches the disk
         for h in "$@"; do
@@ -237,7 +268,7 @@ in {
           mv "$outdir/.$h.yaml.tmp" "$outdir/$h.yaml"
         done
       '';
-      description = "[outdir host...] build encrypted sops files from bitwarden";
+      description = "[outdir host...] build encrypted sops files from bitwarden (exported json on stdin)";
     };
     cluster-secrets-build = {
       exec = ''
@@ -264,9 +295,6 @@ in {
         # [file status] one line per file, never any values
         report() { printf '%-9s %s\n' "$2" "$1"; }
 
-        bw_unlock
-        bw sync > /dev/null
-
         # each profile dijkstra-<ns> is the Secret `secrets` of namespace <ns>, made of every
         # key it declares; this is {"<ns>": [lowercase key...]}, names must be [a-z0-9_]+ and unique
         # assigned first, set -e ignores a failing $(...) inside the arguments below
@@ -290,8 +318,19 @@ in {
         manifests=$(grep -rlx --include='*.yaml' 'kind: Namespace' clusters/dijkstra || true)
         nsmanifests=$(printf '%s\n' "$manifests" | xargs -r yq eval-all 'select(.kind == "Namespace") | .metadata.name')
 
+        # one console approval for the cluster key and every namespace
+        profiles=(dijkstra)
+        for ns in $namespaces; do
+          profiles+=("dijkstra-$ns")
+        done
+        exported=$(secret export "''${profiles[@]}")
+
         # the cluster key decrypts the existing files, it must be the one behind &dijkstra_cluster
-        key=$(secretspec get --profile dijkstra FLUX_SOPS_AGE_KEY)
+        key=$(exported_profile dijkstra | jq -r '.FLUX_SOPS_AGE_KEY // empty')
+        if [ -z "$key" ]; then
+          echo "FLUX_SOPS_AGE_KEY is missing or empty in bitwarden" >&2
+          exit 1
+        fi
         have=$(printf '%s\n' "$key" | age-keygen -y)
         want=$(sops_recipient dijkstra_cluster)
         if [ "$have" != "$want" ]; then
@@ -300,7 +339,7 @@ in {
         fi
 
         # plaintext only ever lives in shell variables and pipes (printf is a builtin, so
-        # never argv), the key reaches sops through its environment; $(...) strips trailing
+        # never argv), the key reaches sops through a pipe on fd 3; $(...) strips trailing
         # newlines, harmless for a whole json document as the values are escaped inside it
         for ns in $namespaces; do
           file=$dir/$ns.enc.yaml
@@ -310,7 +349,7 @@ in {
           fi
 
           names=$(printf '%s' "$declared" | jq -c --arg ns "$ns" '.[$ns]')
-          secret=$(secretspec export --profile "dijkstra-$ns" --format json | jq --argjson names "$names" -f ${selectSecrets} | jq --arg ns "$ns" -f ${renderSecret})
+          secret=$(exported_profile "dijkstra-$ns" | jq --argjson names "$names" -f ${selectSecrets} | jq --arg ns "$ns" -f ${renderSecret})
           wanted=$(printf '%s' "$secret" | jq -S .)
 
           status=new
@@ -318,7 +357,7 @@ in {
             # the recipients are plaintext metadata; a file for another key (rotation) is rewritten
             recipients=$(yq '.sops.age[].recipient' "$file")
             # a failing decrypt must abort, not count as a change
-            if ! current=$(SOPS_AGE_KEY="$key" sops decrypt --output-type json "$file" | jq -S '{apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, type, stringData}'); then
+            if ! current=$(SOPS_AGE_KEY_FILE=/dev/fd/3 sops decrypt --output-type json "$file" 3< <(printf '%s\n' "$key") | jq -S '{apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, type, stringData}'); then
               echo "$file: cannot be decrypted with FLUX_SOPS_AGE_KEY, it is probably encrypted to an old key: delete clusters/dijkstra/secrets/*.enc.yaml and rerun" >&2
               exit 1
             fi
@@ -352,10 +391,9 @@ in {
       exec = ''
         source ${common}
 
-        # unlock once, secrets-build and the sudo password below reuse the session
-        bw_unlock
-
         host=$(hostname)
+        # one console approval, secrets-build and the sudo password below reuse the result
+        export_hosts "$host"
         build_secrets "$host"
 
         # the login password is in bitwarden too, use it to unlock sudo; if it
@@ -393,29 +431,31 @@ in {
           fi
         }
 
-        # [node] the ssh user's password is in bitwarden too, sudoExpect answers
-        # deploy-rs's sudo prompts with it; nodes without one are asked on the terminal
-        export_sudo_password() {
+        # [node] the ssh user's password is in bitwarden too, it is added to $passwords as a
+        # `node password` line for sudoExpect to answer deploy-rs's sudo prompts with;
+        # nodes without one are asked on the terminal
+        add_sudo_password() {
           local user password
           user=$(nix eval --raw ".#deploy.nodes.$1.profiles.system.sshUser")
           if password=$(user_password "$1" "$user"); then
-            export "SUDO_PASSWORD_$1=$password"
+            passwords+="$1 $password"$'\n'
           fi
         }
 
-        # unlock once, secrets-build and the sudo passwords below reuse the session
-        bw_unlock
+        # one console approval, secrets-build and the sudo passwords below reuse the result
+        export_hosts "$@"
         build_secrets "$@"
 
+        passwords=""
         targets=()
         for n in "$@"; do
           check_host_key "$n"
-          export_sudo_password "$n"
+          add_sudo_password "$n"
           targets+=(".#$n")
         done
 
         # deploy-rs's flake check evaluates every host, but $secrets only holds the requested ones
-        expect ${sudoExpect} deploy --skip-checks --targets "''${targets[@]}" -- --override-input secrets "path:$secrets"
+        expect ${sudoExpect} deploy --skip-checks --targets "''${targets[@]}" -- --override-input secrets "path:$secrets" 3< <(printf '%s' "$passwords")
       '';
       description = "[node...] deploy config to remote hosts";
     };
@@ -443,6 +483,7 @@ in {
             --override-input secrets "path:$secrets"
         }
 
+        export_hosts "$host"
         build_secrets "$host"
 
         # files copied onto the new disk: the host key, which is also the host's sops identity

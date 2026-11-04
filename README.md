@@ -52,14 +52,14 @@ Cluster access: the dev shell sets `KUBECONFIG` to `kubeconfig.yaml` in the `def
 
 ## Dev shell
 
-`devenv` is loaded by direnv (`.envrc`), or run `devenv shell`. Entering the shell prints the script list and sets `KUBECONFIG=kubeconfig.yaml` (git-ignored). Scripts that touch secrets unlock Bitwarden (`bw`) once and lock it again on exit.
+`devenv` is loaded by direnv (`.envrc`), or run `devenv shell`. Entering the shell prints the script list and sets `KUBECONFIG=kubeconfig.yaml` (git-ignored). Scripts that touch secrets never use `bw` or `secretspec` themselves: they run `secret export <profile...>` once (see Secret broker) and hold the result in an unexported shell variable. You approve it by typing the master password on the broker console; the Bitwarden session never leaves the broker. The broker runs only on yenn, so these scripts work only there.
 
 | Script | What it does |
 |--------|--------------|
 | `host-switch [action]` | `nixos-rebuild <action>` (default `switch`) of the current host, with its secrets injected |
 | `host-deploy <node...>` | deploy-rs to the given nodes |
 | `install-remote <host> <user@ip>` | first install with nixos-anywhere + disko |
-| `secrets-build <outdir> <host...>` | build encrypted sops files from Bitwarden (used by the scripts above) |
+| `secrets-build <outdir> <host...>` | build encrypted sops files from Bitwarden (used by the scripts above, which pipe the exported json in) |
 | `mkiso` / `writeiso /dev/XXX` | build the `alp` installer ISO / write it to a device |
 | `cluster-secrets-build [--check]` | build the cluster's Kubernetes secrets from Bitwarden (see Kubernetes secrets) |
 ## Installing a new host
@@ -95,7 +95,7 @@ host-switch test       # any nixos-rebuild action
 host-deploy geralt roach
 ```
 
-`host-deploy` builds the secrets for the requested nodes, checks their ssh host keys, answers deploy-rs's sudo prompt with the `maintenance` password from Bitwarden (or asks), and runs `deploy --skip-checks`.
+`host-deploy` builds the secrets for the requested nodes, checks their ssh host keys, answers deploy-rs's sudo prompt with the `maintenance` password from Bitwarden (or asks), and runs `deploy --skip-checks`. Each of these commands needs one approval on the broker console (type the master password only if the tag matches the one in your terminal).
 
 ## Secrets
 
@@ -106,7 +106,7 @@ Modules never talk to sops directly. They go through a small contract:
 - `secretspec.toml` is the inventory. The profile named after the host lists its secrets as uppercased names. Evaluation fails if the secrets used by modules and the profile diverge (missing, unused or badly named; names match `^[a-z0-9_]+$`). Secrets with another `profile` must exist in that profile, which is not required to be used completely by the host.
 - The values live in Bitwarden, one item per secret titled `infra/<profile>/<KEY>` (`bw://?folder=infra/{profile}` is a prefix of the item title, there are no Bitwarden folders).
 
-`secrets-build <outdir> <host...>` exports each profile with `secretspec`, keeps exactly the secrets the config declares, verifies that ssh private keys match the `.pub` files in the repo and that the host's age key (and `FLUX_SOPS_AGE_KEY`, where a host gets it) matches `.sops.yaml`, hashes `USERS_*_PASSWORD` entries (login passwords) with `mkpasswd`, and writes `<outdir>/<host>.yaml` encrypted for the host (plaintext never touches disk). Keys marked `composed` in `secretspec.toml` (e.g. `CLOUD` in `dijkstra-velero`) are assembled from other keys; the inputs are not written.
+`secrets-build <outdir> <host...>` takes the profiles of the hosts' secrets from `secret export` (the json on its stdin when piped, e.g. by `host-switch`; otherwise it runs `secret export` itself), keeps exactly the secrets the config declares, verifies that ssh private keys match the `.pub` files in the repo and that the host's age key (and `FLUX_SOPS_AGE_KEY`, where a host gets it) matches `.sops.yaml`, hashes `USERS_*_PASSWORD` entries (login passwords) with `mkpasswd`, and writes `<outdir>/<host>.yaml` encrypted for the host (plaintext never touches disk). Keys marked `composed` in `secretspec.toml` (e.g. `CLOUD` in `dijkstra-velero`) are assembled from other keys; the inputs are not written.
 
 The `secrets` flake input is `path:./secrets-stub`, a placeholder with no sops files. Every script that builds a host passes `--override-input secrets path:<outdir>`; to build by hand:
 
@@ -436,6 +436,6 @@ They are generated from Bitwarden by `cluster-secrets-build`, one namespace at a
 3. Run `cluster-secrets-build` and commit `clusters/dijkstra/secrets/`.
 4. Reference it in the manifests as secret `secrets`, key `api_key` (keys are lowercased).
 
-The namespace must be created by a `kind: Namespace` manifest in `clusters/dijkstra`. The script decrypts with the cluster key from Bitwarden (`FLUX_SOPS_AGE_KEY`), rewrites only files whose content or age recipient changed, lists each file as `new`, `changed`, `stale` or `unchanged` and never prints values. A key declared in the profile but missing from Bitwarden, or with an empty value, fails; Bitwarden items the profile does not declare are ignored. `cluster-secrets-build --check` writes nothing and exits 1 if any file is out of date; it needs Bitwarden and the cluster private key, so it runs only where those are available. To drop a namespace's secrets, remove its profile: the next run deletes the file.
+The namespace must be created by a `kind: Namespace` manifest in `clusters/dijkstra`. The script exports `dijkstra` and every `dijkstra-<ns>` with one `secret export` (one console approval), decrypts with the cluster key (`FLUX_SOPS_AGE_KEY`, handed to sops on a pipe, never in the environment), rewrites only files whose content or age recipient changed, lists each file as `new`, `changed`, `stale` or `unchanged` and never prints values. A key declared in the profile but missing from Bitwarden, or with an empty value, fails; Bitwarden items the profile does not declare are ignored. `cluster-secrets-build --check` writes nothing and exits 1 if any file is out of date; it needs the secret broker (and so Bitwarden and the cluster private key), so it runs only where it is available. To drop a namespace's secrets, remove its profile: the next run deletes the file.
 
 To rotate the cluster key: put the new age public key in the `&dijkstra_cluster` anchor of `.sops.yaml` and the new private key in the Bitwarden item `FLUX_SOPS_AGE_KEY`, delete `clusters/dijkstra/secrets/*.enc.yaml` (the script refuses to run against files encrypted to the old key), run `cluster-secrets-build`, deploy `triss` (`host-deploy triss`, `flux-sops-age` applies the new key), then commit and push.
