@@ -26,6 +26,7 @@
   prismlauncher = pkgs.callPackage ./prismlauncher {prismlauncher = prev.prismlauncher;};
   glab = pkgs.callPackage ./glab {glab = prev.glab;};
   gh = pkgs.callPackage ./gh {gh = prev.gh;};
+  nats-server = pkgs.callPackage ./nats-server {nats-server = prev.nats-server;};
   # No nixpkgs `claude` (it wraps `claude-code`). The nulls pin the "use the
   # bundled default" arguments so a same-named top-level package (e.g. `skills`)
   # is never auto-injected by callPackage.

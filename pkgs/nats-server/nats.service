@@ -1,0 +1,18 @@
+[Unit]
+Description=NATS server
+After=network.target
+
+[Service]
+# %l: the short hostname is the server name
+ExecStart=@out@/bin/nats-server --name %l
+Restart=on-failure
+DynamicUser=yes
+CapabilityBoundingSet=
+PrivateDevices=yes
+ProtectHome=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
