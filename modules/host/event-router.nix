@@ -14,10 +14,14 @@
     prompt_prefix = ""
   '';
 in {
-  options.services.event-router.enable = lib.mkEnableOption "the event router, the knowledge curator timer and the idle Claude session reaper";
+  options.services.event-router.enable = lib.mkEnableOption "the event router, the local NATS server, the knowledge curator timer and the idle Claude session reaper";
 
   config = lib.mkIf cfg.enable {
-    environment.systemPackages = [pkgs.shpool];
+    environment.systemPackages = [pkgs.shpool pkgs.natscli];
+
+    # the unit ships with the package; NixOS ignores its [Install]
+    systemd.packages = [pkgs.nats-server];
+    systemd.services.nats.wantedBy = ["multi-user.target"];
 
     # the event handler for claude sessions runs them in shpool sessions
     systemd.user.sockets.shpool = {

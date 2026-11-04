@@ -191,7 +191,7 @@ pkgs.symlinkJoin {
 
 Pointing the program at its config is done with a flag (rofi) or an env var (`hyprpaper` sets `XDG_CONFIG_HOME=$out/.config`). To add one: create `pkgs/<name>/` with `default.nix` and the config files, register it in `pkgs/default.nix` (`<name> = pkgs.callPackage ./<name> {<name> = prev.<name>;};`: the wrapper shadows the nixpkgs package of the same name and gets that one as an explicit argument), and use it as `pkgs.<name>` (overlay `additions`, applied last). Every derivation of that set is exported as a flake package (`nix build .#<name>`), and so is each event handler as `event-handler-<name>`. Wrapped packages can depend on each other (`hyprland` bundles `waybar`, `rofi`, ...).
 
-Packages: bitwarden-cli, claude, dunst, gh, glab, heroic, hypridle, hyprland, hyprlock, hyprpaper, jujutsu, kanshi, moonlight-qt, obsidian, prismlauncher, rofi, waybar, zellij, zen-browser.
+Packages: bitwarden-cli, claude, dunst, gh, glab, heroic, hypridle, hyprland, hyprlock, hyprpaper, jujutsu, kanshi, moonlight-qt, nats-server, obsidian, prismlauncher, rofi, waybar, zellij, zen-browser.
 
 Apps that keep their state in `$HOME` (`bitwarden-cli`, `gh`, `heroic`, `moonlight-qt`, `obsidian`, `prismlauncher`, `zen-browser`) take an optional `dataDir`: with the default `null` the package is the upstream one unchanged, with `.override {dataDir = "/persist/generated/home/<user>/<app>";}` it is wrapped by `jail`, which points the app's config/data env var (`XDG_CONFIG_HOME`, `GH_CONFIG_DIR`, ...) at that directory so the state lands in a persisted path.
 
