@@ -5,7 +5,6 @@
   ...
 }: let
   cfg = config.services.agents;
-  eventRouter = lib.getExe pkgs.event-router;
 
   # without this shpool types a prompt-setup command into the session's stdin,
   # which for the event handler's sessions is Claude's input; it applies to the
@@ -14,7 +13,7 @@
     prompt_prefix = ""
   '';
 in {
-  options.services.agents.enable = lib.mkEnableOption "the event router, the local NATS server, the event handlers, the knowledge curator timer and the idle Claude session reaper";
+  options.services.agents.enable = lib.mkEnableOption "the local NATS server, the event handlers, the knowledge curator timer and the idle Claude session reaper";
 
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [pkgs.shpool pkgs.natscli];
@@ -41,20 +40,6 @@ in {
           KillMode = "mixed";
           TimeoutStopSec = "2s";
           SendSIGHUP = true;
-        };
-      };
-
-      event-router = {
-        description = "Dispatch events to handlers";
-        wantedBy = ["default.target"];
-        after = ["graphical-session.target"];
-        serviceConfig = {
-          ExecStart = "${eventRouter} serve";
-          Restart = "on-failure";
-          RestartSec = 10;
-          # handlers may leave detached processes (a notification waiting for
-          # its action); a restart must not take them down
-          KillMode = "process";
         };
       };
 
