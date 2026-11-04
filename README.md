@@ -407,7 +407,7 @@ Encrypted with SOPS using the cluster's age key (`.sops.yaml`); Flux decrypts th
 
 They are generated from Bitwarden by `cluster-secrets-build`, one namespace at a time. The secretspec profile `dijkstra-<ns>` is the Secret `secrets` of namespace `<ns>`, written to `clusters/dijkstra/secrets/<ns>.enc.yaml`. The profile `dijkstra` itself is cluster-level (the age key) and is never rendered.
 
-1. Add the key to `[profiles."dijkstra-<ns>"]` in `secretspec.toml`, e.g. `API_KEY`. Only `[a-z0-9_]` keys are allowed (case aside), and two keys must not differ only by case. As for hosts, a key that only feeds a `composed` key is an input and is not written.
+1. Add the key to `[profiles."dijkstra-<ns>"]` in `secretspec.toml`, e.g. `API_KEY`. Only `[a-z0-9_]` keys are allowed (case aside), and two keys must not differ only by case.
 2. Create the Bitwarden item titled `infra/dijkstra-<ns>/API_KEY` (secretspec escapes a `/` in a profile name, so namespace profiles use `-`).
 3. Run `cluster-secrets-build` and commit `clusters/dijkstra/secrets/`.
 4. Reference it in the manifests as secret `secrets`, key `api_key` (keys are lowercased).
