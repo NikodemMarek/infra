@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "secret-broker"
+version = "0.1.0"
+description = "Run named actions with Bitwarden secrets after approval on a private console"
+requires-python = ">=3.12"
+
+[project.scripts]
+secret-broker = "secret_broker.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.mypy]
+files = ["src"]
+strict = true
+warn_unreachable = true
+disallow_any_explicit = true
+disallow_any_expr = true
+disallow_any_decorated = true
+extra_checks = true
+
+# the only place untyped data (json, toml) enters; everything leaving it is Json
+[[tool.mypy.overrides]]
+module = "secret_broker.data"
+disallow_any_expr = false
