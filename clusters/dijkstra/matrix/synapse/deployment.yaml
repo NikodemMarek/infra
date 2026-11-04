@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: synapse
+  namespace: matrix
+  labels:
+    app: synapse
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: synapse
+  template:
+    metadata:
+      labels:
+        app: synapse
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: triss
+      securityContext:
+        runAsUser: 991
+        runAsGroup: 991
+        fsGroup: 991
+        fsGroupChangePolicy: OnRootMismatch
+      volumes:
+        - name: config
+          configMap:
+            name: synapse-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: synapse-data
+        - name: secrets
+          secret:
+            secretName: secrets
+            items:
+              - key: registration_shared_secret
+                path: registration_shared_secret
+            defaultMode: 0440
+      containers:
+        - name: synapse
+          image: ghcr.io/element-hq/synapse:v1.164.2@sha256:f0df87cff259872637b4b5e5174b9977e5e3046dd421505407803b5e45c5f842
+          command:
+            - sh
+            - -c
+            - python -m synapse.app.homeserver -c /config/homeserver.yaml --generate-keys && exec python -m synapse.app.homeserver -c /config/homeserver.yaml
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: matrix-postgres-app
+                  key: password
+          ports:
+            - name: http
+              containerPort: 8008
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: secrets
+              mountPath: /secrets
+              readOnly: true
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "50m"
+            limits:
+              memory: "1Gi"
