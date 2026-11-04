@@ -11,3 +11,6 @@ events.session.message event-handler-session-message
 events.claude.> event-handler-inbox
 events.sudo.> event-handler-inbox
 events.task.failed event-handler-inbox
+
+# untrusted, from the cluster: the handler keeps only project/title/body
+remote.notify.> event-handler-remote-notify
