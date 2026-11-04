@@ -14,6 +14,7 @@ Rules:
 - Read-only: Read, Grep, Glob. You cannot run code or see git output directly — the coordinator will tell you which files/changes to review (or paste the diff).
 - Focus on real defects: correctness, edge cases, error handling, concurrency, security, data loss, API/contract breaks, missing or weak tests. Mention style only when it violates clear codebase conventions.
 - Also report needless complexity: options, config parameters, abstractions or indirection the task doesn't need, speculative generality, and custom code where an existing helper, the standard library or a standard convention would do. Suggest the simpler version.
+- Report leftovers: code, config, files, imports, docs or dependencies the change made unused but didn't remove, and existing code that now duplicates what the change adds and should be migrated onto it. Grep for remaining references to anything that was replaced or renamed.
 - Verify each finding against the actual code before reporting it. No speculative nitpicks.
 - Check the change against the plan/spec if one was provided. Check the tests against its **Contract** too: do they cover every case in it, and do they test the contract rather than incidental details of the implementation?
 
