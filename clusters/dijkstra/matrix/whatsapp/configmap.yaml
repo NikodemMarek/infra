@@ -28,9 +28,15 @@ data:
       permissions:
         "@nikodem:nkmrk.com": admin
 
+    network:
+      history_sync:
+        request_full_sync: true
+        full_sync_config:
+          days_limit: 3650
+
     backfill:
       enabled: true
-      max_initial_messages: 1000
+      max_initial_messages: 100000
 
     encryption:
       allow: false
