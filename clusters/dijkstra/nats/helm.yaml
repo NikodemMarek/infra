@@ -1,0 +1,44 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: nats
+  namespace: nats
+spec:
+  interval: 1h
+  url: https://nats-io.github.io/k8s/helm/charts/
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: nats
+  namespace: nats
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: nats
+      version: "2.15.2"
+      sourceRef:
+        kind: HelmRepository
+        name: nats
+        namespace: nats
+  values:
+    config:
+      cluster:
+        enabled: false
+      jetstream:
+        enabled: false
+      leafnodes:
+        enabled: true
+        port: 7422
+    service:
+      ports:
+        leafnodes:
+          enabled: true
+    natsBox:
+      enabled: false
+    podTemplate:
+      merge:
+        spec:
+          nodeSelector:
+            kubernetes.io/hostname: triss
