@@ -78,6 +78,13 @@ Cluster access: the dev shell sets `KUBECONFIG` to `kubeconfig.yaml` in the `def
    install-remote <name> root@<ip>
    ```
    It builds the host's secrets, copies the host key to `/persist/data/etc/ssh/ssh_host_ed25519_key` on the new disk and runs nixos-anywhere with the disko script and the toplevel as store paths.
+7. For a k3s node, join tailscale by hand. k3s keeps restarting until the node is logged in, and each start runs `tailscale up` with its placeholder `--vpn-auth` key (ignored once logged in), so stop it while joining:
+   ```sh
+   sudo systemctl stop k3s
+   sudo tailscale up --auth-key=<key>
+   sudo systemctl start k3s
+   ```
+   Generate the key in the Tailscale console (Settings > Keys): single use, 1-day expiry, tag `tag:server`. Tagged nodes don't expire, and the policy auto-approves the pod CIDR route k3s advertises. Add the node's tailscale IP to `ips` in `host/features/optional/k3s.nix`.
 
 ## Updating hosts
 
@@ -98,7 +105,7 @@ Modules never talk to sops directly. They go through a small contract:
 - `secretspec.toml` is the inventory. The profile named after the host lists its secrets as uppercased names. Evaluation fails if the secrets used by modules and the profile diverge (missing, unused or badly named; names match `^[a-z0-9_]+$`). Secrets with another `profile` must exist in that profile, which is not required to be used completely by the host.
 - The values live in Bitwarden, folder `infra/<profile>` (`bw://?folder=infra/{profile}`).
 
-`secrets-build <outdir> <host...>` exports each profile with `secretspec`, keeps exactly the secrets the config declares, verifies that ssh private keys match the `.pub` files in the repo and that the host's age key (and `FLUX_SOPS_AGE_KEY`, where a host gets it) matches `.sops.yaml`, hashes `USERS_*_PASSWORD` entries (login passwords) with `mkpasswd`, and writes `<outdir>/<host>.yaml` encrypted for the host (plaintext never touches disk). Keys marked `composed` in `secretspec.toml` (e.g. `K3S_VPN_AUTH`) are assembled from other keys; the inputs are not written.
+`secrets-build <outdir> <host...>` exports each profile with `secretspec`, keeps exactly the secrets the config declares, verifies that ssh private keys match the `.pub` files in the repo and that the host's age key (and `FLUX_SOPS_AGE_KEY`, where a host gets it) matches `.sops.yaml`, hashes `USERS_*_PASSWORD` entries (login passwords) with `mkpasswd`, and writes `<outdir>/<host>.yaml` encrypted for the host (plaintext never touches disk). Keys marked `composed` in `secretspec.toml` (e.g. `CLOUD` in `dijkstra-velero`) are assembled from other keys; the inputs are not written.
 
 The `secrets` flake input is `path:./secrets-stub`, a placeholder with no sops files. Every script that builds a host passes `--override-input secrets path:<outdir>`; to build by hand:
 
@@ -212,7 +219,7 @@ Own programs that are not wrappers of an upstream package. They are top-level at
 | `triss` | server (traefik and cloud controller disabled) |
 | `roach`, `regis` | agents, join `triss` through its tailscale address |
 
-Node config is in `host/features/optional/k3s.nix` plus the per-host `services.k3s` blocks. The token and tailscale join key come from Bitwarden (`K3S_TOKEN`, `K3S_TAILSCALE_AUTH_KEY`). `roach` and `regis` also export NFS (`nfs.nix`), used for app volumes.
+Node config is in `host/features/optional/k3s.nix` plus the per-host `services.k3s` blocks. The token comes from Bitwarden (`K3S_TOKEN`). `roach` and `regis` also export NFS (`nfs.nix`), used for app volumes.
 
 The age key Flux decrypts sops manifests with is applied as `flux-system/sops-age` by the k3s server (`services.flux-sops-age`, `modules/host/flux-sops-age.nix`). It is the Bitwarden item `infra/dijkstra/FLUX_SOPS_AGE_KEY` (profile `dijkstra`) and must match `&dijkstra_cluster` in `.sops.yaml`, which the unit checks before applying. Enable it only on the k3s server: moving the server role means moving the flag.
 

@@ -1,5 +1,4 @@
 {
-  config,
   lib,
   pkgs,
   ...
@@ -61,15 +60,7 @@
   services.k3s = {
     role = "server";
     images = [pkgs.tm-image];
-    extraFlags = toString [
-      "--kube-proxy-arg=proxy-mode=nftables"
-      "--vpn-auth-file=${config.secrets.k3s_vpn_auth.path}"
-      "--node-external-ip=100.97.10.25"
-      "--node-ip=100.97.10.25"
-      "--kubelet-arg=node-ip=100.97.10.25"
-
-      "--advertise-address=100.97.10.25"
-
+    extraFlags = [
       "--disable=traefik"
       "--disable-cloud-controller"
     ];

@@ -1,4 +1,4 @@
-{config, ...}: {
+{...}: {
   imports = [
     ./hardware-configuration.nix
 
@@ -78,13 +78,5 @@
     }
   ];
 
-  services.k3s = {
-    role = "agent";
-    serverAddr = "https://100.97.10.25:6443";
-    extraFlags = toString [
-      "--kube-proxy-arg=proxy-mode=nftables"
-      "--vpn-auth-file=${config.secrets.k3s_vpn_auth.path}"
-      "--node-external-ip=100.109.230.83"
-    ];
-  };
+  services.k3s.role = "agent";
 }

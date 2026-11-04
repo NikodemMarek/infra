@@ -1,8 +1,4 @@
-{
-  config,
-  pkgs,
-  ...
-}: {
+{pkgs, ...}: {
   imports = [
     ./hardware-configuration.nix
 
@@ -54,18 +50,5 @@
     wait-online.enable = false;
   };
 
-  services.k3s = {
-    role = "agent";
-    serverAddr = "https://100.97.10.25:6443";
-    extraFlags = toString [
-      "--kube-proxy-arg=proxy-mode=nftables"
-      "--vpn-auth-file=${config.secrets.k3s_vpn_auth.path}"
-      "--node-external-ip=100.100.215.91"
-      "--node-ip=100.100.215.91"
-      "--kubelet-arg=node-ip=100.100.215.91"
-      "--bind-address=100.100.215.91"
-      "--flannel-iface=tailscale0"
-      "--disable-apiserver-lb"
-    ];
-  };
+  services.k3s.role = "agent";
 }
