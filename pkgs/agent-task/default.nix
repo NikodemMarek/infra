@@ -4,13 +4,13 @@
   wl-clipboard,
   grim,
   slurp,
-  curl,
+  event-bus,
   jq,
   libnotify,
   coreutils,
   findutils,
 }:
-# Quick capture of a task for the event router: a rofi prompt, optionally after a
+# Quick capture of a task for the event bus: a rofi prompt, optionally after a
 # slurp screenshot (--shot) and with the clipboard image attached on Ctrl+Enter. Posts
 # `task.new` and exits; the images stay in $XDG_RUNTIME_DIR/agent-task/ for the session.
 writeShellApplication {
@@ -20,7 +20,7 @@ writeShellApplication {
     wl-clipboard
     grim
     slurp
-    curl
+    event-bus
     jq
     libnotify
     coreutils
@@ -97,8 +97,7 @@ writeShellApplication {
           {type: "task.new"}
           + (if $prompt == "" then {} else {prompt: $prompt} end)
           + {images: $ARGS.positional}' --args "''${images[@]}" |
-      curl -fsS --noproxy '*' -m 5 -H 'Content-Type: application/json' --data-binary @- \
-        "''${EVENT_ROUTER_URL:-http://127.0.0.1:7531}/events" 2>&1 >/dev/null); then
+      event-pub task.new 2>&1 >/dev/null); then
       notify-send -u critical "Task not sent" "$err"
       exit 1
     fi

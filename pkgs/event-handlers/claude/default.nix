@@ -7,7 +7,7 @@
   jq,
   util-linux,
   coreutils,
-  curl,
+  event-bus,
   glab,
   jujutsu,
   claude,
@@ -113,10 +113,8 @@ let
                 echo "text: $text"
                 exit 0
               fi
-              if ! jq -c '{type: "session.message", to: .to, from: "gitlab", text: .text}' <<<"$out" |
-                curl -fsS --noproxy '*' -m 5 -H 'Content-Type: application/json' --data-binary @- \
-                  "''${EVENT_ROUTER_URL:-http://127.0.0.1:7531}/events" >/dev/null; then
-                echo "cannot post the message for session $to to the event router" >&2
+              if ! jq -c '{to: .to, from: "gitlab", text: .text}' <<<"$out" | event-pub session.message >/dev/null; then
+                echo "cannot publish the message for session $to" >&2
                 exit 1
               fi
               jq --arg title "sent to the running Claude session $to" '.title = $title' <<<"$event" | ${lib.getExe notify}
@@ -233,7 +231,7 @@ writeShellApplication {
     jq
     util-linux
     coreutils
-    curl
+    event-bus
     glab
     claude
   ] ++ extraPackages;
@@ -260,7 +258,7 @@ writeShellApplication {
     fi
     name=$(jq -r --arg repo "$repo" '"\($repo)\(if .target_iid then "-\(.target_iid)" else "" end)-\(.type | split(".") | last)" | gsub("[^A-Za-z0-9_.-]"; "-")' <<<"$event")
     host=$(jq -r '.host // ""' <<<"$event")
-    # the router sets ER_TYPE; sessions started here submit knowledge as untrusted
+    # event-subscribe sets ER_TYPE; sessions started here submit knowledge as untrusted
     origin="event:''${ER_TYPE:-unknown}"
     # the handler variant `name` is the origin kind that agent-inbox tabs match on
     claude_origin=$(jq -c --arg kind ${lib.escapeShellArg name} '(.raw.target // .raw.merge_request // {}) as $t | {kind:$kind, iid:.target_iid, target:.target_type, title, url, description:(($t.description // "")[0:8000])} | with_entries(select(.value != null and .value != ""))' <<<"$event")

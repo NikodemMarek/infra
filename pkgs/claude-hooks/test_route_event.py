@@ -1,9 +1,8 @@
 import io
 import json
 import os
-import threading
+import tempfile
 import unittest
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
 
 from route_event import enrich, event_type, main, title
@@ -128,50 +127,67 @@ class Enrich(unittest.TestCase):
 
 
 class Main(unittest.TestCase):
-    def run_main(self, stdin, url="http://127.0.0.1:1"):
-        out = io.StringIO()
-        with (mock.patch("sys.argv", ["claude-route-event"]),
+    def fake_pub(self, code=0, stderr=""):
+        """Temp dir with a fake event-pub recording argv and stdin; returns the dir."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, "event-pub")
+        with open(path, "w") as f:
+            f.write(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > '{tmp.name}/argv'\ncat > '{tmp.name}/stdin'\n"
+                    f"echo '{stderr}' >&2\nexit {code}\n")
+        os.chmod(path, 0o755)
+        return tmp.name
+
+    def run_main(self, stdin, path_dir=None, argv=("claude-route-event",)):
+        """Returns (exit code, stderr); stdout must stay empty. PATH holds only path_dir
+        (plus the system dirs of sh/cat for the fake)."""
+        out, err = io.StringIO(), io.StringIO()
+        path = os.pathsep.join([path_dir, os.environ["PATH"]]) if path_dir else "/nonexistent-bin"
+        with (mock.patch("sys.argv", list(argv)),
               mock.patch("sys.stdin", io.StringIO(stdin)),
               mock.patch("sys.stdout", out),
-              mock.patch("sys.stderr", io.StringIO()),
-              mock.patch.dict(os.environ, {"EVENT_ROUTER_URL": url, "SHPOOL_SESSION_NAME": "",
+              mock.patch("sys.stderr", err),
+              mock.patch.dict(os.environ, {"PATH": path, "SHPOOL_SESSION_NAME": "",
                                            "CLAUDE_ORIGIN_FILE": ""})):
             code = main()
         self.assertEqual(out.getvalue(), "")
-        return code
+        return code, err.getvalue()
 
     def test_invalid_input(self):
         for stdin in ("[]", ""):
-            self.assertEqual(self.run_main(stdin), 1)
+            self.assertEqual(self.run_main(stdin, self.fake_pub())[0], 1)
 
-    def test_unreachable_router(self):
-        self.assertEqual(self.run_main("{}"), 1)
+    def test_missing_event_pub(self):
+        code, err = self.run_main("{}")
+        self.assertEqual(code, 1)
+        self.assertIn(f"claude-route-event: cannot publish {PERM}", err)
 
-    def test_posts_enriched_event(self):
-        bodies = []
+    def test_failing_event_pub(self):
+        d = self.fake_pub(1, "boom")
+        code, err = self.run_main("{}", d)
+        self.assertEqual(code, 1)
+        self.assertIn(f"claude-route-event: cannot publish {PERM}: ", err)
+        self.assertIn("boom", err)
+        self.assertEqual(len(err.strip().splitlines()), 1, err)
 
-        class Handler(BaseHTTPRequestHandler):
-            def do_POST(self):
-                bodies.append((self.path, json.loads(self.rfile.read(int(self.headers["Content-Length"])))))
-                self.send_response(204)
-                self.end_headers()
-
-            def log_message(self, *args):
-                pass
-
-        server = HTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=server.serve_forever)
-        thread.start()
-        try:
-            code = self.run_main('{"cwd": "/nonexistent", "tool_name": "Read"}',
-                                 f"http://127.0.0.1:{server.server_port}")
-        finally:
-            server.shutdown()
-            server.server_close()
-            thread.join()
+    def test_publishes_enriched_event(self):
+        d = self.fake_pub()
+        code, _ = self.run_main('{"cwd": "/nonexistent", "tool_name": "Read"}', d)
         self.assertEqual(code, 0)
-        self.assertEqual(bodies, [("/events", {"cwd": "/nonexistent", "tool_name": "Read", "type": PERM,
-                                               "project": "nonexistent", "title": "Read"})])
+        with open(os.path.join(d, "argv")) as f:
+            self.assertEqual(f.read(), PERM + "\n")
+        with open(os.path.join(d, "stdin")) as f:
+            self.assertEqual(json.load(f), {"cwd": "/nonexistent", "tool_name": "Read", "type": PERM,
+                                            "project": "nonexistent", "title": "Read"})
+
+    def test_explicit_type_is_the_argument(self):
+        d = self.fake_pub()
+        code, _ = self.run_main('{"title": "T"}', d, ("claude-route-event", "sudo.password_request"))
+        self.assertEqual(code, 0)
+        with open(os.path.join(d, "argv")) as f:
+            self.assertEqual(f.read(), "sudo.password_request\n")
+        with open(os.path.join(d, "stdin")) as f:
+            self.assertEqual(json.load(f)["type"], "sudo.password_request")
 
 
 if __name__ == "__main__":

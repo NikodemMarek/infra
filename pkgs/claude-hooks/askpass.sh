@@ -1,4 +1,4 @@
-# SUDO_ASKPASS helper: routes the password request to the user via the event router and waits
+# SUDO_ASKPASS helper: publishes the password request as an event (agent-inbox shows it) and waits
 # for the answer on a reply FIFO (the handler writes the password to it). stdout carries only the password.
 # Deliberately no errexit (the package sets only nounset + pipefail): every failure maps to exit 1.
 limit=110

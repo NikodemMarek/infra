@@ -18,12 +18,11 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
-import urllib.request
 
 ROOT = os.path.expanduser("~/projects")
 FZF = "fzf"  # the nix package pins the store paths
 SHPOOL = "shpool"
+EVENT_PUB = "event-pub"  # the nix package pins it
 BASH = "bash"
 KNOWLEDGE = "knowledge"  # the nix package pins it
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -765,17 +764,14 @@ def cmd_pick(a):
 
 
 def post_event(event):
-    """POST event to the event router; Fail says why not."""
-    url = os.environ.get("EVENT_ROUTER_URL", "http://127.0.0.1:7531") + "/events"
-    req = urllib.request.Request(url, data=json.dumps(event).encode(), method="POST",
-                                 headers={"Content-Type": "application/json"})
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never through $http_proxy
+    """Publish event with event-pub; Fail says why not."""
     try:
-        opener.open(req, timeout=5).close()
-    except urllib.error.HTTPError as e:
-        raise Fail(f"event router: {e.code} {e.read().decode(errors='replace').strip()}")
-    except OSError as e:  # URLError and timeouts
-        raise Fail(f"event router: {e}")
+        p = subprocess.run([EVENT_PUB, event["type"]], input=json.dumps(event), text=True,
+                           capture_output=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise Fail(f"event-pub: {e}")
+    if p.returncode != 0:
+        raise Fail(p.stderr.strip() or f"event-pub exited with {p.returncode}")
 
 
 def sender():

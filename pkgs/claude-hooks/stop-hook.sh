@@ -4,7 +4,7 @@
 # text), then the messages inline; stdout is used only for this decision. Otherwise, in sessions with an
 # origin (CLAUDE_ORIGIN_FILE: started by `jw agent` or an event), tells the user the session waits for them:
 # posts claude.waiting (notification + agent-inbox), titled with the first line of the last message.
-# `key` = session id, so the router keeps one item per session (replaced every turn). Never blocks
+# `key` = session id, so the inbox keeps one item per session (replaced every turn). Never blocks
 # otherwise: always exit 0.
 # always read all of stdin first, so Claude Code never gets EPIPE on a large input
 input=$(cat)

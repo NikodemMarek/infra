@@ -4,6 +4,7 @@
   writeShellApplication,
   jq,
   jw,
+  event-bus,
   coreutils,
   git,
   util-linux,
@@ -73,8 +74,7 @@ let
     ];
   };
 
-  # Posts to the event router over plain HTTP: depending on pkgs.event-router would be a dependency cycle
-  # (event-router -> handlers -> claude -> claude-hooks). Never fails with exit 2 (blocking code).
+  # Publishes with event-pub. Never fails with exit 2 (blocking code).
   routeEvent = stdenvNoCC.mkDerivation {
     pname = "claude-route-event";
     version = "0.1.0";
@@ -96,14 +96,19 @@ let
       install -Dm755 ${./route_event.py} $out/bin/claude-route-event
       substituteInPlace $out/bin/claude-route-event \
         --replace-fail "#!/usr/bin/env python3" "#!${python3}/bin/python3"
-      wrapProgram $out/bin/claude-route-event --suffix PATH : ${lib.makeBinPath [ jw ]}
+      wrapProgram $out/bin/claude-route-event --suffix PATH : ${
+          lib.makeBinPath [
+            jw
+            event-bus
+          ]
+        }
       runHook postInstall
     '';
 
     meta.mainProgram = "claude-route-event";
   };
 
-  # SUDO_ASKPASS helper: asks the user through the event router, answer comes back on a FIFO.
+  # SUDO_ASKPASS helper: asks the user through agent-inbox, answer comes back on a FIFO.
   askpass = shellHook {
     name = "claude-askpass";
     src = ./askpass.sh;
