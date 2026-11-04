@@ -25,26 +25,16 @@
 
   networking = {
     firewall.trustedInterfaces = ["virbr0"];
-    nftables.ruleset = ''
-      table inet libvirt-filter {
-        chain input {
-          type filter hook input priority -20; policy accept;
-          iifname "virbr0" accept comment "Trusted libvirt interfaces"
-        }
-
-        chain forward {
-          type filter hook forward priority -20; policy accept;
-          iifname "virbr0" accept comment "Allow VM traffic to internet"
-        }
-      }
-
-      table ip libvirt-nat {
-        chain postrouting {
-          type nat hook postrouting priority srcnat; policy accept;
-          ip saddr 192.168.122.0/24 oifname != "virbr0" masquerade
-        }
-      }
-    '';
+    nftables.tables = {
+      libvirt-filter = {
+        family = "inet";
+        content = builtins.readFile ./libvirt-filter.nft;
+      };
+      libvirt-nat = {
+        family = "ip";
+        content = builtins.readFile ./libvirt-nat.nft;
+      };
+    };
   };
 
   persist.generated.directories = [

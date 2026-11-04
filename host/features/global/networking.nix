@@ -8,7 +8,12 @@
     enableIPv6 = true;
 
     firewall.enable = true;
-    nftables.enable = true;
+    nftables = {
+      enable = true;
+      # A reload replaces only the tables NixOS declares; a flush would also wipe docker, libvirt, k3s and tailscale rules.
+      # So add rules through networking.nftables.tables, never .ruleset (it isn't deleted on reload and turns flushing back on).
+      flushRuleset = false;
+    };
   };
 
   boot.kernel.sysctl = {

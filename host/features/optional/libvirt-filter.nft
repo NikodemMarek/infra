@@ -1,0 +1,9 @@
+chain input {
+  type filter hook input priority -20; policy accept;
+  iifname "virbr0" accept comment "Trusted libvirt interfaces"
+}
+
+chain forward {
+  type filter hook forward priority -20; policy accept;
+  iifname "virbr0" accept comment "Allow VM traffic to internet"
+}
