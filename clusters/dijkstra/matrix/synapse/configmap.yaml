@@ -54,4 +54,5 @@ data:
         cp_min: 2
         cp_max: 5
 
-    app_service_config_files: []
+    app_service_config_files:
+      - /secrets/whatsapp_registration
