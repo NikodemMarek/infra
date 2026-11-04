@@ -7,6 +7,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from .bus import Bus
 from .data import ParseError, dumps, loads
 from .event import Event
 from .handlers import Dispatcher
@@ -22,7 +23,9 @@ INBOX_PATH = "/inbox"
 LOCAL_HOST = re.compile(r"(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?", re.IGNORECASE)
 
 
-def _handler(dispatcher: Dispatcher, inbox: Inbox) -> type[BaseHTTPRequestHandler]:
+def _handler(
+    dispatcher: Dispatcher, inbox: Inbox, bus: Bus | None
+) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code: int, body: bytes, content_type: str) -> None:
             self.send_response(code)
@@ -45,7 +48,10 @@ def _handler(dispatcher: Dispatcher, inbox: Inbox) -> type[BaseHTTPRequestHandle
             if not self._host_ok():
                 return
             if self.path == "/health":
-                self._reply(200, "ok")
+                if bus is None or bus.healthy():
+                    self._reply(200, "ok")
+                else:
+                    self._reply(503, "event bus down")
             elif self.path == INBOX_PATH:
                 body = dumps([i.to_json() for i in inbox.items(time.time())])
                 self._send(200, body.encode(), "application/json")
@@ -89,7 +95,13 @@ def _handler(dispatcher: Dispatcher, inbox: Inbox) -> type[BaseHTTPRequestHandle
             queued = inbox.add(event, time.time()) is not None
             dispatched = dispatcher.dispatch(event)
             if queued or dispatched:
-                self._reply(202, "accepted")
+                try:
+                    self._reply(202, "accepted")
+                finally:
+                    # after the reply: the bus must never add latency to the POST,
+                    # and the event is logged even if the client already hung up
+                    if bus is not None:
+                        bus.publish(event)
             else:
                 self._reply(500, f"no runnable handler for {event.describe()}")
 
@@ -106,12 +118,14 @@ def _reaper(dispatcher: Dispatcher) -> None:
         dispatcher.reap()
 
 
-def make_server(port: int, dispatcher: Dispatcher, inbox: Inbox) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer(("127.0.0.1", port), _handler(dispatcher, inbox))
+def make_server(
+    port: int, dispatcher: Dispatcher, inbox: Inbox, bus: Bus | None = None
+) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer(("127.0.0.1", port), _handler(dispatcher, inbox, bus))
 
 
-def serve(port: int, dispatcher: Dispatcher, inbox: Inbox) -> None:
-    server = make_server(port, dispatcher, inbox)
+def serve(port: int, dispatcher: Dispatcher, inbox: Inbox, bus: Bus | None = None) -> None:
+    server = make_server(port, dispatcher, inbox, bus)
     threading.Thread(target=_reaper, args=(dispatcher,), daemon=True).start()
     log.info("listening on 127.0.0.1:%d", port)
     try:

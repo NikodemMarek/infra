@@ -8,6 +8,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from .bus import DEFAULT_URL, Bus
 from .data import Obj, ParseError, as_obj, loads, read_stdin
 from .event import Event
 from .handlers import Dispatcher
@@ -59,6 +60,13 @@ def _emit(type_: str) -> None:
         pass
 
 
+def bus_down_event(reason: str) -> Event:
+    type_ = "event_router.bus_down"
+    return Event(
+        type_, {"type": type_, "project": "event-router", "title": f"event bus down: {reason}"}
+    )
+
+
 def main() -> None:
     args = _parser().parse_args(namespace=Args())
     logging.basicConfig(
@@ -82,8 +90,17 @@ def main() -> None:
         return
 
     handlers = os.environ.get("EVENT_ROUTER_HANDLERS")
+    inbox = Inbox([t for t in os.environ.get("EVENT_ROUTER_INBOX", "").split(",") if t])
+    dispatcher = Dispatcher(Path(handlers) if handlers else None)
+
+    def on_down(reason: str) -> None:
+        dispatcher.dispatch_default(bus_down_event(reason))
+
+    bus = Bus(os.environ.get("EVENT_ROUTER_NATS") or DEFAULT_URL, on_down=on_down)
+    bus.start()
     try:
-        inbox = Inbox([t for t in os.environ.get("EVENT_ROUTER_INBOX", "").split(",") if t])
-        serve(_port(), Dispatcher(Path(handlers) if handlers else None), inbox)
+        serve(_port(), dispatcher, inbox, bus)
     except KeyboardInterrupt:
         pass
+    finally:
+        bus.close()
