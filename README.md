@@ -1,4 +1,4 @@
-# dotfiles
+# infra
 
 Nix flake monorepo: NixOS hosts, the packages and wrappers they use, and the manifests of the k3s cluster (`dijkstra`) that some of those hosts form. Hosts are impermanent (root is wiped on boot), secrets live in Bitwarden and are turned into sops files at build time, and the cluster is reconciled by Flux.
 
@@ -19,7 +19,7 @@ host/
     global/            always on: networking, nix, openssh, sops
     optional/          opt-in features: k3s, tailscale, docker, libvirt, maintenance, ...
     disko/             disk layouts, parametrised by device (and swap size)
-modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-notifier.nix, flux-sops-age.nix, event-router.nix (the router user service, the knowledge curator timer and the shpool user service)
+modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-notifier.nix, flux-sops-age.nix, event-router.nix (the router user service, the knowledge curator timer, the `jw-reap` timer that stops idle agent sessions, and the shpool user service)
 pkgs/                  wrapped packages (package + bundled config) and own tools (pkgs/agent-skills/skills: Agent Skills, shared by claude and agent-skills)
 overlays/              exposes pkgs/ (the wrapped packages, shadowing the nixpkgs ones, and the tools), flake inputs as packages, deploy-rs
 clusters/dijkstra/     Kubernetes manifests, reconciled by Flux
@@ -32,8 +32,8 @@ tailscale/policy.json  tailnet policy
 |------|------|------|
 | `yenn` | x86_64 | laptop/desktop (Hyprland), LUKS + btrfs. Not a deploy node, rebuilt with `host-switch` |
 | `geralt` | x86_64 | headless game streaming (Wolf + Moonlight), docker, libvirt; usually off, woken over LAN |
-| `roach` | x86_64 | k3s agent, NFS server (media) |
-| `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool` + data pool `tank`), NFS, Garage (S3 for Velero) |
+| `roach` | x86_64 | k3s agent |
+| `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool` + data pool `tank`), NFS server, Garage (S3 for Velero) |
 | `triss` | aarch64 | k3s server (control plane), qemu/virtio guest |
 | `alp` | x86_64 | installer ISO, not in `nixosConfigurations` (see `mkiso`) |
 
@@ -70,10 +70,10 @@ Cluster access: the dev shell sets `KUBECONFIG` to `kubeconfig.yaml` in the `def
    ssh-keygen -t ed25519 -N "" -f host/<name>/ssh_host_ed25519_key
    ssh-to-age < host/<name>/ssh_host_ed25519_key.pub
    ```
-   Commit only the `.pub` (the host config reads it). The private half goes to Bitwarden as `HOST_SSH_ED25519_PRIV` (see Secrets). It is not tracked and not git-ignored, so delete the local file after installing.
+   Commit only the `.pub` (the host config reads it). The private half goes to Bitwarden as `HOST_SSH_ED25519_PRIV` (see Secrets). The private key is git-ignored (`host/*/ssh_host_ed25519_key`), but delete the local file after installing.
 3. Put the age key in `.sops.yaml` (an anchor under `&hosts` and a `host/<name>/.+$` creation rule) and add a `[profiles.<name>]` to `secretspec.toml` with the host's items in Bitwarden.
 4. Boot the target from the ISO: `mkiso`, then `writeiso /dev/sdX`. The ISO joins tailscale with an auth key read from `host/alp/key` (git-ignored, create it in the Tailscale console) and accepts the key of `yenn`'s user over ssh.
-5. Put a disk key at `host/<name>/disk.key`. `install-remote` insists on it and passes it to nixos-anywhere as `/tmp/disk.key`; it is not tracked. Only layouts that reference that path use it: `regis`'s `tank` pool (raw key, `dd if=/dev/urandom of=host/regis/disk.key bs=32 count=1`). For such a host, uncomment the zfs lines in `install-remote` (`devenv.nix`) so the key is also copied to `/persist/data/etc/zfs/disk.key`. For other hosts any file will do.
+5. For a host with a ZFS pool, put a disk key at `host/<name>/disk.key` (git-ignored; `regis`'s `tank` pool uses a raw key, `dd if=/dev/urandom of=host/regis/disk.key bs=32 count=1`). `install-remote` requires it only if the host's disko config has a zpool: it passes it to nixos-anywhere as `/tmp/disk.key` and also copies it to `/persist/data/etc/zfs/disk.key`. Other hosts need no disk key.
 6. Install:
    ```sh
    install-remote <name> root@<ip>
@@ -101,10 +101,10 @@ host-deploy geralt roach
 
 Modules never talk to sops directly. They go through a small contract:
 
-- `modules/host/secrets.nix` defines `config.secrets.<name>` with `owner`, `group`, `mode`, `neededForUsers` and `path` (defaults to `/run/secrets/<name>`). Consumers read only `config.secrets.<name>.path`. `profile` (default: the host's name) names the secretspec profile that holds the secret, for one that lives elsewhere, e.g. `profile = "dijkstra"` for a cluster-wide secret (Bitwarden folder `infra/dijkstra`).
+- `modules/host/secrets.nix` defines `config.secrets.<name>` with `owner`, `group`, `mode`, `neededForUsers` and `path` (defaults to `/run/secrets/<name>`). Consumers read only `config.secrets.<name>.path`. `profile` (default: the host's name) names the secretspec profile that holds the secret, for one that lives elsewhere, e.g. `profile = "dijkstra"` for a cluster-wide secret (Bitwarden items titled `infra/dijkstra/<KEY>`).
 - `host/features/global/sops.nix` is the only place that knows the provider is sops-nix: it maps every `config.secrets` entry to `sops.secrets` and reads `<host>.yaml` from the `secrets` flake input. The age identity is `/persist/data/etc/ssh/ssh_host_ed25519_key`.
 - `secretspec.toml` is the inventory. The profile named after the host lists its secrets as uppercased names. Evaluation fails if the secrets used by modules and the profile diverge (missing, unused or badly named; names match `^[a-z0-9_]+$`). Secrets with another `profile` must exist in that profile, which is not required to be used completely by the host.
-- The values live in Bitwarden, folder `infra/<profile>` (`bw://?folder=infra/{profile}`).
+- The values live in Bitwarden, one item per secret titled `infra/<profile>/<KEY>` (`bw://?folder=infra/{profile}` is a prefix of the item title, there are no Bitwarden folders).
 
 `secrets-build <outdir> <host...>` exports each profile with `secretspec`, keeps exactly the secrets the config declares, verifies that ssh private keys match the `.pub` files in the repo and that the host's age key (and `FLUX_SOPS_AGE_KEY`, where a host gets it) matches `.sops.yaml`, hashes `USERS_*_PASSWORD` entries (login passwords) with `mkpasswd`, and writes `<outdir>/<host>.yaml` encrypted for the host (plaintext never touches disk). Keys marked `composed` in `secretspec.toml` (e.g. `CLOUD` in `dijkstra-velero`) are assembled from other keys; the inputs are not written.
 
@@ -133,7 +133,7 @@ nixos-rebuild build --flake .#geralt --override-input secrets path:/tmp/s
    [profiles.geralt]
    MYSERVICE_TOKEN = { description = "myservice API token", required = true }
    ```
-3. Create the matching item in Bitwarden, folder `infra/geralt`.
+3. Create the matching item in Bitwarden, titled `infra/geralt/MYSERVICE_TOKEN`.
 4. Check that the config and the inventory agree, then apply:
    ```sh
    nix eval .#nixosConfigurations.geralt.config.secrets --apply builtins.attrNames
@@ -169,10 +169,14 @@ persist.users.nikodem.generated.files = [ ".ssh/known_hosts" ];
 `pkgs/<name>/default.nix` wraps an upstream package together with its config, so the config travels with the package instead of living in `$HOME`. The pattern is `symlinkJoin` + `makeWrapper`, with the config copied into `$out`:
 
 ```nix
-{pkgs, ...}:
+{
+  pkgs,
+  rofi,
+  ...
+}:
 pkgs.symlinkJoin {
   name = "rofi";
-  paths = [pkgs.rofi];
+  paths = [rofi];
   buildInputs = [pkgs.makeWrapper];
   postBuild = ''
     wrapProgram $out/bin/rofi \
@@ -185,15 +189,17 @@ pkgs.symlinkJoin {
 }
 ```
 
-Pointing the program at its config is done with a flag (rofi) or an env var (`hyprpaper` sets `XDG_CONFIG_HOME=$out/.config`). To add one: create `pkgs/<name>/` with `default.nix` and the config files, register it in `pkgs/default.nix` (`<name> = pkgs.callPackage ./<name> {<name> = prev.<name>;};`: the wrapper shadows the nixpkgs package of the same name and gets that one as an explicit argument), and use it as `pkgs.<name>` (overlay `additions`, applied last). The same set is exported as flake `packages`, so `nix build .#<name>` works. Wrapped packages can depend on each other (`hyprland` bundles `waybar`, `rofi`, ...).
+Pointing the program at its config is done with a flag (rofi) or an env var (`hyprpaper` sets `XDG_CONFIG_HOME=$out/.config`). To add one: create `pkgs/<name>/` with `default.nix` and the config files, register it in `pkgs/default.nix` (`<name> = pkgs.callPackage ./<name> {<name> = prev.<name>;};`: the wrapper shadows the nixpkgs package of the same name and gets that one as an explicit argument), and use it as `pkgs.<name>` (overlay `additions`, applied last). Every derivation of that set is exported as a flake package (`nix build .#<name>`), and so is each event handler as `event-handler-<name>`. Wrapped packages can depend on each other (`hyprland` bundles `waybar`, `rofi`, ...).
 
-Packages: claude, dunst, glab, hypridle, hyprland, hyprlock, hyprpaper, jujutsu, kanshi, rofi, signal-desktop, waybar, zellij.
+Packages: bitwarden-cli, claude, dunst, gh, glab, heroic, hypridle, hyprland, hyprlock, hyprpaper, jujutsu, kanshi, moonlight-qt, obsidian, prismlauncher, rofi, waybar, zellij, zen-browser.
+
+Apps that keep their state in `$HOME` (`bitwarden-cli`, `gh`, `heroic`, `moonlight-qt`, `obsidian`, `prismlauncher`, `zen-browser`) take an optional `dataDir`: with the default `null` the package is the upstream one unchanged, with `.override {dataDir = "/persist/generated/home/<user>/<app>";}` it is wrapped by `jail`, which points the app's config/data env var (`XDG_CONFIG_HOME`, `GH_CONFIG_DIR`, ...) at that directory so the state lands in a persisted path.
 
 `claude` (`pkgs/claude`, no nixpkgs package of that name; it wraps `claude-code`) is Claude Code with its config bundled: `CLAUDE.md`, `agents/`, `settings.nix` and `permissions.nix` live next to `default.nix`, the skills come from the `agent-skills` package (`pkgs/agent-skills/skills/`). It puts the tools below on its `PATH`, taken from the package set, so overriding one of them propagates. The package is customisable with `.extend { skills.foo = ./foo; settings = ...; }` (see `pkgs/claude/README.md`).
 
 ### Tools
 
-Own programs that are not wrappers of an upstream package. They are top-level attributes (`pkgs.<name>`, `nix build .#<name>`):
+Own programs that are not wrappers of an upstream package. They are top-level attributes (`pkgs.<name>`, `nix build .#<name>`; `jail` is a function and not built):
 
 | Package | What it is |
 |---------|------------|
@@ -205,10 +211,15 @@ Own programs that are not wrappers of an upstream package. They are top-level at
 | `claude-statusline` | claude's status line |
 | `agent-skills` | `pkgs/agent-skills/skills/` in the Agent Skills format, to link into the skills directory of other tools (OpenCode, ...) |
 | `event-router` | local HTTP inbox (`event-router emit <type>`) that runs a handler per event type; runs as a systemd user service via the `services.event-router` module. Handlers are the `handlers` argument, extend it with `.override`. Event types listed in the `inbox` argument (prefixes) are also queued in memory: `GET /inbox`, `DELETE /inbox/<id>`; an event with a non-empty string `key` replaces the queued item of the same type and key |
-| `agent-inbox` | terminal UI over the router's queue (`claude.*` and `sudo.*` events; only sessions started by `jw agent` or the GitLab event handler, i.e. with `CLAUDE_ORIGIN_FILE`, hand-started ones get the local dialog only, sudo prompts always route): rows show the MR or task title, the detail pane the MR description or task prompt, `o` opens the MR, Tab (Shift-Tab back) cycles the filter tabs (package arg `tabs`, a list of `{name; kinds ? null;}`) and the Sessions tab (live sessions; `a` attach, `x` kill, Enter their detail): list, inspect, dismiss, answer sudo password requests (written to the askpass FIFO, never through the router) and Claude permission prompts and questions (written to the permission hook's FIFO), attach to an item's shpool session in a zellij tab (`a`); `N` posts a `task.new` to the router to start an agent (an empty task: `jw pick` a repo first, no attach; the session shows up in the Sessions tab, and a task that could not be posted stays in the popup); `task.failed` items show in every tab, `p` picks a repo and sends the task again; also `list`, `reply <id>`, `dismiss <id>` |
+| `agent-inbox` | terminal UI over the router's queue (`claude.*` and `sudo.*` events; only sessions started by `jw agent` or the GitLab event handler, i.e. with `CLAUDE_ORIGIN_FILE`, hand-started ones get the local dialog only, sudo prompts always route): rows show the MR or task title, the detail pane the MR description or task prompt, `o` opens the MR, Tab (Shift-Tab back) cycles the filter tabs (package arg `tabs`, a list of `{name; kinds ? null;}`) and the Sessions tab (live sessions; `a` attach, `x` kill, Enter their detail): list, inspect, dismiss, answer sudo password requests (written to the askpass FIFO, never through the router) and Claude permission prompts and questions (written to the permission hook's FIFO), attach to an item's shpool session in a zellij tab (`a`); `N` posts a `task.new` to the router to start an agent (an empty task: `jw pick` a repo first, no attach; the session shows up in the Sessions tab, and a task that could not be posted stays in the popup); `task.failed` items show in every tab, `p` picks a repo and sends the task again; also `list`, `reply <id>`, `dismiss <id>` and `sessions` (the live sessions as TSV: pid, status, age, shpool session, place, session id) |
 | `tm` | CLI for the markdown task list `$TM_DIR/tasks.md` (`TM_DIR` is required): one rolling backlog where the checkbox is the state (`[ ]` todo, `[/]` doing, `[x]` done). `add`, `start`, `stop`, `done`, `list`, `lint`; edits one line at a time and never moves lines, so untouched lines stay byte-identical. `tm serve` exposes the same commands over HTTP: an MCP server at `https://tasks.nkmrk.com/mcp` and `POST https://tasks.nkmrk.com/api/add` (body = the task text), for full WireGuard peers only |
+| `tm-image` | docker image of `tm serve` (port 8080) for the cluster, built into `triss` (see `tm` on the cluster) |
+| `dictate` | records from the default microphone until Enter, transcribes with the local whisper-server (`host/features/optional/dictate.nix`, `DICTATE_WHISPER_URL`) and prints the text on stdout |
+| `agent-task` | quick capture of a task: a rofi prompt, optionally after a screenshot (`--shot`) and with the clipboard image attached on Ctrl+Enter; posts `task.new` to the router |
+| `jail` | a function, not a package (no `nix build`): `jail <package> {ENV_VAR = "/abs/path";}` wraps every binary so it runs with those env vars set to fixed directories (created 0700), see the `dataDir` apps above |
 | `event-handlers.notify` | router handler: desktop notification with an "Open" action (flake: `event-handler-notify`; `notify-critical` is its critical-urgency variant) |
 | `event-handlers.session-message` | router handler for `session.message {to, from?, text}`: queues the text in `$XDG_RUNTIME_DIR/claude-mail/<to>/queue/`; the Stop and UserPromptSubmit hooks of the session named `to` (workspace dir name in `<repo>.agents/`, else shpool session name) deliver it (flake: `event-handler-session-message`) |
+| `event-handlers.task` | router handler for `task.new {prompt?, repo?, images?}` (posted by `agent-task` and agent-inbox): starts an agent with `jw agent -d` and posts `task.started`, or `task.failed` with what is needed to retry; only images under `$XDG_RUNTIME_DIR/agent-task/` are passed on (flake: `event-handler-task`) |
 | `event-handlers.claude` | GitLab event → Claude session: opens a shpool session (`jw attach <name>`, 1-day TTL; the shpool user service comes from `services.event-router`) with Claude in the project's checkout under `$HOME/<projectsDir>`; if the context tool returns the optional `session` field, it continues the MR's one conversation (resume), and a live session only gets a "queued" notification and picks the update up through its hooks; `contextTool` (a `gitlab-context prepare` compatible package, default none: plain Claude in the main checkout), `extraPackages`, the `gitlab.*` routes and the watcher are supplied by the work layer (flake: `event-handler-claude`) |
 
 ## Infra
@@ -220,7 +231,7 @@ Own programs that are not wrappers of an upstream package. They are top-level at
 | `triss` | server (traefik and cloud controller disabled) |
 | `roach`, `regis` | agents, join `triss` through its tailscale address |
 
-Node config is in `host/features/optional/k3s.nix` plus the per-host `services.k3s` blocks. The token comes from Bitwarden (`K3S_TOKEN`). `roach` and `regis` also export NFS (`nfs.nix`), used for app volumes.
+Node config is in `host/features/optional/k3s.nix` plus the per-host `services.k3s` blocks. The token comes from Bitwarden (`K3S_TOKEN`). `regis` also exports NFS (`nfs.nix`), used for app volumes.
 
 The tailnet policy is `tailscale/policy.json`. Change it in the repo, then paste it into the Tailscale console (Access controls > JSON editor) and save; don't edit it in the console.
 
@@ -232,7 +243,9 @@ Flux is bootstrapped in `clusters/dijkstra/flux-system` (do not edit `gotk-*.yam
 flux reconcile kustomization flux-system --namespace flux-system --with-source
 ```
 
-Each app is a directory: `arrstack` (sonarr, radarr, lidarr, prowlarr, bazarr, qbittorrent (egress via gluetun/Mullvad), beets, flaresolverr), `cert-manager` (Let's Encrypt wildcard for internal HTTPS), `cloudflare` (tunnel; only the hostnames listed in `cloudflared.yaml` are public), `cnpg` (CloudNativePG operator), `cron`, `dns` (split-DNS resolver for nkmrk.com for WireGuard peers, at `10.43.0.53`), `immich` (`photos.nkmrk.com`), `intel-gpu-plugin` (exposes regis's iGPU as `gpu.intel.com/i915`), `jellyfin` (`movies.nkmrk.com`), `keda`, `navidrome` (`music.nkmrk.com`, with audiomuse-ai), `ollama`, `omniverse` (git-sync, webdav, radicale, tasks), `openebs`, `proxy` (traefik, gateway), `shani` (SSH at `shani.nkmrk.com`, full WireGuard peers), `velero`, `wireguard` (WireGuard server on `triss`, egress via Mullvad). Shared: `storageclass.yaml`.
+Each app is a directory: `arrstack` (sonarr, radarr, lidarr, prowlarr, bazarr, qbittorrent (egress via gluetun/Mullvad), beets, flaresolverr), `cert-manager` (Let's Encrypt wildcard for internal HTTPS), `cloudflare` (tunnel; only the hostnames listed in `cloudflared.yaml` are public), `cnpg` (CloudNativePG operator), `cron`, `dns` (split-DNS resolver for nkmrk.com for WireGuard peers, at `10.43.0.53`), `immich` (`photos.nkmrk.com`), `intel-gpu-plugin` (exposes regis's iGPU as `gpu.intel.com/i915`), `jellyfin` (`movies.nkmrk.com`, with seerr at `seerr.nkmrk.com`), `keda`, `navidrome` (`music.nkmrk.com`, with audiomuse-ai), `ollama`, `omniverse` (git-sync, webdav, radicale, tasks), `openebs`, `proxy` (traefik, gateway), `shani` (SSH at `shani.nkmrk.com`, full WireGuard peers), `velero`, `webdav` (books, `books.nkmrk.com`, public through cloudflared), `wireguard` (WireGuard server on `triss`, egress via Mullvad). Shared: `storageclass.yaml`.
+
+The `shani` image is built and imported onto `triss` by hand (the deployment uses `imagePullPolicy: Never`, `clusters/dijkstra/shani/deployment.yaml`), so a new image needs its tag set in the manifest and importing on `triss` before the pod can start.
 
 Services on the gateway's `internal` listener (full WireGuard peers only, HTTPS; `dns` resolves these names to `traefik-internal`): `radicale`, `sonarr`, `radarr`, `lidarr`, `qbittorrent`, `bazarr`, `prowlarr`, `ollama`, `audiomuse-ai`, `tasks` (tm MCP) and `omniverse` (WebDAV), each at `<name>.nkmrk.com`, and immich at `photos.nkmrk.com`. `bazarr` and `prowlarr` go through the KEDA interceptor (`keda/httproute.yaml`), so their host is also listed in their `HTTPScaledObject`. A new internal name needs an HTTPRoute on `sectionName: internal` and an entry in the `dns` Corefile.
 
@@ -373,6 +386,8 @@ Run everything from the workstation (dev shell). `<pod>` is the primary, `kubect
 
 Don't `velero restore` the `immich` namespace for the database: it would recreate operator-owned objects.
 
+The same pre-hook and restore procedure applies to `audiomuse-postgres` (database `audiomuse`, namespace `navidrome`, `clusters/dijkstra/navidrome/audiomuse-ai/postgres.yaml`): substitute that cluster, namespace, database and owner (`audiomuse`), the dump name (`audiomuse.dump`) and the AudioMuse-AI deployments (from its Helm release) for `deploy/immich`.
+
 ##### Break-glass
 
 - Operator down: the CNPG webhooks use `failurePolicy: Fail` and everything is one `flux-system` Kustomization, so every apply fails. Suspend it (`flux suspend kustomization flux-system -n flux-system`), roll the operator back with `helm -n cnpg-system rollback cloudnative-pg` (or fix the release), then resume.
@@ -385,7 +400,7 @@ Encrypted with SOPS using the cluster's age key (`.sops.yaml`); Flux decrypts th
 They are generated from Bitwarden by `cluster-secrets-build`, one namespace at a time. The secretspec profile `dijkstra-<ns>` is the Secret `secrets` of namespace `<ns>`, written to `clusters/dijkstra/secrets/<ns>.enc.yaml`. The profile `dijkstra` itself is cluster-level (the age key) and is never rendered.
 
 1. Add the key to `[profiles."dijkstra-<ns>"]` in `secretspec.toml`, e.g. `API_KEY`. Only `[a-z0-9_]` keys are allowed (case aside), and two keys must not differ only by case. As for hosts, a key that only feeds a `composed` key is an input and is not written.
-2. Create the Bitwarden item `API_KEY` in the folder `infra/dijkstra-<ns>` (i.e. `infra/dijkstra-<ns>/API_KEY`; secretspec escapes a `/` in a profile name, so namespace profiles use `-`).
+2. Create the Bitwarden item titled `infra/dijkstra-<ns>/API_KEY` (secretspec escapes a `/` in a profile name, so namespace profiles use `-`).
 3. Run `cluster-secrets-build` and commit `clusters/dijkstra/secrets/`.
 4. Reference it in the manifests as secret `secrets`, key `api_key` (keys are lowercased).
 

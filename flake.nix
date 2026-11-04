@@ -4,11 +4,20 @@
   inputs = {
     nixpkgs.url = "nixpkgs/nixos-unstable";
 
-    hardware.url = "github:nixos/nixos-hardware";
+    systems.url = "github:nix-systems/default-linux";
 
-    sops-nix.url = "github:Mic92/sops-nix";
+    hardware = {
+      url = "github:nixos/nixos-hardware";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
-    # Overridden at build time by `secrets-build`, see devenv.nix
+    sops-nix = {
+      url = "github:Mic92/sops-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    # Overridden at build time with `--override-input` (host-switch, host-deploy,
+    # install-remote) by the directory `secrets-build` writes, see devenv.nix
     secrets = {
       url = "path:./secrets-stub";
       flake = false;
@@ -19,7 +28,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    impermanence.url = "github:nix-community/impermanence";
+    impermanence = {
+      url = "github:nix-community/impermanence";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
     deploy-rs = {
       url = "github:serokell/deploy-rs";
@@ -65,10 +77,7 @@
     pkgsFor = lib.genAttrs (import systems) (system:
       import nixpkgs {
         inherit system;
-        config = {
-          allowUnfree = true;
-          allowUnfreePredicate = _: true;
-        };
+        config.allowUnfree = true;
         # additions last: its wrappers shadow (and wrap) the packages set by the others
         overlays = lib.attrValues (removeAttrs allOverlays ["additions"]) ++ [allOverlays.additions];
       });
@@ -78,15 +87,11 @@
     nixosModules = import ./modules/host;
 
     overlays = allOverlays;
-    packages = forEachSystem (pkgs: {
-      inherit (pkgs) zellij hyprland hyprlock hypridle hyprpaper rofi dunst jujutsu waybar kanshi glab gh claude;
-      inherit (pkgs) knowledge jj-upload jw wallpaper dictate claude-hooks claude-statusline agent-skills event-router agent-task tm;
-      # flake packages must be derivations, not nested sets
-      event-handler-notify = pkgs.event-handlers.notify;
-      event-handler-claude = pkgs.event-handlers.claude;
-      event-handler-task = pkgs.event-handlers.task;
-      event-handler-session-message = pkgs.event-handlers.session-message;
-    });
+    # everything the additions overlay adds; flake packages must be derivations, so
+    # the jail function is left out and the event-handlers set is flattened
+    packages = forEachSystem (pkgs:
+      removeAttrs (builtins.intersectAttrs (allOverlays.additions pkgs pkgs) pkgs) ["jail" "event-handlers"]
+      // lib.mapAttrs' (name: lib.nameValuePair "event-handler-${name}") pkgs.event-handlers);
 
     nixosConfigurations = let
       mkHost = host: system:
