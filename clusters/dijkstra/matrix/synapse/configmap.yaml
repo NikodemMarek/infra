@@ -56,3 +56,4 @@ data:
 
     app_service_config_files:
       - /secrets/whatsapp_registration
+      - /secrets/meta_registration

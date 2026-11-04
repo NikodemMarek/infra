@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: meta-config
+  namespace: matrix
+data:
+  config.yaml: |
+    env_config_prefix: BRIDGE_
+
+    homeserver:
+      address: http://synapse.matrix.svc.cluster.local:8008
+      domain: nkmrk.com
+
+    appservice:
+      address: http://meta.matrix.svc.cluster.local:29319
+      hostname: 0.0.0.0
+      port: 29319
+      id: meta
+      bot:
+        username: metabot
+      username_template: "meta_{{.}}"
+
+    database:
+      type: sqlite3-fk-wal
+      uri: file:/data/meta.db?_txlock=immediate
+
+    bridge:
+      permissions:
+        "@nikodem:nkmrk.com": admin
+
+    backfill:
+      enabled: true
+      max_initial_messages: 100000
+
+    encryption:
+      allow: false
+
+    provisioning:
+      shared_secret: disable
+
+    logging:
+      min_level: info
+      writers:
+        - type: stdout
+          format: json

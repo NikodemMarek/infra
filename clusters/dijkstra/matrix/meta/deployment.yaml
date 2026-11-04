@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meta
+  namespace: matrix
+  labels:
+    app: meta
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: meta
+  template:
+    metadata:
+      labels:
+        app: meta
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: regis
+      enableServiceLinks: false
+      securityContext:
+        runAsUser: 1337
+        runAsGroup: 1337
+        fsGroup: 1337
+        fsGroupChangePolicy: OnRootMismatch
+      volumes:
+        - name: config
+          configMap:
+            name: meta-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: meta-data
+      containers:
+        - name: meta
+          image: dock.mau.dev/mautrix/meta:v0.2610.0@sha256:22bfa54084b6855188f5146b325ee007a298443a9617caead06cc5fc0ba0d687
+          command: ["/usr/bin/mautrix-meta", "-c", "/config/config.yaml", "-n"]
+          workingDir: /data
+          env:
+            - name: BRIDGE_APPSERVICE__AS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: secrets
+                  key: meta_as_token
+            - name: BRIDGE_APPSERVICE__HS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: secrets
+                  key: meta_hs_token
+          ports:
+            - name: http
+              containerPort: 29319
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "10m"
+            limits:
+              memory: "256Mi"
