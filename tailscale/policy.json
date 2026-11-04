@@ -1,0 +1,24 @@
+{
+  "grants": [
+    {
+      "src": ["tag:server", "10.42.0.0/16"],
+      "dst": ["tag:server", "10.42.0.0/16"],
+      "ip": ["*"]
+    },
+    {
+      "src": ["tag:management"],
+      "dst": ["tag:server", "tag:work", "10.42.0.0/16"],
+      "ip": ["*"]
+    }
+  ],
+  "tagOwners": {
+    "tag:server": [],
+    "tag:management": [],
+    "tag:work": []
+  },
+  "autoApprovers": {
+    "routes": {
+      "10.42.0.0/16": ["tag:server"]
+    }
+  }
+}
