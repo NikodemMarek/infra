@@ -22,6 +22,8 @@
     session-message = callPackage ./session-message {};
     # queues the event for agent-inbox in `$XDG_RUNTIME_DIR/agent-inbox`
     inbox = callPackage ./inbox {};
+    # `remote.notify.>` from the cluster (untrusted) -> notify, reduced to project/title/body
+    remote-notify = callPackage ./remote-notify {inherit notify;};
   };
 
   # one event-subscribe per handler, with all its subjects
