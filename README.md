@@ -19,7 +19,7 @@ host/
     global/            always on: networking, nix, openssh, sops
     optional/          opt-in features: k3s, tailscale, docker, libvirt, maintenance, ...
     disko/             disk layouts, parametrised by device (and swap size)
-modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-notifier.nix, flux-sops-age.nix, agents.nix (the NATS event handler user services, the knowledge curator timer, the `jw-reap` timer that stops idle agent sessions, and the shpool user service)
+modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-notifier.nix, flux-sops-age.nix, secret-broker.nix, agents.nix (the NATS event handler user services, the knowledge curator timer, the `jw-reap` timer that stops idle agent sessions, and the shpool user service)
 pkgs/                  wrapped packages (package + bundled config) and own tools (pkgs/agent-skills/skills: Agent Skills, shared by claude and agent-skills)
 overlays/              exposes pkgs/ (the wrapped packages, shadowing the nixpkgs ones, and the tools), flake inputs as packages, deploy-rs
 clusters/dijkstra/     Kubernetes manifests, reconciled by Flux
@@ -139,6 +139,25 @@ nixos-rebuild build --flake .#geralt --override-input secrets path:/tmp/s
    nix eval .#nixosConfigurations.geralt.config.secrets --apply builtins.attrNames
    host-deploy geralt
    ```
+
+## Secret broker
+
+`services.secret-broker` (`modules/host/secret-broker.nix`, enabled on `yenn` in `host/yenn/secret-broker.nix`) lets agents use secrets without ever holding the Bitwarden session. It is a root-started service running as its own user on `/dev/tty9`, with the socket `/run/secret-broker.sock` (group of the configured user, mode 0660). Agents use the `secret` client: `secret list`, `secret run <action> [args]` (a named action, run after approval on the console) and `secret export <profile...>` (the secretspec profiles of `exportProfiles` as JSON, used by the dev shell scripts). The Bitwarden CLI state lives in the service's state directory. Only approval at the console unlocks the vault: nothing an agent can send reaches the master password.
+
+Console: Alt+SysRq+R (takes the keyboard from the compositor), then Ctrl+Alt+F9. Back with Ctrl+Alt+F1.
+
+- The console greets you with a phrase you chose on first start. If it is not shown above a prompt, don't type anything: it is not the broker.
+- An export prompt shows a tag, and `secret export` prints the same tag in your terminal. Type the master password only if they match; an empty password denies.
+- Run prompts: `y` once, `g` allow for 15 minutes, `n` deny; anything else asks again. The caller's cwd and session are shown labelled "claimed" (unverified); the first run of an action after a start also shows the full action. Idle: `l` locks the vault and drops the grants, Ctrl+L redraws.
+- The vault locks after `lockAfter` minutes idle (default 240). Deploys restart the service, which locks it and forgets the grants.
+- Requests wait 300 s for an answer, then are denied (exit 77 of `secret`).
+
+Actions (`services.secret-broker.actions.<name>`: `description`, `command`, `args`, `secrets`, `timeout`) run with a fixed environment and a private empty HOME. Authoring rules, since the caller is an untrusted agent:
+
+- Secrets go into the command only through `secrets` (env name to exact Bitwarden item name), never argv.
+- `args` are one full-match regex per argument. They never choose hosts, URLs or other destinations, so the secret cannot be sent somewhere else.
+- No tool that its args can steer into running code (interpreters, `ssh`, `git`, `find -exec`, shells, ...), and none that echoes its environment.
+- `command[0]` is a `/nix/store/` path, never a name looked up in `PATH`.
 
 ## Persistence
 

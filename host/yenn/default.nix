@@ -7,6 +7,7 @@
     ./hardware-configuration.nix
     ./networking.nix
     ./nikodem.nix
+    ./secret-broker.nix
 
     ../features
     ../features/optional/stylix.nix
