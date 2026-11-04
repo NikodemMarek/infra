@@ -7,6 +7,7 @@ name = "event-router"
 version = "0.1.0"
 description = "Receive events over HTTP and dispatch them to handlers"
 requires-python = ">=3.12"
+dependencies = ["nats-py"]
 
 [project.scripts]
 event-router = "event_router.cli:main"
@@ -30,4 +31,9 @@ extra_checks = true
 # the only place untyped data (json) enters; everything leaving it is Json
 [[tool.mypy.overrides]]
 module = "event_router.data"
+disallow_any_expr = false
+
+# nats-py's callbacks and message types are partly Any
+[[tool.mypy.overrides]]
+module = "event_router.bus"
 disallow_any_expr = false

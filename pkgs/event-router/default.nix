@@ -2,6 +2,7 @@
   lib,
   python3Packages,
   linkFarm,
+  nats-server,
   # event type -> package whose main program handles it. An event goes to its
   # type, else the nearest prefix ("gitlab.note" -> "gitlab"), else `default`.
   handlers ? { },
@@ -42,7 +43,12 @@ python3Packages.buildPythonApplication {
     MYPY_CACHE_DIR="$TMPDIR/mypy" mypy
   '';
 
-  nativeCheckInputs = [ python3Packages.pytestCheckHook ];
+  dependencies = [ python3Packages.nats-py ];
+
+  nativeCheckInputs = [
+    python3Packages.pytestCheckHook
+    nats-server
+  ];
   pythonImportsCheck = [ "event_router" ];
 
   makeWrapperArgs = [
