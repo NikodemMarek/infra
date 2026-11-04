@@ -1,12 +1,11 @@
-# run with: sudo nix --experimental-features "nix-command flakes" run github:nix-community/disko -- --mode disko ./btrfs-single-partition.nix --arg device '"eg. sda"'
+# run with: sudo nix --experimental-features "nix-command flakes" run github:nix-community/disko -- --mode disko ./btrfs-single-partition.nix --arg device '"/dev/sda"'
 {
   device,
-  options ? [],
   ...
 }: {
   disko.devices = {
     disk.single = {
-      device = "/dev/${device}";
+      inherit device;
       type = "disk";
       content = {
         type = "gpt";
@@ -17,7 +16,7 @@
               type = "btrfs";
               subvolumes = {
                 "/data" = {
-                  mountOptions = ["compress=zstd" "nofail" "rw" "users"] ++ options;
+                  mountOptions = ["compress=zstd" "nofail" "rw" "users"];
                   mountpoint = "/mnt/data";
                 };
               };

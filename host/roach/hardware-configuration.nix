@@ -7,11 +7,11 @@
   imports = [
     inputs.hardware.nixosModules.common-pc-ssd
     (import ../features/disko/btrfs-persistence-swapfile.nix {
-      device = "nvme0n1";
+      device = "/dev/nvme0n1";
       swap = 6;
     })
     (import ../features/disko/btrfs-single-partition.nix {
-      device = "sda";
+      device = "/dev/sda";
     })
   ];
 

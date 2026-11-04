@@ -5,23 +5,16 @@
 }:
 stdenv.mkDerivation {
   pname = "realtek-r8126";
-  version = "unstable-2024";
+  version = "unstable-2026-07-28";
 
   src = fetchFromGitHub {
     owner = "awesometic";
     repo = "realtek-r8126-dkms";
-    rev = "main";
+    rev = "fbf668194052211599594daa3d722c5c519d4c25";
     sha256 = "sha256-38m8Kj7BJ4kFPI82gV7XPAl05iAqDG0Z/BinSuu9Na8=";
   };
 
   nativeBuildInputs = kernel.moduleBuildDependencies;
-
-  # Override default makeFlags that inject kernel build macros
-  makeFlags = [
-    "-C"
-    "${kernel.dev}/lib/modules/${kernel.modDirVersion}/build"
-    "M=$(PWD)/src"
-  ];
 
   # Build directly in the src subdirectory where the kernel source files live
   buildPhase = ''

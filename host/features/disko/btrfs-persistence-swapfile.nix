@@ -1,4 +1,4 @@
-# run with: sudo nix --experimental-features "nix-command flakes" run github:nix-community/disko -- --mode disko ./btrfs-persistence-swapfile.nix --arg device '"eg. sda"' --arg swap 'number'
+# run with: sudo nix --experimental-features "nix-command flakes" run github:nix-community/disko -- --mode disko ./btrfs-persistence-swapfile.nix --arg device '"/dev/sda"' --arg swap 'number'
 {
   device,
   swap ? 4,
@@ -7,7 +7,7 @@
   disko.devices = {
     disk = {
       main = {
-        device = "/dev/${device}";
+        inherit device;
         type = "disk";
         content = {
           type = "gpt";
@@ -21,7 +21,7 @@
                 type = "filesystem";
                 format = "vfat";
                 mountpoint = "/boot";
-                mountOptions = ["umask=0055"];
+                mountOptions = ["umask=0077"];
               };
             };
 
@@ -51,8 +51,6 @@
                     mountpoint = "/persist";
                   };
                 };
-
-                mountpoint = "/";
               };
             };
           };

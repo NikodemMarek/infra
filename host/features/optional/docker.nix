@@ -2,10 +2,6 @@
   virtualisation.docker = {
     enable = true;
     storageDriver = "btrfs";
-    rootless = {
-      enable = false;
-      setSocketVariable = true;
-    };
     daemon.settings = {
       dns = ["1.1.1.1" "8.8.8.8"];
     };

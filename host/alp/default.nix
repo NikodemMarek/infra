@@ -1,4 +1,4 @@
-# Generate iso with this: nix shell nixpkgs#nixos-generators --command "nixos-generate --format iso --configuration ./host/alp/default.nix -o result".
+# Installer ISO, built with `mkiso`.
 {
   pkgs,
   modulesPath,
@@ -16,7 +16,7 @@
   };
   services.openssh.enable = true;
 
-  nix.settings.trusted-users = ["maintenance" "@wheel"];
+  nix.settings.trusted-users = ["@wheel"];
   users.users = {
     root = {
       password = lib.mkForce "nixos";

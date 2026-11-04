@@ -22,7 +22,6 @@
     enable = true;
     deviceService = "dev-nvme0n1p2.device";
     rootPath = "/dev/nvme0n1p2";
-    isCrypted = true;
     isZfs = true;
   };
 
