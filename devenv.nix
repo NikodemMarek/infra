@@ -267,20 +267,14 @@ in {
         bw_unlock
         bw sync > /dev/null
 
-        # each profile dijkstra-<ns> is the Secret `secrets` of namespace <ns>, made of
-        # exactly the keys it declares (not the ones that only feed a `composed` key, as for
-        # hosts); this is {"<ns>": [lowercase key...]}, names must be [a-z0-9_]+ and unique
+        # each profile dijkstra-<ns> is the Secret `secrets` of namespace <ns>, made of every
+        # key it declares; this is {"<ns>": [lowercase key...]}, names must be [a-z0-9_]+ and unique
         # assigned first, set -e ignores a failing $(...) inside the arguments below
         declared=$(nix eval --impure --json --expr '
           let
             profiles = (builtins.fromTOML (builtins.readFile ./secretspec.toml)).profiles;
-            keys = profile: let
-              composed = map (spec: spec.composed or "") (builtins.attrValues profile);
-              isInput = key: builtins.any (c: builtins.replaceStrings [("$" + "{" + key + "}")] [""] c != c) composed;
-            in
-              builtins.filter (key: !isInput key) (builtins.attrNames profile);
           in
-            builtins.mapAttrs (_: keys) profiles
+            builtins.mapAttrs (_: builtins.attrNames) profiles
         ' | jq -c '
           with_entries(select(.key | startswith("dijkstra-")) | .key |= ltrimstr("dijkstra-") | .value |= map(ascii_downcase))
           | with_entries(
