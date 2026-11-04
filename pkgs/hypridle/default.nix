@@ -13,11 +13,12 @@ pkgs.symlinkJoin {
     wrapProgram $out/bin/hypridle \
         --suffix PATH : ${pkgs.lib.strings.makeBinPath extraPkgs} \
         --set XDG_CONFIG_HOME $out/.config \
-        --add-flags "--config $out/bin/config.conf"
+        --add-flags "--config $out/config/hypridle/config.conf"
 
-    cp ${./config.conf} $out/bin/config.conf
+    mkdir -p $out/config/hypridle
+    cp ${./config.conf} $out/config/hypridle/config.conf
 
-    # TODO: remove when hypridle fixes bug with --config
+    # hypridle complains when the default config path is missing, even with --config
     mkdir -p $out/.config/hypr
     touch $out/.config/hypr/hypridle.conf
   '';
