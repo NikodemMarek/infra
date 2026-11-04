@@ -3,7 +3,7 @@
     (modulesPath + "/profiles/qemu-guest.nix")
 
     (import ../features/disko/btrfs-persistence-swapfile.nix {
-      device = "sda1";
+      device = "/dev/sda";
       swap = 12;
     })
   ];

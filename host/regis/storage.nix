@@ -1,5 +1,4 @@
-# To use this, first create a new key for the disks and copy it via nixos-anywhere (uncomment line).
-# If this does not work, copy the file to the installation medium directly.
+# The tank key is read from host/regis/disk.key at install; create it with:
 # dd if=/dev/urandom of=host/regis/disk.key bs=32 count=1 status=none
 {
   disko.devices = {
@@ -76,7 +75,7 @@
     # ZFS Pools & Encrypted Datasets
     # ---------------------------------------------------------------
     zpool = {
-      # OS Root Pool (Encrypted - Prompt for Passphrase on Boot)
+      # OS Root Pool (Encrypted - unlocked by the TPM, passphrase prompt as fallback)
       rpool = {
         type = "zpool";
         options = {

@@ -34,15 +34,16 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
-    systemd.timers.battery-notifier = {
+    # A user unit, so notify-send reaches the session bus.
+    systemd.user.timers.battery-notifier = {
       timerConfig = {
         OnBootSec = "0m";
         OnCalendar = "*:0/${toString cfg.checkInterval}";
       };
-      wantedBy = ["multi-user.target"];
+      wantedBy = ["timers.target"];
     };
 
-    systemd.services.battery-notifier = {
+    systemd.user.services.battery-notifier = {
       serviceConfig = {
         Type = "oneshot";
         ExecStart = lib.getExe (pkgs.writeShellScriptBin "battery-notifier-execstart" ''

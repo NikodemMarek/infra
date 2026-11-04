@@ -18,10 +18,6 @@
     cpu.amd.updateMicrocode = true;
     graphics.enable = true;
     enableAllFirmware = true;
-    bluetooth = {
-      enable = true;
-      powerOnBoot = true;
-    };
     printers = {
       ensureDefaultPrinter = "Canon_MP280";
       ensurePrinters = [

@@ -1,3 +1,4 @@
+# run with: sudo nix --experimental-features "nix-command flakes" run github:nix-community/disko -- --mode disko ./luks-btrfs-persistence-swapfile.nix --arg device '"/dev/sda"' --arg swap 'number'
 {
   device,
   swap ? 4,

@@ -6,10 +6,7 @@
     ./sops.nix
   ];
 
-  programs = {
-    git.enable = true;
-    neovim.defaultEditor = true;
-  };
+  programs.git.enable = true;
   environment.variables.EDITOR = "nvim";
   security.sudo.enable = true;
 }

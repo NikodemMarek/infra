@@ -9,7 +9,6 @@
     ../features/optional/k3s.nix
 
     # ./printing.nix
-    ./nfs.nix
   ];
 
   networking = {

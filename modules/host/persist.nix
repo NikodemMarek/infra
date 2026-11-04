@@ -7,7 +7,7 @@
     inherit (lib) mkEnableOption mkOption;
     inherit (lib.types) submodule listOf either str attrs bool;
 
-    peristentCategory = {
+    persistentCategory = {
       options = {
         directories = mkOption {
           type = listOf (either str attrs);
@@ -22,7 +22,7 @@
 
     users = mkOption {
       type = lib.types.attrsOf (lib.types.attrsOf (
-        submodule peristentCategory
+        submodule persistentCategory
       ));
       default = {};
     };
@@ -48,13 +48,12 @@
       default = false;
     };
 
-    # TODO: Allow arbitrary number of categories
     data = mkOption {
-      type = submodule peristentCategory;
+      type = submodule persistentCategory;
       default = {};
     };
     generated = mkOption {
-      type = submodule peristentCategory;
+      type = submodule persistentCategory;
       default = {};
     };
 
@@ -74,11 +73,11 @@
   in
     mkIf cfg.enable {
       boot.initrd = {
-        supportedFilesystems = ["btrfs"];
+        supportedFilesystems = lib.optional (!cfg.isZfs) "btrfs";
         systemd = {
           enable = true;
           services.rollback = {
-            description = "Rollback BTRFS root subvolume to a pristine state";
+            description = "Roll the root back to a pristine state";
             wantedBy = ["initrd.target"];
             before = ["sysroot.mount"];
             requires = rollbackDeps;

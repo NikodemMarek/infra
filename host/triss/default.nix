@@ -47,14 +47,6 @@
     isCrypted = false;
   };
 
-  networking.firewall.allowedTCPPorts = [
-    22
-  ];
-  networking.firewall.allowedUDPPorts = [
-    22
-    53
-  ];
-
   services.flux-sops-age.enable = true;
 
   services.k3s = {

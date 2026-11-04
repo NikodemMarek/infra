@@ -3,11 +3,6 @@
     ./hardware-configuration.nix
     ./idle-suspend.nix
 
-    (import ../features/disko/btrfs-persistence-swapfile.nix {
-      device = "nvme0n1";
-      swap = 38;
-    })
-
     ../features
     ../features/optional/docker.nix
     ../features/optional/systemd-boot.nix
