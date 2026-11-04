@@ -3,6 +3,7 @@
 import sys
 from pathlib import Path
 
+from . import serve
 from .config import ConfigError, load_config_file
 
 
@@ -10,8 +11,10 @@ def main(argv: list[str] | None = None) -> int:
     """`secret-broker check <config.json>`: exit 0 if valid, else `secret-broker: <msg>` on
     stderr and exit 1; usage error exits 64."""
     args = sys.argv[1:] if argv is None else argv
+    if len(args) == 2 and args[0] == "serve":
+        return serve.main(Path(args[1]))
     if len(args) != 2 or args[0] != "check":
-        print("usage: secret-broker check <config.json>", file=sys.stderr)
+        print("usage: secret-broker check|serve <config.json>", file=sys.stderr)
         return 64
     try:
         load_config_file(Path(args[1]))

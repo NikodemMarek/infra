@@ -1,6 +1,9 @@
 {
   lib,
   python3Packages,
+  bitwarden-cli,
+  event-bus,
+  secretspec,
 }:
 python3Packages.buildPythonApplication {
   pname = "secret-broker";
@@ -26,6 +29,18 @@ python3Packages.buildPythonApplication {
 
   nativeCheckInputs = [python3Packages.pytestCheckHook];
   pythonImportsCheck = ["secret_broker"];
+
+  makeWrapperArgs = [
+    "--set"
+    "SECRET_BROKER_BW"
+    "${bitwarden-cli}/bin/bw"
+    "--set"
+    "SECRET_BROKER_SECRETSPEC"
+    "${secretspec}/bin/secretspec"
+    "--set"
+    "SECRET_BROKER_EVENT_PUB"
+    "${event-bus}/bin/event-pub"
+  ];
 
   meta = {
     description = "Run named actions with Bitwarden secrets after approval on a private console";
