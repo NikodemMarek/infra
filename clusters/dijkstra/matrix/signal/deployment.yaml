@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: signal
+  namespace: matrix
+  labels:
+    app: signal
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: signal
+  template:
+    metadata:
+      labels:
+        app: signal
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: regis
+      enableServiceLinks: false
+      securityContext:
+        runAsUser: 1337
+        runAsGroup: 1337
+        fsGroup: 1337
+        fsGroupChangePolicy: OnRootMismatch
+      volumes:
+        - name: config
+          configMap:
+            name: signal-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: signal-data
+      containers:
+        - name: signal
+          image: dock.mau.dev/mautrix/signal:v0.2610.0@sha256:39afa721aa69472b2e91c75bd7d81a739e47f7e480fc0ff5ac8247af28eb2d0a
+          command: ["/usr/bin/mautrix-signal", "-c", "/config/config.yaml", "-n"]
+          workingDir: /data
+          env:
+            - name: BRIDGE_APPSERVICE__AS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: secrets
+                  key: signal_as_token
+            - name: BRIDGE_APPSERVICE__HS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: secrets
+                  key: signal_hs_token
+          ports:
+            - name: http
+              containerPort: 29328
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "10m"
+            limits:
+              memory: "256Mi"

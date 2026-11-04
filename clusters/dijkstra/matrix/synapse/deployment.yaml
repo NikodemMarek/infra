@@ -41,6 +41,8 @@ spec:
                 path: whatsapp_registration
               - key: meta_registration
                 path: meta_registration
+              - key: signal_registration
+                path: signal_registration
             defaultMode: 0440
       containers:
         - name: synapse
