@@ -57,16 +57,4 @@
   tm-image = pkgs.callPackage ./tm/image.nix {};
 
   event-handlers = pkgs.callPackage ./event-handlers {};
-
-  # `handlers` stays explicit so `.override (old: {handlers = old.handlers // ...})`
-  # can extend it.
-  event-router = pkgs.callPackage ./event-router {
-    # queued as well as handled; agent-inbox reads the queue
-    inbox = ["claude" "sudo" "task.failed"];
-    handlers = {
-      default = pkgs.event-handlers.notify;
-      "task.new" = pkgs.event-handlers.task;
-      "session.message" = pkgs.event-handlers.session-message;
-    };
-  };
 }

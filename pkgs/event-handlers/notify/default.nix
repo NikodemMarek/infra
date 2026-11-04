@@ -41,7 +41,7 @@ writeShellApplication {
 
     # detach: notify-send -A blocks until the notification is closed
     (
-      action=$(notify-send -a event-router -u ${urgency} -A open=Open -- "$summary" "$body" || true)
+      action=$(notify-send -a events -u ${urgency} -A open=Open -- "$summary" "$body" || true)
       if [[ "$action" == open && -n "$url" ]]; then
         xdg-open "$url"
       fi
