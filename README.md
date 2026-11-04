@@ -215,6 +215,8 @@ Own programs that are not wrappers of an upstream package. They are top-level at
 
 The router logs every accepted event to the JetStream stream `EVENTS` on the local nats (`EVENT_ROUTER_NATS`, default `nats://127.0.0.1:4222`) and recreates the stream if it is missing. Nothing consumes it. When logging fails, the router runs the `default` handler with an `event_router.bus_down` event, once per outage. Router startup does not wait for nats; if the connection is closed for good the router exits and systemd restarts it.
 
+Messages on `remote.notify.<source>` from the cluster (over the leaf link) are shown as desktop notifications: the router runs the `default` handler with a `remote.notify` event that keeps only `title` (200 chars), `body` (1000) and `project` (the payload `project`, else `<source>`; `[A-Za-z0-9._-]`, up to 64 chars), at most 10 per minute (the rest is dropped); they are not queued in the inbox or logged to `EVENTS`. The remote subscription has its own nats connection, so a broken message cannot stall `EVENTS`. Anyone who can reach the cluster hub can publish these messages, so the layer's `default` handler must only ever show a notification.
+
 - State: `curl 127.0.0.1:7531/health` (503 while the bus is down), `nats stream info EVENTS`.
 - Disk full: JetStream disables itself. Free space, then `sudo systemctl restart nats`.
 - Full reset or rollback: `sudo systemctl stop nats`, `sudo rm -rf /persist/generated/var/lib/nats`, `sudo systemctl start nats`; the router recreates `EVENTS`.

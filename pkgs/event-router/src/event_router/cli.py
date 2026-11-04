@@ -67,6 +67,14 @@ def bus_down_event(reason: str) -> Event:
     )
 
 
+def make_bus(url: str, dispatcher: Dispatcher) -> Bus:
+    return Bus(
+        url,
+        on_down=lambda reason: dispatcher.dispatch_default(bus_down_event(reason)),
+        on_remote=dispatcher.dispatch_default,
+    )
+
+
 def main() -> None:
     args = _parser().parse_args(namespace=Args())
     logging.basicConfig(
@@ -93,10 +101,7 @@ def main() -> None:
     inbox = Inbox([t for t in os.environ.get("EVENT_ROUTER_INBOX", "").split(",") if t])
     dispatcher = Dispatcher(Path(handlers) if handlers else None)
 
-    def on_down(reason: str) -> None:
-        dispatcher.dispatch_default(bus_down_event(reason))
-
-    bus = Bus(os.environ.get("EVENT_ROUTER_NATS") or DEFAULT_URL, on_down=on_down)
+    bus = make_bus(os.environ.get("EVENT_ROUTER_NATS") or DEFAULT_URL, dispatcher)
     bus.start()
     try:
         serve(_port(), dispatcher, inbox, bus)
