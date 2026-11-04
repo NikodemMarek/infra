@@ -167,6 +167,7 @@ let
     src = ./stop-hook.sh;
     runtimeInputs = [
       jq
+      coreutils
       routeEvent
       eventQueue
       mailTake

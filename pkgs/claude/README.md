@@ -114,15 +114,6 @@ Managed entries are symlinks refreshed on every launch; stale ones from older bu
 4. Remove the old symlinks to a previous config (e.g. `CLAUDE.md`, `agents/*`, `skills/*`, `settings.json`, hook scripts under `~/.local/share/claude`).
 5. A previous memory repo must become the memory dir itself, not a subdirectory of it. Before the first launch: `mv <old memory repo> ~/.local/share/claude/memory`. If the wrapper already created `memory/`: `rm -rf ~/.local/share/claude/memory/.git && mv <old memory repo>/* <old memory repo>/.git ~/.local/share/claude/memory/`.
 6. Add `claude` and `jj-upload` to your system packages (see above) and rebuild.
-7. Add the jj alias below.
-
-## jj
-
-```toml
-[aliases]
-upload = ["util", "exec", "--", "jj-upload"]
-sync = ["util", "exec", "--", "jj-upload", "sync"]
-```
 
 ## Extending
 

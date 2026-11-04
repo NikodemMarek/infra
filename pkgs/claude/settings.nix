@@ -44,8 +44,8 @@
         ];
       }
     ];
-    # With CLAUDE_EVENT_SESSION_DIR set it delivers queued event prompts (paths) by blocking the stop;
-    # for sessions with an origin (CLAUDE_ORIGIN_FILE) it otherwise posts claude.waiting (tells the user
+    # With CLAUDE_EVENT_SESSION_DIR set it delivers queued event prompts (paths), and in any jw workspace or
+    # shpool session queued session messages, by blocking the stop; for sessions with an origin (CLAUDE_ORIGIN_FILE) it otherwise posts claude.waiting (tells the user
     # the session waits, titled with the first line of the last message).
     # Permission prompts and questions are already routed by PermissionRequest.
     Stop = [
@@ -59,7 +59,8 @@
         ];
       }
     ];
-    # Event-started sessions only (the hook checks CLAUDE_EVENT_SESSION_DIR): hands over queued follow-up prompts.
+    # Hands over queued follow-up prompts (event-started sessions, CLAUDE_EVENT_SESSION_DIR) and queued
+    # session messages (any jw workspace or shpool session) as context.
     UserPromptSubmit = [
       {
         hooks = [

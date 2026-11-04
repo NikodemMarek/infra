@@ -11,7 +11,7 @@ default-command = "log"
 track-default-bookmark-on-clone = false
 
 [remotes.origin]
-auto-track-bookmarks = "nm1/*"
+auto-track-bookmarks = "nm/*"
 auto-track-created-bookmarks = "*"
 fetch-tags = "v*"
 
@@ -27,4 +27,4 @@ stack = ["log", "-r", "stack()"]
 "stack()" = "trunk() | trunk()..(@::)"
 
 [upload]
-bookmark-prefix = "nm1/"
+bookmark-prefix = "nm/"

@@ -53,7 +53,7 @@
 let
   promptFile = writeText "event-handler-claude-${name}-prompt.jq" prompt;
 
-  # the old behaviour, if the context tool is missing or fails: the task after
+  # fallback, if the context tool is missing or fails: the task after
   # the basic event fields; what people wrote is shown as data, like the tool
   # does
   fallbackFile = writeText "event-handler-claude-${name}-fallback.jq" ''
@@ -76,8 +76,8 @@ let
       prepare+=(--dry-run)
     fi
 
-    # the tool prints one JSON line; any failure falls back to the old behaviour
-    # (claude in the main checkout), so events are never lost
+    # the tool prints one JSON line; any failure falls back to a plain claude
+    # in the main checkout, so events are never lost
     if out=$("''${prepare[@]}" <<<"$event"); then
       if action=$(jq -er '.action' <<<"$out" 2>/dev/null); then
         case "$action" in
@@ -136,10 +136,9 @@ let
   '';
 
   # runs in the shpool session: $1 = context dir, $2 = session lock, $3 = gitlab host,
-  # $4 = claude permission mode (default: auto),
-  # $5 = knowledge origin (`event:<type>`), exported so the knowledge CLI marks
-  # what the session submits as untrusted, optionally $6 = claude session id,
-  # $7 = session dir (see contextTool): then the lock is held on fd 8 while
+  # $4 = knowledge origin (`event:<type>`), exported so the knowledge CLI marks
+  # what the session submits as untrusted, optionally $5 = claude session id,
+  # $6 = session dir (see contextTool): then the lock is held on fd 8 while
   # claude runs, and a started conversation is resumed with the queued prompts
   launcher = writeShellApplication {
     name = "event-claude-launch";
@@ -155,13 +154,8 @@ let
     # --add-dir is variadic and would swallow a following positional: keep an option after it
     text = ''
       export GITLAB_HOST="$3"
-      export KNOWLEDGE_ORIGIN="''${5:-}"
+      export KNOWLEDGE_ORIGIN="''${4:-}"
       export PATH="$PATH:${jujutsu}/bin"
-      perm=''${4:-auto}
-      case "$perm" in
-        default | acceptEdits | auto) ;;
-        *) perm=auto ;;
-      esac
 
       # say it in the session and as an event; no SHPOOL_SESSION_NAME: this
       # session is gone right after, there is nothing to attach to
@@ -172,46 +166,46 @@ let
       }
 
       status=0
-      if [[ -n "''${6:-}" && -n "''${7:-}" ]]; then
+      if [[ -n "''${5:-}" && -n "''${6:-}" ]]; then
         # one conversation per workspace: the lock stays on fd 8 until claude is
         # gone (claude gets it closed, so its children cannot hold it); the hooks
-        # of a live session take the queue in $7/queue
-        export CLAUDE_EVENT_SESSION_DIR="$7"
+        # of a live session take the queue in $6/queue
+        export CLAUDE_EVENT_SESSION_DIR="$6"
         exec 8>"$2"
         if ! flock -w 30 8; then
           # the live session's hooks deliver what the handler queued
-          if [[ -e "$7/started" ]]; then
+          if [[ -e "$6/started" ]]; then
             exit 0
           fi
           not_started "another claude session still holds $2 after 30s, not starting; the prompt is in $1/prompt.md"
           exit 75
         fi
         # the context tool may not have created the dir on a new conversation
-        mkdir -p "$7/queue"
-        printf '%s\n' "''${SHPOOL_SESSION_NAME:-}" >"$7/shpool"
-        if [[ -e "$7/started" ]]; then
-          mapfile -t paths < <(claude-event-queue take "$7")
+        mkdir -p "$6/queue"
+        printf '%s\n' "''${SHPOOL_SESSION_NAME:-}" >"$6/shpool"
+        if [[ -e "$6/started" ]]; then
+          mapfile -t paths < <(claude-event-queue take "$6")
           if [[ ''${#paths[@]} == 0 ]]; then
             exit 0
           fi
-          claude --resume "$6" --add-dir "$1" "$7" --permission-mode "$perm" "New GitLab activity, read: ''${paths[*]}" 8>&- || status=$?
+          claude --add-dir "$1" "$6" --resume "$5" "New GitLab activity, read: ''${paths[*]}" 8>&- || status=$?
           if [[ "$status" != 0 ]]; then
             # the taken files are not queued any more: say so; start afresh next time
             not_started "claude --resume exited with $status; undelivered: ''${paths[*]}"
-            rm -f "$7/started"
+            rm -f "$6/started"
           fi
         else
           prompt=$(cat "$1/prompt.md")
-          touch "$7/started"
-          claude --session-id "$6" --add-dir "$1" "$7" --permission-mode "$perm" "$prompt" 8>&- || status=$?
+          touch "$6/started"
+          claude --add-dir "$1" "$6" --session-id "$5" "$prompt" 8>&- || status=$?
           if [[ "$status" != 0 ]]; then
             not_started "claude exited with $status; the prompt is in $1/prompt.md"
-            rm -f "$7/started"
+            rm -f "$6/started"
           fi
         fi
         exec 8>&-
         shopt -s nullglob
-        left=("$7"/queue/*.md)
+        left=("$6"/queue/*.md)
         if [[ ''${#left[@]} -gt 0 ]]; then
           not_started "''${#left[@]} GitLab update(s) were queued after Claude ended; the next event for this MR delivers them"
         fi
@@ -219,7 +213,7 @@ let
       fi
 
       # no exec: if another session holds the lock for too long, say so
-      flock -o -w 30 -E 75 "$2" claude --add-dir "$1" --permission-mode "$perm" "$(cat "$1/prompt.md")" || status=$?
+      flock -o -w 30 -E 75 "$2" claude --add-dir "$1" -- "$(cat "$1/prompt.md")" || status=$?
       if [[ "$status" == 75 ]]; then
         not_started "another claude session still holds $2 after 30s, not starting; the prompt is in $1/prompt.md"
       fi
@@ -272,7 +266,6 @@ writeShellApplication {
     claude_origin=$(jq -c --arg kind ${lib.escapeShellArg name} '(.raw.target // .raw.merge_request // {}) as $t | {kind:$kind, iid:.target_iid, target:.target_type, title, url, description:(($t.description // "")[0:8000])} | with_entries(select(.value != null and .value != ""))' <<<"$event")
 
     prepared=0
-    perm=auto
     cwd=""
     context_dir=""
     session_lock=""
@@ -287,13 +280,13 @@ writeShellApplication {
     fi
     if [[ "$prepared" == 1 ]]; then
       workdir=$cwd
-      cmd=(${lib.getExe launcher} "$context_dir" "$session_lock" "$host" "$perm" "$origin")
+      cmd=(${lib.getExe launcher} "$context_dir" "$session_lock" "$host" "$origin")
       if [[ -n "$sid" ]]; then
         cmd+=("$sid" "$sdir")
       fi
       shown_prompt=$(cat "$context_dir/prompt.md")
     else
-      # the user's own checkout, with no workspace and no edits without asking
+      # the user's own checkout, with no workspace: the notice below tells claude not to modify files
       workdir=$dir
       notice="You are in the user's MAIN checkout, not the MR branch — do NOT modify files; only analyse and report."
       shown_prompt="$notice"$'\n\n'"$(jq -r --arg task "$task" -f ${fallbackFile} <<<"$event")"

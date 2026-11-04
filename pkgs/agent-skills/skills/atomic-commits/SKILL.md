@@ -105,7 +105,7 @@ For each change run `jj show <change> --stat`, then `jj diff -r <change> --git`,
 Fix with `jj split`, `jj squash`, `jj rebase -r` or `jj describe` (non-interactive forms are in the `jj` skill).
 
 ### 5. Hand off
-Report the stack (`jj stack`): change ID, title, size and verification result per commit. Upload (`jj upload`, each stack from its tip) only when the user asks.
+Report the stack (`jj stack`): change ID, title, size and verification result per commit. Upload (`jj upload`, each stack from its tip) once the stack is verified, without asking.
 
 ## Commit message
 
