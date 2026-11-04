@@ -44,7 +44,7 @@
     };
 
     outlay = {
-      url = "github:NikodemMarek/outlay";
+      url = "github:Papayah/outlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
