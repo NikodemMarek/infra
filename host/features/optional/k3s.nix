@@ -3,10 +3,7 @@
   pkgs,
   ...
 }: {
-  secrets = {
-    k3s_token = {};
-    k3s_vpn_auth = {};
-  };
+  secrets.k3s_token = {};
 
   environment.systemPackages = [
     pkgs.nfs-utils
@@ -19,6 +16,9 @@
   services.k3s = {
     enable = true;
     tokenFile = config.secrets.k3s_token.path;
+    extraFlags = [
+      "--vpn-auth=name=tailscale,joinKey=none"
+    ];
   };
 
   systemd.services.k3s = {
