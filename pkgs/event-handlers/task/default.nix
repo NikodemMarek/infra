@@ -2,7 +2,7 @@
   writeShellApplication,
   coreutils,
   jq,
-  curl,
+  event-bus,
   jw,
 }:
 
@@ -16,7 +16,7 @@ writeShellApplication {
   runtimeInputs = [
     coreutils
     jq
-    curl
+    event-bus
   ];
   text = ''
     event=$(cat)
@@ -55,10 +55,9 @@ writeShellApplication {
     fi
 
     post() {
-      local body=$1
-      if ! curl -fsS --noproxy '*' -m 5 -H 'Content-Type: application/json' --data-binary @- \
-        "''${EVENT_ROUTER_URL:-http://127.0.0.1:7531}/events" <<<"$body" >/dev/null; then
-        echo "event-handler-task: cannot post to the event router: $body" >&2
+      local type=$1 body=$2
+      if ! event-pub "$type" <<<"$body" >/dev/null; then
+        echo "event-handler-task: cannot publish $type: $body" >&2
         exit 1
       fi
     }
@@ -75,7 +74,7 @@ writeShellApplication {
         + (if $repo != "" then {repo: $repo} else {} end)
         + {timeout: 86400}
       ' --args "''${images[@]}" <<<"$event")
-      post "$body"
+      post task.failed "$body"
       exit 0
     }
 
@@ -130,6 +129,6 @@ writeShellApplication {
       + (if $id != "" then {id: $id} else {} end)
       + {project: $project, title: $title, shpool: $shpool}
     ' <<<"$event")
-    post "$body"
+    post task.started "$body"
   '';
 }

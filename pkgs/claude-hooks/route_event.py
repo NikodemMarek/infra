@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Usage: claude-route-event [type]   (stdin: a JSON object)
 
-Posts the object as an event to the event router ($EVENT_ROUTER_URL, default http://127.0.0.1:7531).
+Publishes the object as an event with `event-pub` (NATS subject events.<type>).
 Without a type, derives one from a PermissionRequest hook payload: AskUserQuestion ->
 claude.question, else claude.permission_request. Adds `project` (last component of cwd), `title`,
 `jj` (the output of `jw info` in the cwd) when available, `shpool` (the shpool session name) when run
@@ -18,9 +18,6 @@ import json
 import os
 import subprocess
 import sys
-import urllib.request
-
-DEFAULT_URL = "http://127.0.0.1:7531"
 
 
 def text(value):
@@ -70,7 +67,7 @@ def jj_info(cwd):
 
 def enrich(inp, etype):
     cwd = text(inp.get("cwd"))
-    event = {**inp, "type": etype, "project": cwd.split("/")[-1] or None,"title": title(inp, etype)}
+    event = {**inp, "type": etype, "project": cwd.split("/")[-1] or None, "title": title(inp, etype)}
     if os.environ.get("SHPOOL_SESSION_NAME"):
         event["shpool"] = os.environ["SHPOOL_SESSION_NAME"]
     if os.environ.get("CLAUDE_ORIGIN_FILE"):
@@ -81,11 +78,9 @@ def enrich(inp, etype):
     return event
 
 
-def post(event, url):
-    req = urllib.request.Request(f"{url}/events", data=json.dumps(event).encode(), method="POST",
-                                 headers={"Content-Type": "application/json"})
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never through $http_proxy
-    opener.open(req, timeout=2).close()
+def publish(event):
+    subprocess.run(["event-pub", event["type"]], input=json.dumps(event).encode(),
+                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=5, check=True)
 
 
 def main():
@@ -97,11 +92,11 @@ def main():
         print("claude-route-event: invalid input", file=sys.stderr)
         return 1
     event = enrich(inp, event_type(sys.argv[1] if len(sys.argv) > 1 else "", inp))
-    url = os.environ.get("EVENT_ROUTER_URL") or DEFAULT_URL
     try:
-        post(event, url)
-    except Exception:  # connection, timeout, HTTP error status, bad URL
-        print(f"claude-route-event: cannot post event to {url}", file=sys.stderr)
+        publish(event)
+    except (subprocess.SubprocessError, OSError) as e:  # event-pub failed, timed out or is missing
+        why = e.stderr.decode(errors="replace").strip() if isinstance(e, subprocess.CalledProcessError) else ""
+        print(f"claude-route-event: cannot publish {event['type']}: {why or e}", file=sys.stderr)
         return 1
     return 0
 

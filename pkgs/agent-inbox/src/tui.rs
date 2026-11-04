@@ -1,5 +1,5 @@
 //! The terminal UI: `App` is the state and key handling (pure, returns an `Effect` for the loop
-//! to carry out), `render` draws it, `run` is the loop around the router client.
+//! to carry out), `render` draws it, `run` is the loop around the inbox client.
 //!
 //! Layout: a header line, the list of items next to (below, on narrow terminals) a detail pane
 //! for the selected item, and a footer with key hints or the last status message. Tab (Shift-Tab back) cycles
@@ -7,7 +7,7 @@
 //! origin) and the Sessions tab: the same layout over the live Claude sessions (list and detail
 //! of the selected session; Enter opens the detail like an item's), all of them whatever
 //! their origin. `N` (everywhere) asks for a task
-//! in a popup (Ctrl+J adds a line) and posts it to the router as a `task.new` event (an empty
+//! in a popup (Ctrl+J adds a line) and publishes it as a `task.new` event (an empty
 //! task: pick the repo with `jw pick` first). Only the events and sessions of agents with an
 //! origin (a merge request, an issue or a task, see `Origin`) are shown, with it as their
 //! context, plus the requests that come from no agent (sudo, failed tasks: `p` picks a repo with
@@ -88,7 +88,7 @@ enum Effect {
         pid: u32,
         start: u64,
     },
-    /// Post the task `.0` to the router.
+    /// Publish the task `.0`.
     SendTask(Task),
     /// Choose the repo of `task` with `jw pick`, post it, and dismiss the item `dismiss` (needs
     /// the terminal: done by `event_loop`).
@@ -171,8 +171,8 @@ struct App {
     raw: bool,
     /// Result of the last action; hidden after `STATUS_TTL`.
     status: Option<Status>,
-    /// Set while the router cannot be reached.
-    offline: Option<String>,
+    /// Set while the inbox directory cannot be read.
+    inbox_error: Option<String>,
     /// Unix seconds, for ages.
     now: f64,
     /// Terminal size, for scrolling the detail pane (set by the loop).
@@ -257,7 +257,7 @@ fn toggle(picked: &mut Vec<usize>, i: usize) {
 }
 
 impl App {
-    /// `items` as the router returns them (oldest first). The selection follows its item.
+    /// `items` as the inbox lists them (oldest first). The selection follows its item.
     fn set_items(&mut self, mut items: Vec<Item>) {
         items.reverse();
         let followed = self.selected_item().map(|i| i.id.clone());
@@ -450,9 +450,9 @@ impl App {
         self.visible_sessions().get(self.session_sel).copied()
     }
 
-    /// The pending items of `session` (none while the router is unreachable: they are stale).
+    /// The pending items of `session` (none while the inbox is unreadable: they are stale).
     fn session_items(&self, session: &Session) -> Vec<&Item> {
-        if self.offline.is_some() || session.session_id.is_empty() {
+        if self.inbox_error.is_some() || session.session_id.is_empty() {
             return Vec::new();
         }
         self.shown()
@@ -1331,7 +1331,7 @@ fn sudo_lines(item: &Item, lines: &mut Vec<Line<'static>>) {
     }
 }
 
-/// A task the router could not start: the title, why, the prompt and the images.
+/// A task that could not be started: the title, why, the prompt and the images.
 fn task_failed_lines(item: &Item, lines: &mut Vec<Line<'static>>) {
     lines.push(Line::styled(clean(item.title()), bold()));
     if !item.reason().is_empty() {
@@ -1694,10 +1694,10 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
             dim(),
         ),
     ]);
-    // The router status comes first (at most half of the line), the counts give way to it.
-    let (text, style) = match &app.offline {
+    // The inbox status comes first (at most half of the line), the counts give way to it.
+    let (text, style) = match &app.inbox_error {
         Some(e) => (
-            clean(&format!("router offline: {e}")),
+            clean(&format!("inbox unreadable: {e}")),
             Style::new().fg(Color::Red),
         ),
         None => ("connected".to_string(), dim()),
@@ -2086,16 +2086,17 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(line), area);
 }
 
-/// `sessions_dir` is the session registry (`<config dir>/sessions`).
+/// `inbox` is the directory of the inbox items, `sessions_dir` the session registry
+/// (`<config dir>/sessions`).
 pub fn run(
-    base: &str,
+    inbox: &Path,
     runtime: Option<&Path>,
     sessions_dir: &Path,
     tabs: Vec<Tab>,
 ) -> io::Result<()> {
     let mut terminal = ratatui::init();
     let result = execute!(io::stdout(), EnableBracketedPaste)
-        .and_then(|()| event_loop(&mut terminal, base, runtime, sessions_dir, tabs));
+        .and_then(|()| event_loop(&mut terminal, inbox, runtime, sessions_dir, tabs));
     let _ = execute!(io::stdout(), DisableBracketedPaste);
     ratatui::restore();
     result
@@ -2103,7 +2104,7 @@ pub fn run(
 
 fn event_loop(
     terminal: &mut DefaultTerminal,
-    base: &str,
+    inbox: &Path,
     runtime: Option<&Path>,
     sessions_dir: &Path,
     tabs: Vec<Tab>,
@@ -2115,7 +2116,7 @@ fn event_loop(
     let mut refreshed: Option<Instant> = None;
     loop {
         if refreshed.is_none_or(|t| t.elapsed() >= REFRESH) {
-            refresh(&mut app, base, runtime, sessions_dir);
+            refresh(&mut app, inbox, runtime, sessions_dir);
             refreshed = Some(Instant::now());
         }
         app.now = client::now();
@@ -2128,11 +2129,11 @@ fn event_loop(
                     app.now = client::now(); // not the time of the draw: the guard is timed
                     let effect = app.on_key(key);
                     if let Effect::PickRepo { task, dismiss } = effect {
-                        pick_repo(terminal, &mut app, base, task, dismiss.as_deref())?;
+                        pick_repo(terminal, &mut app, inbox, task, dismiss.as_deref())?;
                         refreshed = None; // a dismissed item goes, a new session shows up
                         continue;
                     }
-                    if perform(&mut app, effect, base, runtime, sessions_dir) {
+                    if perform(&mut app, effect, inbox, runtime, sessions_dir) {
                         return Ok(());
                     }
                 }
@@ -2143,11 +2144,11 @@ fn event_loop(
     }
 }
 
-/// Reloads the sessions (they need no router) and the inbox items, then reads the origins they
+/// Reloads the sessions (they need no inbox) and the inbox items, then reads the origins they
 /// refer to.
-fn refresh(app: &mut App, base: &str, runtime: Option<&Path>, sessions_dir: &Path) {
+fn refresh(app: &mut App, inbox: &Path, runtime: Option<&Path>, sessions_dir: &Path) {
     let sessions = sessions::load(sessions_dir, Path::new("/proc"));
-    let items = client::list(base).map_err(|e| e.to_string());
+    let items = client::list(inbox).map_err(|e| e.to_string());
     update(app, sessions, items, runtime);
 }
 
@@ -2164,10 +2165,10 @@ fn update(
     app.set_sessions(sessions);
     match items {
         Ok(items) => {
-            app.offline = None;
+            app.inbox_error = None;
             app.set_items(items);
         }
-        Err(e) => app.offline = Some(e),
+        Err(e) => app.inbox_error = Some(e),
     }
     load_origins(app, runtime);
     app.select_id(item);
@@ -2201,38 +2202,38 @@ fn load_origins(app: &mut App, runtime: Option<&Path>) {
 fn perform(
     app: &mut App,
     effect: Effect,
-    base: &str,
+    inbox: &Path,
     runtime: Option<&Path>,
     sessions_dir: &Path,
 ) -> bool {
     match effect {
         Effect::None => return false,
         Effect::Quit => return true,
-        Effect::Dismiss(id) => dismiss(app, base, &id),
+        Effect::Dismiss(id) => dismiss(app, inbox, &id),
         Effect::DismissAll => {
             for id in app.without_reply() {
-                dismiss(app, base, &id);
+                dismiss(app, inbox, &id);
             }
         }
-        Effect::Send(id, line) => send(app, base, runtime, &id, &line),
+        Effect::Send(id, line) => send(app, inbox, runtime, &id, &line),
         Effect::Attach(name) => {
             attach(app, &name);
             return false;
         }
-        Effect::Kill { pid, start } => kill(app, base, pid, start),
+        Effect::Kill { pid, start } => kill(app, inbox, pid, start),
         Effect::Open(url) => {
             open_url(app, &url);
             return false;
         }
         Effect::SendTask(task) => {
             // the typed text must not be lost: back into the popup, to retry or copy
-            if !post_task(app, base, &task) {
+            if !post_task(app, &task) {
                 app.mode = Mode::Task { buf: task.prompt };
             }
         }
         Effect::PickRepo { .. } => return false, // needs the terminal: `event_loop` does it
     }
-    refresh(app, base, runtime, sessions_dir);
+    refresh(app, inbox, runtime, sessions_dir);
     false
 }
 
@@ -2261,7 +2262,7 @@ fn terminate(proc: &Path, pid: u32, start: Option<u64>) -> Result<(), String> {
 }
 
 /// Kills the session of process `pid`, then dismisses its inbox items.
-fn kill(app: &mut App, base: &str, pid: u32, start: u64) {
+fn kill(app: &mut App, inbox: &Path, pid: u32, start: u64) {
     let place = app
         .session_of(pid)
         .map_or_else(|| format!("pid {pid}"), Session::place);
@@ -2272,7 +2273,7 @@ fn kill(app: &mut App, base: &str, pid: u32, start: u64) {
     }
     app.notify(format!("killed {place}"), false);
     for id in ids {
-        dismiss_replied(app, base, &id);
+        dismiss_replied(app, inbox, &id);
     }
 }
 
@@ -2385,9 +2386,9 @@ fn run_pick() -> io::Result<Output> {
     result
 }
 
-/// Posts `task` to the router and says so; whether it was accepted.
-fn post_task(app: &mut App, base: &str, task: &Task) -> bool {
-    match client::post_event(base, &client::task_event(task)) {
+/// Publishes `task` and says so; whether it was accepted.
+fn post_task(app: &mut App, task: &Task) -> bool {
+    match client::post_event(&client::task_event(task)) {
         Ok(()) => {
             app.notify("task sent", false);
             true
@@ -2400,12 +2401,12 @@ fn post_task(app: &mut App, base: &str, task: &Task) -> bool {
 }
 
 /// Leaves the TUI's screen for `jw pick`, then posts `task` with the repo picked. The item
-/// `dismiss` is dismissed once the router has the task. No attach: the session shows up in the
+/// `dismiss` is dismissed once the task is published. No attach: the session shows up in the
 /// Sessions tab.
 fn pick_repo(
     terminal: &mut DefaultTerminal,
     app: &mut App,
-    base: &str,
+    inbox: &Path,
     mut task: Task,
     dismiss: Option<&str>,
 ) -> io::Result<()> {
@@ -2436,9 +2437,9 @@ fn pick_repo(
     match pick_outcome(out.status.code(), &stdout, &stderr) {
         Pick::Repo(repo) => {
             task.repo = Some(repo);
-            if post_task(app, base, &task) {
+            if post_task(app, &task) {
                 if let Some(id) = dismiss {
-                    dismiss_replied(app, base, id);
+                    dismiss_replied(app, inbox, id);
                 }
             }
         }
@@ -2448,23 +2449,23 @@ fn pick_repo(
     Ok(())
 }
 
-fn dismiss(app: &mut App, base: &str, id: &str) {
-    match client::dismiss(base, id) {
+fn dismiss(app: &mut App, inbox: &Path, id: &str) {
+    match client::dismiss(inbox, id) {
         Ok(true) => {}
         Ok(false) => app.notify("item is gone", true),
         Err(e) => app.notify(format!("dismiss failed: {e}"), true),
     }
 }
 
-/// Dismisses an item whose reply was dealt with: already gone (404) is fine and keeps the
+/// Dismisses an item whose reply was dealt with: already gone is fine and keeps the
 /// status of the reply.
-fn dismiss_replied(app: &mut App, base: &str, id: &str) {
-    if let Err(e) = client::dismiss(base, id) {
+fn dismiss_replied(app: &mut App, inbox: &Path, id: &str) {
+    if let Err(e) = client::dismiss(inbox, id) {
         app.notify(format!("dismiss failed: {e}"), true);
     }
 }
 
-fn send(app: &mut App, base: &str, runtime: Option<&Path>, id: &str, line: &str) {
+fn send(app: &mut App, inbox: &Path, runtime: Option<&Path>, id: &str, line: &str) {
     let Some(item) = app.find(id) else {
         app.notify("item is gone", true);
         return;
@@ -2482,11 +2483,11 @@ fn send(app: &mut App, base: &str, runtime: Option<&Path>, id: &str, line: &str)
     match reply::write_reply(runtime, prefix, &target, line) {
         Ok(()) => {
             app.notify("sent", false);
-            dismiss_replied(app, base, id);
+            dismiss_replied(app, inbox, id);
         }
         Err(ReplyError::Expired) => {
             app.notify("expired: nothing is waiting for the answer", true);
-            dismiss_replied(app, base, id);
+            dismiss_replied(app, inbox, id);
         }
         Err(e) => app.notify(e.to_string(), true),
     }
@@ -2650,7 +2651,7 @@ mod tests {
     }
 
     #[test]
-    fn header_counts_and_router_status() {
+    fn header_counts_and_inbox_status() {
         let mut a = app(vec![
             question("a", 900.0),
             permission("p", Some(HOOK_REPLY)),
@@ -2660,14 +2661,14 @@ mod tests {
         assert!(s.contains("agent-inbox"));
         assert!(s.contains("3 pending · 1 answerable"));
         assert!(s.contains("connected"));
-        a.offline = Some("connection refused".into());
+        a.inbox_error = Some("permission denied".into());
         let s = screen(&a);
-        assert!(s.contains("router offline: connection refused"));
+        assert!(s.contains("inbox unreadable: permission denied"));
         assert!(!s.contains("connected"));
-        // on a narrow terminal the counts give way, the router status stays
+        // on a narrow terminal the counts give way, the inbox status stays
         let s = screen_at(&a, 60, 30);
         assert!(
-            s.contains("agent-inbox") && s.contains("router offline: conn"),
+            s.contains("agent-inbox") && s.contains("inbox unreadable: perm"),
             "{s}"
         );
     }
@@ -2912,7 +2913,7 @@ mod tests {
                 a.set_sessions(vec![session(1, "s-a", WAITING)]);
                 a.area = Rect::new(0, 0, w, h);
                 a.notify("status", true);
-                a.offline = Some("down".into());
+                a.inbox_error = Some("down".into());
                 for k in keys {
                     a.on_key(*k);
                 }
@@ -3993,7 +3994,7 @@ mod tests {
     }
 
     #[test]
-    fn sessions_load_while_the_router_is_offline() {
+    fn sessions_load_while_the_inbox_is_unreadable() {
         // a process with an origin, without a start time: alive (/proc is the real one)
         let mut child = Command::new("sleep")
             .arg("30")
@@ -4010,10 +4011,13 @@ mod tests {
         )
         .unwrap();
         let mut a = app(vec![]);
-        refresh(&mut a, "127.0.0.1:1", None, &dir);
+        // a regular file as the inbox: read_dir fails with ENOTDIR
+        let not_a_dir = dir.join("not-a-dir");
+        std::fs::write(&not_a_dir, "").unwrap();
+        refresh(&mut a, &not_a_dir, None, &dir);
         child.kill().unwrap();
         child.wait().unwrap();
-        assert!(a.offline.is_some());
+        assert!(a.inbox_error.is_some());
         assert_eq!(a.sessions.len(), 1);
         assert_eq!(a.sessions[0].origin_file, ORIGIN_FILE);
         std::fs::remove_dir_all(&dir).unwrap();
@@ -4090,8 +4094,8 @@ mod tests {
         // no session id: the items without one are not its
         assert!(a.session_item_ids(9).is_empty());
         assert!(a.session_item_ids(10).is_empty());
-        // the items are stale while the router is unreachable
-        a.offline = Some("down".into());
+        // the items are stale while the inbox is unreadable
+        a.inbox_error = Some("down".into());
         assert!(a.session_item_ids(7).is_empty());
     }
 
@@ -4355,7 +4359,7 @@ mod tests {
         assert!(!perform(
             &mut a,
             pick_repo(),
-            "",
+            Path::new(""),
             None,
             Path::new("/nonexistent")
         ));

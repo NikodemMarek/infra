@@ -1,4 +1,4 @@
-# PermissionRequest hook. Routes the request to the event router (notification + agent-inbox), but only for
+# PermissionRequest hook. Publishes the request as an event (notification + agent-inbox), but only for
 # sessions with an origin (CLAUDE_ORIGIN_FILE: started by `jw agent` or an event); sessions without one
 # (hand-started claude) get only the local dialog.
 # Waits by default (up to CLAUDE_INBOX_WAIT seconds, default and max 600; 0 = notification only) for an

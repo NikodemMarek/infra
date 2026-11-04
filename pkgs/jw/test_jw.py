@@ -1,6 +1,8 @@
 import contextlib
 import io
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -317,6 +319,65 @@ class CmdReap(unittest.TestCase):
         self.run_m.assert_called()
         for c in self.run_m.call_args_list:
             self.assertNotIn("jj", c.args[0])
+
+
+class PostEvent(unittest.TestCase):
+    def fake(self, code=0, stderr=""):
+        """A fake event-pub in a temp dir that records argv and stdin."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = tmp.name
+        path = os.path.join(self.dir, "event-pub")
+        with open(path, "w") as f:
+            f.write(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > '{self.dir}/argv'\ncat > '{self.dir}/stdin'\n"
+                    f"echo '{stderr}' >&2\nexit {code}\n")
+        os.chmod(path, 0o755)
+        return mock.patch.object(jw, "EVENT_PUB", path)
+
+    def test_runs_event_pub_with_type_and_json_on_stdin(self):
+        event = {"type": "session.message", "to": "s1", "from": "user", "text": "hi"}
+        with self.fake():
+            jw.post_event(event)
+        with open(os.path.join(self.dir, "argv")) as f:
+            self.assertEqual(f.read().split("\n")[:-1], ["session.message"])
+        with open(os.path.join(self.dir, "stdin")) as f:
+            self.assertEqual(json.loads(f.read()), event)
+
+    def test_nonzero_exit_is_fail_with_stderr(self):
+        with self.fake(1, "boom"):
+            with self.assertRaises(Fail) as c:
+                jw.post_event({"type": "session.message"})
+        self.assertIn("boom", str(c.exception))
+
+    def test_failure_message_is_not_prefixed_twice(self):
+        # the real event-pub's stderr already starts with "event-pub: "
+        with self.fake(1, "event-pub: boom"):
+            with self.assertRaises(Fail) as c:
+                jw.post_event({"type": "session.message"})
+        self.assertIn("event-pub: boom", str(c.exception))
+        self.assertNotIn("event-pub: event-pub:", str(c.exception))
+
+    def test_missing_program_is_fail(self):
+        with mock.patch.object(jw, "EVENT_PUB", "/nonexistent/event-pub"):
+            with self.assertRaises(Fail) as c:
+                jw.post_event({"type": "session.message"})
+        self.assertTrue(str(c.exception).startswith("event-pub: "))
+
+    def test_timeout_is_fail(self):
+        err = subprocess.TimeoutExpired("event-pub", 5)
+        with mock.patch("subprocess.run", side_effect=err):
+            with self.assertRaises(Fail) as c:
+                jw.post_event({"type": "session.message"})
+        self.assertTrue(str(c.exception).startswith("event-pub: "))
+
+    def test_msg_publishes_a_session_message(self):
+        a = mock.Mock(text=["hello", "there"], dock=None)
+        a.name = "s1"
+        with mock.patch.dict(os.environ, {"KNOWLEDGE_ORIGIN": "", "SHPOOL_SESSION_NAME": "me"}), \
+                mock.patch.object(jw, "post_event") as post, mock.patch("sys.stderr"):
+            jw.cmd_msg(a)
+        post.assert_called_once_with({"type": "session.message", "to": "s1", "from": "me",
+                                      "text": "hello there"})
 
 
 if __name__ == "__main__":

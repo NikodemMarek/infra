@@ -1,10 +1,10 @@
-//! agent-inbox: terminal UI over the event router's queue (see ADR-023): inspect events, answer
+//! agent-inbox: terminal UI over the inbox directory (see ADR-023): inspect events, answer
 //! sudo password requests and, via the permission hook, Claude permission prompts and
 //! questions (ADR-025); the last tab (Tab cycles them) shows the live Claude sessions (attach, kill, start a
 //! new one; `jw` must be on PATH, the Nix package adds it). Only agents started by `jw agent` or the
 //! GitLab event handler (those with CLAUDE_ORIGIN_FILE) are listed, `o` opens their merge
-//! request or issue (`xdg-open`, also added by the Nix package). `N` posts a `task.new` to the
-//! router to start an agent (an empty task: pick the repo with `jw pick` first); `task.failed`
+//! request or issue (`xdg-open`, also added by the Nix package). `N` publishes a `task.new`
+//! with `event-pub` to start an agent (an empty task: pick the repo with `jw pick` first); `task.failed`
 //! items show in every tab and `p` picks a repo and sends their task again.
 //!
 //!   agent-inbox              interactive UI; $AGENT_INBOX_TABS (JSON, set by the Nix package)
@@ -26,7 +26,7 @@ mod tui;
 
 use std::env;
 use std::io::{self, BufRead, IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 
 use client::{clean, Result};
@@ -57,19 +57,6 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-/// XDG_RUNTIME_DIR, else /run/user/<euid> (as askpass.sh does).
-fn runtime_dir() -> PathBuf {
-    env::var_os("XDG_RUNTIME_DIR")
-        .filter(|v| !v.is_empty())
-        .map_or_else(
-            || {
-                // SAFETY: geteuid has no preconditions and cannot fail.
-                PathBuf::from(format!("/run/user/{}", unsafe { libc::geteuid() }))
-            },
-            PathBuf::from,
-        )
 }
 
 /// The filter tabs in the JSON `raw` (unset or empty: none): a list of objects with a `name` and
@@ -109,14 +96,18 @@ fn parse_tabs(raw: &str) -> Result<Vec<Tab>> {
 
 fn run_tui() -> Result<()> {
     let tabs = parse_tabs(&env::var("AGENT_INBOX_TABS").unwrap_or_default())?;
-    let base = client::base()?;
     let sessions_dir = sessions::config_dir().join("sessions");
-    tui::run(&base, Some(runtime_dir().as_path()), &sessions_dir, tabs)?;
+    tui::run(
+        &client::inbox_dir(),
+        Some(client::runtime_dir().as_path()),
+        &sessions_dir,
+        tabs,
+    )?;
     Ok(())
 }
 
 fn list() -> Result<()> {
-    let items = client::list(&client::base()?)?;
+    let items = client::list(&client::inbox_dir())?;
     let now = client::now();
     let mut out = io::stdout().lock();
     for item in items.iter().rev() {
@@ -153,9 +144,9 @@ fn sessions() -> Result<()> {
 }
 
 fn answer(id: &str) -> Result<()> {
-    let runtime = runtime_dir();
-    let base = client::base()?;
-    let items = client::list(&base)?;
+    let runtime = client::runtime_dir();
+    let inbox = client::inbox_dir();
+    let items = client::list(&inbox)?;
     let item = items
         .iter()
         .find(|i| i.id == id)
@@ -183,13 +174,13 @@ fn answer(id: &str) -> Result<()> {
     input.clear();
     // an expired request is as resolved as an answered one
     if matches!(outcome, Ok(()) | Err(ReplyError::Expired)) {
-        client::dismiss(&base, id)?;
+        client::dismiss(&inbox, id)?;
     }
     outcome.map_err(Into::into)
 }
 
 fn dismiss(id: &str) -> Result<()> {
-    if client::dismiss(&client::base()?, id)? {
+    if client::dismiss(&client::inbox_dir(), id)? {
         Ok(())
     } else {
         Err("no such inbox item".into())
