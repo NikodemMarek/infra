@@ -51,15 +51,16 @@
     "Bash(mvn test:*)"
     "Bash(mvn compile:*)"
   ];
-  # The curator's files (injected into every session) and the note inbox: event
-  # sessions run acceptEdits with the memory dir in additionalDirectories, so
-  # without these they could write them directly. The architect's own files
-  # (overview, decisions, log, notes) are not covered. Only Edit rules: they
-  # apply to Write too, Write path rules are never consulted. Sessions are
-  # started only with `jw agent`: others are invisible to agent-inbox.
   deny = [
+    # Sessions are started only with `jw agent`: others are invisible to agent-inbox.
     "Bash(shpool attach:*)"
     "Bash(shpool --no-daemonize attach:*)"
+
+    # The curator's files (injected into every session) and the note inbox: event
+    # sessions run in auto mode with the memory dir in additionalDirectories, so
+    # without these they could write them directly. The architect's own files
+    # (overview, decisions, log, notes) are not covered. Only Edit rules: they
+    # apply to Write too, Write path rules are never consulted.
     "Edit(@memoryDir@/global.md)"
     "Edit(@memoryDir@/topic/**)"
     "Edit(@memoryDir@/lang/**)"
@@ -82,7 +83,6 @@
     "Bash(glab api *notes*)"
     "Bash(glab api *discussions*)"
   ];
-  ask = [];
   additionalDirectories = ["@memoryDir@" "~/projects"];
   # every session starts in auto mode, also those jw and the event handlers start
   defaultMode = "auto";

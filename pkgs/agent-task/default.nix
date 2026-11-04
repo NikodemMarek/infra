@@ -10,7 +10,7 @@
   coreutils,
   findutils,
 }:
-# Quick capture of a task for the event router (ADR-035): a rofi prompt, optionally after a
+# Quick capture of a task for the event router: a rofi prompt, optionally after a
 # slurp screenshot (--shot) and with the clipboard image attached on Ctrl+Enter. Posts
 # `task.new` and exits; the images stay in $XDG_RUNTIME_DIR/agent-task/ for the session.
 writeShellApplication {

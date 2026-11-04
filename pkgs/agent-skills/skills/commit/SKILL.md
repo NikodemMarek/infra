@@ -29,6 +29,6 @@ Write Conventional Commits messages for jj changes and apply them. Non-interacti
 
 ## Rules
 
-- Never push or `jj upload` unless explicitly asked.
+- Push finished work with `jj upload` without asking (see the `jj` skill).
 - Never rewrite (`describe`, `squash`, `split`) changes other than the ones the user asked about.
 - Do not add co-author trailers.

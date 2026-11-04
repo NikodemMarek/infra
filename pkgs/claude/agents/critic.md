@@ -40,4 +40,5 @@ Answer only these:
 Report your **Focus**, then **Verdict**: OK / CONCERNS, then each concern, most important first, with its evidence (`path:line`, ADR id) and what you'd do instead in one line.
 
 ## Knowledge
+- `global.md` is in your context. Before starting, Read the scope files for your task (`@memoryDir@/{topic,lang,org}/<name>.md`, `@memoryDir@/projects/<slug>/facts.md`) if they exist.
 - If you learned something reusable that passes the bar in the `knowledge` skill, end your report with a ```knowledge block (format in the skill). Most tasks produce none; never submit task status.

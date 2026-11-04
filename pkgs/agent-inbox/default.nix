@@ -27,7 +27,7 @@ rustPlatform.buildRustPackage {
 
   nativeBuildInputs = [makeWrapper];
 
-  # `N` asks for a task and runs `jw agent -d <task>`; `o` opens a link with xdg-open. A jw or
+  # `N` asks for a task and posts it to the event router as `task.new`; jw starts and attaches agents; `o` opens a link with xdg-open. A jw or
   # xdg-open of the user's own PATH wins. zellij and shpool come from PATH too: they must match the
   # running server and daemon.
   postInstall = ''
