@@ -1,12 +1,18 @@
 {
   config,
+  lib,
   pkgs,
   ...
-}: {
-  secrets = {
-    k3s_token = {};
-    k3s_vpn_auth = {};
+}: let
+  ips = {
+    triss = "100.97.10.25";
+    regis = "100.100.215.91";
+    roach = "100.109.230.83";
   };
+  ip = ips.${config.networking.hostName};
+  isServer = config.services.k3s.role == "server";
+in {
+  secrets.k3s_token = {};
 
   environment.systemPackages = [
     pkgs.nfs-utils
@@ -19,6 +25,20 @@
   services.k3s = {
     enable = true;
     tokenFile = config.secrets.k3s_token.path;
+    serverAddr =
+      if isServer
+      then ""
+      else "https://${ips.triss}:6443";
+    extraFlags =
+      [
+        "--kube-proxy-arg=proxy-mode=nftables"
+        "--vpn-auth=name=tailscale,joinKey=none"
+        "--node-external-ip=${ip}"
+        "--node-ip=${ip}"
+        "--kubelet-arg=node-ip=${ip}"
+        "--flannel-iface=tailscale0"
+      ]
+      ++ lib.optional (!isServer) "--disable-apiserver-lb";
   };
 
   systemd.services.k3s = {
