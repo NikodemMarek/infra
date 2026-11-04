@@ -17,6 +17,7 @@
     enable = true;
     tokenFile = config.secrets.k3s_token.path;
     extraFlags = [
+      "--kube-proxy-arg=proxy-mode=nftables"
       "--vpn-auth=name=tailscale,joinKey=none"
     ];
   };

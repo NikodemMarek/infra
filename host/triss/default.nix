@@ -61,7 +61,6 @@
     role = "server";
     images = [pkgs.tm-image];
     extraFlags = [
-      "--kube-proxy-arg=proxy-mode=nftables"
       "--node-external-ip=100.97.10.25"
       "--node-ip=100.97.10.25"
       "--kubelet-arg=node-ip=100.97.10.25"

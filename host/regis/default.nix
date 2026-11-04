@@ -54,7 +54,6 @@
     role = "agent";
     serverAddr = "https://100.97.10.25:6443";
     extraFlags = [
-      "--kube-proxy-arg=proxy-mode=nftables"
       "--node-external-ip=100.100.215.91"
       "--node-ip=100.100.215.91"
       "--kubelet-arg=node-ip=100.100.215.91"
