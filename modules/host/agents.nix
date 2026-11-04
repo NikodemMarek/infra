@@ -4,7 +4,7 @@
   config,
   ...
 }: let
-  cfg = config.services.event-router;
+  cfg = config.services.agents;
   eventRouter = lib.getExe pkgs.event-router;
 
   # without this shpool types a prompt-setup command into the session's stdin,
@@ -14,13 +14,13 @@
     prompt_prefix = ""
   '';
 in {
-  options.services.event-router.enable = lib.mkEnableOption "the event router, the local NATS server, the knowledge curator timer and the idle Claude session reaper";
+  options.services.agents.enable = lib.mkEnableOption "the event router, the local NATS server, the event handlers, the knowledge curator timer and the idle Claude session reaper";
 
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [pkgs.shpool pkgs.natscli];
 
-    # the unit ships with the package; NixOS ignores its [Install]
-    systemd.packages = [pkgs.nats-server];
+    # units ship with the packages; NixOS ignores their [Install]
+    systemd.packages = [pkgs.nats-server pkgs.event-handlers];
     systemd.services.nats.wantedBy = ["multi-user.target"];
 
     # the event handler for claude sessions runs them in shpool sessions
@@ -57,6 +57,8 @@ in {
           KillMode = "process";
         };
       };
+
+      event-handlers.wantedBy = ["default.target"];
 
       knowledge-curate = {
         description = "Merge the pending knowledge notes into the knowledge store";

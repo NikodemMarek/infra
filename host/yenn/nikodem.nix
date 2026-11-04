@@ -164,7 +164,7 @@ in {
   ];
 
   services = {
-    event-router.enable = true;
+    agents.enable = true;
     hypridle.enable = true;
     syncthing.user = "nikodem";
   };

@@ -56,18 +56,7 @@
   tm = pkgs.callPackage ./tm {};
   tm-image = pkgs.callPackage ./tm/image.nix {};
 
-  event-handlers = {
-    notify = pkgs.callPackage ./event-handlers/notify {};
-    notify-critical = pkgs.event-handlers.notify.override {urgency = "critical";};
-    # GitLab event -> Claude session in a shpool session. No gitlab.* routes here (no
-    # GitLab watcher): a layer that has one sets contextTool and adds the routes.
-    claude = pkgs.callPackage ./event-handlers/claude {
-      notify = pkgs.event-handlers.notify;
-    };
-    task = pkgs.callPackage ./event-handlers/task {};
-    # `session.message` events -> per-session mailbox read by the claude hooks
-    session-message = pkgs.callPackage ./event-handlers/session-message {};
-  };
+  event-handlers = pkgs.callPackage ./event-handlers {};
 
   # `handlers` stays explicit so `.override (old: {handlers = old.handlers // ...})`
   # can extend it.
