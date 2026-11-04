@@ -10,10 +10,11 @@ pkgs.symlinkJoin {
   buildInputs = [pkgs.makeWrapper];
   postBuild = ''
     wrapProgram $out/bin/hyprlock \
-        --set CONF $out \
+        --set CONF $out/config/hyprlock \
         --add-flags "--config ${./config.conf}"
 
-    cp ${./colors.conf} $out/colors.conf
-    cp ${wallpaper} $out/background.png
+    mkdir -p $out/config/hyprlock
+    cp ${./colors.conf} $out/config/hyprlock/colors.conf
+    cp ${wallpaper} $out/config/hyprlock/background.png
   '';
 }
