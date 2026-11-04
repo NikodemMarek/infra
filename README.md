@@ -275,6 +275,8 @@ kubectl -n matrix exec -it deploy/synapse -- register_new_matrix_user -c /config
 
 Its database is the CloudNativePG cluster `matrix-postgres`, backed up and restored like the Immich database (a `pg_dump` pre-hook, `synapse.dump`; database and owner `synapse`); the signing key and media are on the PVC `synapse-data`.
 
+Bridges are mautrix appservices in `matrix/<network>`, one per network (`whatsapp`, pinned image, SQLite on its own PVC). For WhatsApp, DM `@whatsappbot:nkmrk.com` and send `login qr`. Bump the bridge images about monthly: a "client outdated" notice in the bridge room is the cue.
+
 ### WireGuard peers
 
 Peers have one of two tiers, set by their address. Limited peers (`10.13.13.2-127`) reach only `*.nkmrk.com`, the cluster DNS server (`10.43.0.53`) and the internet (via Mullvad), never the cluster network. Full peers (`10.13.13.128-254`) also reach the cluster's pod and service networks (`10.42.0.0/15`). The pod's firewall enforces the tiers. Peers' internet leaves through the pod's own Mullvad WireGuard tunnel (relay `de-fra-wg-001`, pinned in `wireguard/deployment.yaml`); without the tunnel peers have no internet. To change the relay, take its IPv4 and public key from Mullvad's relay list (`api.mullvad.net/public/relays/wireguard/v2`).

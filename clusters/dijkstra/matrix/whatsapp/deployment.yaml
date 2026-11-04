@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whatsapp
+  namespace: matrix
+  labels:
+    app: whatsapp
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: whatsapp
+  template:
+    metadata:
+      labels:
+        app: whatsapp
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: regis
+      enableServiceLinks: false
+      securityContext:
+        runAsUser: 1337
+        runAsGroup: 1337
+        fsGroup: 1337
+        fsGroupChangePolicy: OnRootMismatch
+      volumes:
+        - name: config
+          configMap:
+            name: whatsapp-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: whatsapp-data
+      containers:
+        - name: whatsapp
+          image: dock.mau.dev/mautrix/whatsapp:v0.2610.0@sha256:c807054cb015d0f5c90d20d85aac216d062b4a6f4ae834b931fd5e7f03e27391
+          command: ["/usr/bin/mautrix-whatsapp", "-c", "/config/config.yaml", "-n"]
+          workingDir: /data
+          env:
+            - name: BRIDGE_APPSERVICE__AS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: secrets
+                  key: whatsapp_as_token
+            - name: BRIDGE_APPSERVICE__HS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: secrets
+                  key: whatsapp_hs_token
+          ports:
+            - name: http
+              containerPort: 29318
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "10m"
+            limits:
+              memory: "256Mi"
