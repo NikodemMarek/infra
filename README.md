@@ -23,6 +23,7 @@ modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-noti
 pkgs/                  wrapped packages (package + bundled config) and own tools (pkgs/agent-skills/skills: Agent Skills, shared by claude and agent-skills)
 overlays/              exposes pkgs/ (the wrapped packages, shadowing the nixpkgs ones, and the tools), flake inputs as packages, deploy-rs
 clusters/dijkstra/     Kubernetes manifests, reconciled by Flux
+tailscale/policy.json  tailnet policy
 ```
 
 ## Hosts
@@ -220,6 +221,8 @@ Own programs that are not wrappers of an upstream package. They are top-level at
 | `roach`, `regis` | agents, join `triss` through its tailscale address |
 
 Node config is in `host/features/optional/k3s.nix` plus the per-host `services.k3s` blocks. The token comes from Bitwarden (`K3S_TOKEN`). `roach` and `regis` also export NFS (`nfs.nix`), used for app volumes.
+
+The tailnet policy is `tailscale/policy.json`. Change it in the repo, then paste it into the Tailscale console (Access controls > JSON editor) and save; don't edit it in the console.
 
 The age key Flux decrypts sops manifests with is applied as `flux-system/sops-age` by the k3s server (`services.flux-sops-age`, `modules/host/flux-sops-age.nix`). It is the Bitwarden item `infra/dijkstra/FLUX_SOPS_AGE_KEY` (profile `dijkstra`) and must match `&dijkstra_cluster` in `.sops.yaml`, which the unit checks before applying. Enable it only on the k3s server: moving the server role means moving the flag.
 
