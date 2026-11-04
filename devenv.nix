@@ -457,16 +457,28 @@ in {
         install -d -m755 "$extra/persist/data/etc/ssh"
         install -m600 "host/$host/ssh_host_ed25519_key" "$extra/persist/data/etc/ssh/ssh_host_ed25519_key"
 
-        # only for zfs encrypted filesystems
-        # install -d -m755 "$extra/persist/data/etc/zfs"
-        # install -m600 "host/$host/disk.key" "$extra/persist/data/etc/zfs/disk.key"
+        # zfs hosts (regis' tank) read their disk key from /tmp/disk.key during the
+        # install and from /persist afterwards; no other layout uses it
+        zpool=$(nix eval --impure --raw ".#nixosConfigurations.$host.config.disko.devices.zpool" \
+          --override-input secrets "path:$secrets" \
+          --apply 'z: if z != {} then "1" else ""')
+        disk_key=()
+        if [ -n "$zpool" ]; then
+          if [ ! -f "host/$host/disk.key" ]; then
+            echo "missing disk key host/$host/disk.key"
+            exit 1
+          fi
+          install -d -m755 "$extra/persist/data/etc/zfs"
+          install -m600 "host/$host/disk.key" "$extra/persist/data/etc/zfs/disk.key"
+          disk_key=(--disk-encryption-keys /tmp/disk.key "host/$host/disk.key")
+        fi
 
         # assigned first, set -e ignores a failing $(...) inside the arguments below
         disko=$(build diskoScript)
         toplevel=$(build toplevel)
 
         nixos-anywhere \
-          --disk-encryption-keys /tmp/disk.key "host/$host/disk.key" \
+          "''${disk_key[@]}" \
           --extra-files "$extra" \
           --store-paths "$disko" "$toplevel" \
           "$target"

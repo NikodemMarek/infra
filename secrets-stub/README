@@ -1,2 +1,2 @@
 Placeholder for the `secrets` flake input.
-Overridden at build time by `secrets-build` (see devenv.nix) with encrypted sops files generated from SecretSpec.
+`secrets-build` (see devenv.nix) writes encrypted sops files generated from SecretSpec to a directory; `host-switch`, `host-deploy` and `install-remote` pass it with `--override-input secrets path:<dir>`.

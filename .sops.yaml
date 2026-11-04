@@ -10,7 +10,6 @@ keys:
 
   - &users
     - &yenn_nikodem age1scg6e6lvajg70gqr5ua7uqxhk43826zs5mpkknqemzuxuqkdv9vqcvvce7
-    - &LP-043_nm1 age1eg6f0ajlmpnfxd9hfvc8j0jup2hsjfhv78wvpr898r97cmny756s2eadg3
 
   - &clusters
     - &dijkstra_cluster age1l58pzs8ex5e72lgpgcavaxvx7g80937cjtqkr743hdnjvy5jramsycjtp4

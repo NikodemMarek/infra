@@ -5,6 +5,10 @@ __pycache__/
 
 host/alp/key
 
+# install-remote inputs, see README (Installing a new host)
+host/*/ssh_host_ed25519_key
+host/*/disk.key
+
 # Devenv
 .devenv*
 devenv.local.nix
