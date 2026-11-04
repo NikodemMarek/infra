@@ -28,6 +28,10 @@ data:
       permissions:
         "@nikodem:nkmrk.com": admin
 
+    backfill:
+      enabled: true
+      max_initial_messages: 1000
+
     encryption:
       allow: false
 
