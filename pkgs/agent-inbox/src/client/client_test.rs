@@ -261,7 +261,11 @@ fn stub_program(dir: &Path, code: i32, stderr: &str) -> PathBuf {
         "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{d}/args'\ncat > '{d}/stdin'\necho '{stderr}' >&2\nexit {code}\n",
         d = dir.display()
     );
-    fs::write(&path, script).unwrap();
+    // Children forked by parallel tests inherit any write fd we hold on the stub, and exec of a
+    // file open for writing fails with ETXTBSY; let a cp child write it so we never hold one.
+    let src = dir.join("stub.src");
+    fs::write(&src, script).unwrap();
+    assert!(Command::new("cp").arg(&src).arg(&path).status().unwrap().success());
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     path
 }
