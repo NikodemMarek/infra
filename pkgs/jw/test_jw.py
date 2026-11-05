@@ -2,9 +2,13 @@ import contextlib
 import io
 import json
 import os
+import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -321,63 +325,268 @@ class CmdReap(unittest.TestCase):
             self.assertNotIn("jj", c.args[0])
 
 
-class PostEvent(unittest.TestCase):
-    def fake(self, code=0, stderr=""):
-        """A fake event-pub in a temp dir that records argv and stdin."""
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = tmp.name
-        path = os.path.join(self.dir, "event-pub")
-        with open(path, "w") as f:
-            f.write(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > '{self.dir}/argv'\ncat > '{self.dir}/stdin'\n"
-                    f"echo '{stderr}' >&2\nexit {code}\n")
-        os.chmod(path, 0o755)
-        return mock.patch.object(jw, "EVENT_PUB", path)
+class CmdMsg(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(dir="/tmp")  # short: AF_UNIX paths are limited to ~100 bytes
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.sessions = os.path.join(self.tmp, "sessions")
+        os.makedirs(self.sessions)
+        env = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.tmp, "KNOWLEDGE_ORIGIN": "",
+                                           "SHPOOL_SESSION_NAME": "me"})
+        env.start()
+        self.addCleanup(env.stop)
+        w = mock.patch.object(jw, "MSG_WAIT", 0)
+        w.start()
+        self.addCleanup(w.stop)
+        self.received = []
 
-    def test_runs_event_pub_with_type_and_json_on_stdin(self):
-        event = {"type": "session.message", "to": "s1", "from": "user", "text": "hi"}
-        with self.fake():
-            jw.post_event(event)
-        with open(os.path.join(self.dir, "argv")) as f:
-            self.assertEqual(f.read().split("\n")[:-1], ["session.message"])
-        with open(os.path.join(self.dir, "stdin")) as f:
-            self.assertEqual(json.loads(f.read()), event)
+    def listen(self, name="a"):
+        path = os.path.join(self.tmp, f"{name}.sock")
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(path)
+        srv.listen(5)
+        self.addCleanup(srv.close)
 
-    def test_nonzero_exit_is_fail_with_stderr(self):
-        with self.fake(1, "boom"):
+        def serve():
+            while True:
+                try:
+                    conn, _ = srv.accept()
+                except OSError:
+                    return
+                with conn:
+                    buf = b""
+                    while True:
+                        d = conn.recv(4096)
+                        if not d:
+                            break
+                        buf += d
+                    self.received.append(buf)
+
+        threading.Thread(target=serve, daemon=True).start()
+        return path
+
+    def register(self, pid, name, sock, file=None, proc_start=None):
+        """Session file; procStart defaults to the real start time of the pid."""
+        if proc_start is None:
+            proc_start = jw.stat_fields(pid)[19]
+        with open(os.path.join(self.sessions, f"{file or pid}.json"), "w") as f:
+            json.dump({"pid": pid, "name": name, "procStart": proc_start, "messagingSocketPath": sock}, f)
+
+    def dead_pid(self):
+        p = subprocess.Popen(["true"])
+        p.wait()
+        return p.pid
+
+    def spawn(self, cwd=None, env=None):
+        """A live process with the given working directory and environment."""
+        p = subprocess.Popen(["sleep", "60"], cwd=cwd, env={**os.environ, **(env or {})})
+        self.addCleanup(p.wait)
+        self.addCleanup(p.kill)
+        return p.pid
+
+    def live(self, *entries):
+        """Patch jw.live_claudes with (pid, session dict, cwd, shpool name) entries."""
+        m = mock.patch.object(jw, "live_claudes", return_value=list(entries))
+        m.start()
+        self.addCleanup(m.stop)
+
+    def entry(self, pid, name, cwd, sock, shpool=None):
+        return (pid, {"pid": pid, "name": name, "messagingSocketPath": sock}, cwd, shpool)
+
+    def msg(self, *args, stdin=""):
+        with mock.patch.object(sys, "argv", ["jw", "msg", *args]):
+            a = jw.parse_args()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), mock.patch("sys.stdin", io.StringIO(stdin)):
+            a.func(a)
+        return err.getvalue()
+
+    def sent(self):
+        for _ in range(100):
+            if self.received:
+                break
+            time.sleep(0.02)
+        self.assertEqual(len(self.received), 1)
+        raw = self.received[0].decode()
+        self.assertTrue(raw.endswith("\n"))
+        self.assertEqual(raw.count("\n"), 1)
+        obj = json.loads(raw)
+        self.assertEqual(obj["type"], "user")
+        self.assertEqual(obj["message"]["role"], "user")
+        return obj["message"]["content"]
+
+    def test_match_by_name(self):
+        self.register(os.getpid(), "s-1-2-3", self.listen())
+        err = self.msg("s-1-2-3", "hello", "there")
+        self.assertEqual(self.sent(), "Message from me:\n\n> hello there")
+        self.assertIn("jw: sent to s-1-2-3", err)
+
+    def test_match_by_cwd_basename(self):
+        self.live(self.entry(1, "s-1-2-3", "/x/repo.agents/s-1-2", self.listen()))
+        err = self.msg("s-1-2", "hi")
+        self.assertEqual(self.sent(), "Message from me:\n\n> hi")
+        self.assertIn("jw: sent to s-1-2-3", err)
+
+    def test_match_by_real_cwd_through_live_claudes(self):
+        d = os.path.join(self.tmp, "repo.agents", "ws-7")
+        os.makedirs(d)
+        pid = self.spawn(cwd=d)
+        self.register(pid, "other-name", self.listen())
+        err = self.msg("ws-7", "hi")
+        self.assertEqual(self.sent(), "Message from me:\n\n> hi")
+        self.assertIn("jw: sent to other-name", err)
+
+    def test_match_by_shpool_name(self):
+        self.live(self.entry(1, "sess", "/x/unrelated", self.listen(), shpool="pool-9"))
+        err = self.msg("pool-9", "hi")
+        self.assertEqual(self.sent(), "Message from me:\n\n> hi")
+        self.assertIn("jw: sent to sess", err)
+
+    def test_match_by_shpool_name_through_live_claudes(self):
+        pid = self.spawn(env={"SHPOOL_SESSION_NAME": "pool-real"})
+        self.register(pid, "sess", self.listen())
+        self.msg("pool-real", "hi")
+        self.assertEqual(self.sent(), "Message from me:\n\n> hi")
+
+    def test_dead_pid_ignored(self):
+        self.register(self.dead_pid(), "dead", self.listen(), proc_start="1")
+        with self.assertRaises(Fail) as c:
+            self.msg("dead", "hi")
+        self.assertEqual(str(c.exception), "no running session dead")
+        self.assertEqual(self.received, [])
+
+    def test_stale_proc_start_ignored(self):
+        self.register(os.getpid(), "stale", self.listen(), proc_start="1")  # live pid, but reused
+        with self.assertRaises(Fail) as c:
+            self.msg("stale", "hi")
+        self.assertEqual(str(c.exception), "no running session stale")
+        self.assertEqual(self.received, [])
+
+    def test_dead_pid_does_not_make_ambiguous(self):
+        self.register(self.dead_pid(), "dup", self.listen("a"), proc_start="1")
+        self.register(os.getpid(), "dup", self.listen("b"), file="alive")
+        self.msg("dup", "hi")
+        self.assertEqual(self.sent(), "Message from me:\n\n> hi")
+
+    def test_no_match_fails_after_wait(self):
+        self.register(os.getpid(), "other", self.listen())
+        with self.assertRaises(Fail) as c:
+            self.msg("nope", "hi")
+        self.assertEqual(str(c.exception), "no running session nope")
+
+    def test_invalid_files_skipped(self):
+        with open(os.path.join(self.sessions, "bad.json"), "w") as f:
+            f.write("{not json")
+        with open(os.path.join(self.sessions, "nosock.json"), "w") as f:
+            json.dump({"pid": os.getpid(), "name": "good", "procStart": jw.stat_fields(os.getpid())[19]}, f)
+        self.register(os.getpid(), "good", self.listen(), file="ok")
+        self.msg("good", "hi")
+        self.assertEqual(self.sent(), "Message from me:\n\n> hi")
+
+    def test_ambiguous_fails(self):
+        self.live(self.entry(11, "n1", "/x/repo.agents/same", self.listen("a")),
+                  self.entry(12, "n2", "/y/same", self.listen("b")))
+        with self.assertRaises(Fail) as c:
+            self.msg("same", "hi")
+        msg = str(c.exception)
+        self.assertTrue(msg.startswith("several sessions match same: "), msg)
+        self.assertIn("n1 (pid 11)", msg)
+        self.assertIn("n2 (pid 12)", msg)
+        self.assertEqual(self.received, [])
+
+    def test_multiline_and_control_chars(self):
+        self.register(os.getpid(), "s",self.listen())
+        text = "a\r\nb\rc\u2028d\u2029e\u0085f\tg\x00h\x1bi\x07j"
+        self.msg("s", "--", text)
+        self.assertEqual(self.sent(), "Message from me:\n\n> a\n> b\n> c\n> d\n> e\n> f\tghij")
+
+    def test_from_is_sanitized(self):
+        self.register(os.getpid(), "s",self.listen())
+        self.msg("--from", "ev il\n:/x", "s", "hi")
+        self.assertEqual(self.sent(), "Message from evilx:\n\n> hi")
+
+    def test_from_max_64(self):
+        self.register(os.getpid(), "s",self.listen())
+        self.msg("--from", "a" * 100, "s", "hi")
+        self.assertEqual(self.sent(), f"Message from {'a' * 64}:\n\n> hi")
+
+    def test_from_empty_after_sanitizing_is_unknown(self):
+        self.register(os.getpid(), "s",self.listen())
+        self.msg("--from", "!!! ", "s", "hi")
+        self.assertEqual(self.sent(), "Message from unknown:\n\n> hi")
+
+    def test_text_from_stdin(self):
+        self.register(os.getpid(), "s",self.listen())
+        self.msg("s", stdin="line1\nline2\n")
+        self.assertEqual(self.sent(), "Message from me:\n\n> line1\n> line2")
+
+    def test_trailing_line_breaks_stripped(self):
+        self.register(os.getpid(), "s", self.listen())
+        self.msg("s", "--", "hi\r\n\r\n ")
+        self.assertEqual(self.sent(), "Message from me:\n\n> hi")
+
+    def test_long_content_truncated(self):
+        self.register(os.getpid(), "s", self.listen())
+        self.msg("s", "--", "x" * 9000)
+        content = self.sent()
+        self.assertTrue(content.startswith("Message from me:\n\n> xxx"))
+        self.assertTrue(content.endswith("\n[truncated]"))
+        self.assertEqual(len(content), 8000 + len("\n[truncated]"))
+
+    def test_empty_text(self):
+        self.register(os.getpid(), "s",self.listen())
+        for stdin in (" \n\t\n", ""):
             with self.assertRaises(Fail) as c:
-                jw.post_event({"type": "session.message"})
-        self.assertIn("boom", str(c.exception))
+                self.msg("s", stdin=stdin)
+            self.assertEqual(str(c.exception), "empty message")
+        self.assertEqual(self.received, [])
 
-    def test_failure_message_is_not_prefixed_twice(self):
-        # the real event-pub's stderr already starts with "event-pub: "
-        with self.fake(1, "event-pub: boom"):
+    def test_event_origin_refused(self):
+        self.register(os.getpid(), "s",self.listen())
+        with mock.patch.dict(os.environ, {"KNOWLEDGE_ORIGIN": "event:gitlab"}):
+            with self.assertRaises(Fail):
+                self.msg("s", "hi")
+        self.assertEqual(self.received, [])
+
+    def test_unreachable_socket(self):
+        self.register(os.getpid(), "s",os.path.join(self.tmp, "gone.sock"))  # nothing listens
+        with self.assertRaises(Fail) as c:
+            self.msg("s", "hi")
+        self.assertTrue(str(c.exception).startswith("cannot reach session s"), str(c.exception))
+
+    def test_session_appearing_during_wait(self):
+        sock = self.listen()
+        threading.Timer(0.6, self.register, (os.getpid(), "late", sock)).start()
+        with mock.patch.object(jw, "MSG_WAIT", 3):
+            self.msg("late", "hi")
+        self.assertEqual(self.sent(), "Message from me:\n\n> hi")
+
+    def test_socket_listening_during_wait(self):
+        path = os.path.join(self.tmp, "later.sock")
+        self.register(os.getpid(), "s", path)
+        t = threading.Timer(0.6, self.listen, ("later",))
+        t.start()
+        self.addCleanup(t.join)
+        with mock.patch.object(jw, "MSG_WAIT", 3):
+            self.msg("s", "hi")
+        self.assertEqual(self.sent(), "Message from me:\n\n> hi")
+
+    def test_waits_then_fails_when_nothing_appears(self):
+        with mock.patch.object(jw, "MSG_WAIT", 1):
+            t0 = time.monotonic()
             with self.assertRaises(Fail) as c:
-                jw.post_event({"type": "session.message"})
-        self.assertIn("event-pub: boom", str(c.exception))
-        self.assertNotIn("event-pub: event-pub:", str(c.exception))
+                self.msg("ghost", "hi")
+        self.assertGreaterEqual(time.monotonic() - t0, 0.9)
+        self.assertEqual(str(c.exception), "no running session ghost")
 
-    def test_missing_program_is_fail(self):
-        with mock.patch.object(jw, "EVENT_PUB", "/nonexistent/event-pub"):
+    def test_waits_then_fails_when_unreachable(self):
+        self.register(os.getpid(), "s", os.path.join(self.tmp, "gone.sock"))
+        with mock.patch.object(jw, "MSG_WAIT", 1):
+            t0 = time.monotonic()
             with self.assertRaises(Fail) as c:
-                jw.post_event({"type": "session.message"})
-        self.assertTrue(str(c.exception).startswith("event-pub: "))
-
-    def test_timeout_is_fail(self):
-        err = subprocess.TimeoutExpired("event-pub", 5)
-        with mock.patch("subprocess.run", side_effect=err):
-            with self.assertRaises(Fail) as c:
-                jw.post_event({"type": "session.message"})
-        self.assertTrue(str(c.exception).startswith("event-pub: "))
-
-    def test_msg_publishes_a_session_message(self):
-        a = mock.Mock(text=["hello", "there"], dock=None)
-        a.name = "s1"
-        with mock.patch.dict(os.environ, {"KNOWLEDGE_ORIGIN": "", "SHPOOL_SESSION_NAME": "me"}), \
-                mock.patch.object(jw, "post_event") as post, mock.patch("sys.stderr"):
-            jw.cmd_msg(a)
-        post.assert_called_once_with({"type": "session.message", "to": "s1", "from": "me",
-                                      "text": "hello there"})
+                self.msg("s", "hi")
+        self.assertGreaterEqual(time.monotonic() - t0, 0.9)
+        self.assertTrue(str(c.exception).startswith("cannot reach session s"), str(c.exception))
 
 
 if __name__ == "__main__":

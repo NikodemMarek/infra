@@ -14,20 +14,23 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 
 ROOT = os.path.expanduser("~/projects")
 FZF = "fzf"  # the nix package pins the store paths
 SHPOOL = "shpool"
-EVENT_PUB = "event-pub"  # the nix package pins it
 BASH = "bash"
 KNOWLEDGE = "knowledge"  # the nix package pins it
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 GITLAB = re.compile(r"^gl-[a-z]+-[0-9]+(-[0-9]+)?$")  # gitlab-context's workspaces: it reuses and cleans them
 IDLE_LIMIT = 4 * 3600  # seconds a detached Claude session must have been idle to be reaped
+MSG_WAIT = 10  # seconds `jw msg` waits for a session to register
+MSG_MAX = 8000  # characters of a message delivered
 
 
 class Fail(Exception):
@@ -763,17 +766,6 @@ def cmd_pick(a):
     print(os.path.basename(home))
 
 
-def post_event(event):
-    """Publish event with event-pub; Fail says why not."""
-    try:
-        p = subprocess.run([EVENT_PUB, event["type"]], input=json.dumps(event), text=True,
-                           capture_output=True, timeout=5)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        raise Fail(f"event-pub: {e}")
-    if p.returncode != 0:
-        raise Fail(p.stderr.strip() or f"event-pub exited with {p.returncode}")
-
-
 def sender():
     """Who a message is from: the shpool session, else the workspace, else the user at a terminal."""
     if os.environ.get("SHPOOL_SESSION_NAME"):
@@ -784,6 +776,24 @@ def sender():
     return "user" if "CLAUDECODE" not in os.environ else "unknown"
 
 
+def message_sessions(name):
+    """[(pid, session name, socket path)] of the live Claude sessions called name, working in a directory of that name
+    or in that shpool session, that listen for messages."""
+    return [(pid, s.get("name") or shpool or "?", s["messagingSocketPath"]) for pid, s, cwd, shpool in live_claudes()
+            if isinstance(s.get("messagingSocketPath"), str)
+            and name in (s.get("name"), os.path.basename(cwd), shpool)]
+
+
+def message_content(text, origin):
+    """Text as a quote under a header; every line break (also \\r, U+2028/2029, U+0085) starts a quoted line and
+    other control characters go, so the text cannot pass for a header."""
+    text = re.sub("\r\n|\r|\u2028|\u2029|\u0085", "\n", text).rstrip("\n")
+    text = "".join(c for c in text if c in "\t\n" or unicodedata.category(c) != "Cc")
+    origin = re.sub(r"[^A-Za-z0-9._-]", "", origin)[:64] or "unknown"
+    content = f"Message from {origin}:\n\n" + "\n".join("> " + l for l in text.split("\n"))
+    return content if len(content) <= MSG_MAX else content[:MSG_MAX] + "\n[truncated]"
+
+
 def cmd_msg(a):
     # event sessions run on untrusted text (GitLab); their messages would become instructions elsewhere
     if os.environ.get("KNOWLEDGE_ORIGIN", "").startswith("event:"):
@@ -792,8 +802,28 @@ def cmd_msg(a):
     text = " ".join(words) if words else sys.stdin.read()
     if not text.strip():
         raise Fail("empty message")
-    post_event({"type": "session.message", "to": a.name, "from": sender(), "text": text})
-    sys.stderr.write(f"jw: queued for {a.name}\n")
+    content = message_content(text, a.sender or sender())
+    line = (json.dumps({"type": "user", "message": {"role": "user", "content": content}}) + "\n").encode()
+    deadline = time.monotonic() + MSG_WAIT
+    while True:  # a session just started may not have registered or opened its socket yet
+        matches = message_sessions(a.name)
+        if len(matches) > 1:
+            raise Fail(f"several sessions match {a.name}: {', '.join(f'{n} (pid {p})' for p, n, _ in matches)}")
+        error = Fail(f"no running session {a.name}")
+        if matches:
+            _, session, sock = matches[0]
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.settimeout(5)
+                    s.connect(sock)
+                    s.sendall(line)
+                break
+            except OSError as e:
+                error = Fail(f"cannot reach session {a.name}: {e}")
+        if time.monotonic() >= deadline:
+            raise error
+        time.sleep(0.5)
+    sys.stderr.write(f"jw: sent to {session}\n")
 
 
 def cmd_info(a):
@@ -862,8 +892,9 @@ def parse_args():
     s = sub.add_parser("attach", aliases=["at"], help="attach to a Claude shpool session (default: pick one, this repo's first); a unique prefix of the name is enough")
     s.add_argument("name", nargs="?")
     s.set_defaults(func=cmd_attach)
-    s = sub.add_parser("msg", help="queue a message for a session started with jw; it arrives at the session's next turn end or user prompt, even if the session has not started yet")
-    s.add_argument("name", help="the session name (as in `shpool list`)")
+    s = sub.add_parser("msg", help="send a message to a running Claude session: delivered right away, between the tool calls of a busy session or as a new turn of an idle one; fails if the session is not running")
+    s.add_argument("--from", dest="sender", help="who the message is from (default: this session, else the user)")
+    s.add_argument("name", help="the session's name, its workspace name or its shpool session name")
     s.add_argument("text", nargs=argparse.REMAINDER, help="words of the message (default: read stdin); a leading -- is dropped")
     s.set_defaults(func=cmd_msg)
     sub.add_parser("ls", help="list the workspaces")
