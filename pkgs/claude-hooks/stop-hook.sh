@@ -1,7 +1,6 @@
 # Stop hook. If the per-MR session dir of an event-started session (CLAUDE_EVENT_SESSION_DIR) has new
-# follow-up prompt files, or session messages are queued for this session (claude-mail-take), blocks the
-# stop: the reason is a pointer to the files (paths only, never contents: they hold untrusted GitLab comment
-# text), then the messages inline; stdout is used only for this decision. Otherwise, in sessions with an
+# follow-up prompt files, blocks the stop: the reason is a pointer to the files (paths only, never
+# contents: they hold untrusted GitLab comment text); stdout is used only for this decision. Otherwise, in sessions with an
 # origin (CLAUDE_ORIGIN_FILE: started by `jw agent` or an event), tells the user the session waits for them:
 # posts claude.waiting (notification + agent-inbox), titled with the first line of the last message.
 # `key` = session id, so the inbox keeps one item per session (replaced every turn). Never blocks
@@ -16,13 +15,8 @@ if [ -n "$dir" ] && [ -d "$dir" ]; then
     pointer="New GitLab activity on this MR, read: ${paths//$'\n'/ }"
   fi
 fi
-messages="$(claude-mail-take)"
-if [ -n "$pointer" ] || [ -n "$messages" ]; then
-  reason="$pointer"
-  if [ -n "$messages" ]; then
-    reason+="${pointer:+$'\n\n'}$messages"
-  fi
-  jq -n --arg r "$reason" '{decision:"block",reason:$r}'
+if [ -n "$pointer" ]; then
+  jq -n --arg r "$pointer" '{decision:"block",reason:$r}'
   exit 0
 fi
 [ -n "${CLAUDE_ORIGIN_FILE:-}" ] || exit 0

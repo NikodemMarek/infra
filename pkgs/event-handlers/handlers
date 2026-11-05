@@ -7,7 +7,6 @@ events.sudo.> event-handler-notify-normal
 events.task.started event-handler-notify-normal
 events.task.failed event-handler-notify-normal
 events.task.new event-handler-task
-events.session.message event-handler-session-message
 events.claude.> event-handler-inbox
 events.sudo.> event-handler-inbox
 events.task.failed event-handler-inbox

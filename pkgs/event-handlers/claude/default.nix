@@ -7,9 +7,9 @@
   jq,
   util-linux,
   coreutils,
-  event-bus,
   glab,
   jujutsu,
+  jw,
   claude,
   claude-hooks,
   # handler run first with the same event, e.g. a notification
@@ -20,7 +20,7 @@
   # and prints one JSON line: `{"action": "skip", "reason": ...}` or
   # `{"action": "spawn", "cwd", "context_dir", "session_lock", "workspace"}` or
   # `{"action": "message", "to": "<session name>", "text": "<text>"}` (the text is
-  # posted as a `session.message` to the running session `to`; nothing is started)
+  # sent to the inbox of the running session `to` with `jw msg`; nothing is started)
   # (`context_dir/prompt.md` is the prompt). null: no preparation, claude starts
   # in the main checkout with a prompt built from the event alone.
   # A spawn may also carry `"session": {"id": "<uuid>", "dir": "<abs path>",
@@ -113,8 +113,8 @@ let
                 echo "text: $text"
                 exit 0
               fi
-              if ! jq -c '{to: .to, from: "gitlab", text: .text}' <<<"$out" | event-pub session.message >/dev/null; then
-                echo "cannot publish the message for session $to" >&2
+              if ! ${jw}/bin/jw msg --from gitlab "$to" <<<"$text"; then
+                echo "cannot send the message to session $to" >&2
                 exit 1
               fi
               jq --arg title "sent to the running Claude session $to" '.title = $title' <<<"$event" | ${lib.getExe notify}
@@ -231,7 +231,6 @@ writeShellApplication {
     jq
     util-linux
     coreutils
-    event-bus
     glab
     claude
   ] ++ extraPackages;

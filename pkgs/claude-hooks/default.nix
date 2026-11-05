@@ -150,23 +150,8 @@ let
     ];
   };
 
-  # Prints the session messages queued for this session (mailbox of the session.message event handler)
-  # and moves them to read/.
-  mailTake = shellHook {
-    name = "claude-mail-take";
-    src = ./mail-take.sh;
-    runtimeInputs = [
-      coreutils
-      eventQueue
-    ];
-    bashOptions = [
-      "nounset"
-      "pipefail"
-    ];
-  };
-
-  # Stop hook: points an event-started session at queued follow-up prompts and hands it queued session
-  # messages (blocks the stop), else tells the user it waits for them (claude.waiting).
+  # Stop hook: points an event-started session at queued follow-up prompts (blocks the stop), else tells
+  # the user it waits for them (claude.waiting).
   stopHook = shellHook {
     name = "claude-stop-hook";
     src = ./stop-hook.sh;
@@ -175,7 +160,6 @@ let
       coreutils
       routeEvent
       eventQueue
-      mailTake
     ];
     bashOptions = [
       "nounset"
@@ -183,8 +167,7 @@ let
     ];
   };
 
-  # UserPromptSubmit hook: adds the paths of queued follow-up prompts of an event session and queued
-  # session messages as context.
+  # UserPromptSubmit hook: adds the paths of queued follow-up prompts of an event session as context.
   promptHook = shellHook {
     name = "claude-prompt-hook";
     src = ./prompt-hook.sh;
@@ -192,7 +175,6 @@ let
       jq
       coreutils
       eventQueue
-      mailTake
     ];
     bashOptions = [
       "nounset"
@@ -250,7 +232,6 @@ symlinkJoin {
     askpass
     permissionHook
     eventQueue
-    mailTake
     stopHook
     promptHook
     mcpDefaults
@@ -258,7 +239,7 @@ symlinkJoin {
   ];
 
   meta = {
-    description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop and UserPromptSubmit hooks (queued follow-up prompts of event-started sessions, queued session messages, waiting notification), jj workspaces for isolated agents, project MCP servers seeded as disabled";
+    description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop and UserPromptSubmit hooks (queued follow-up prompts of event-started sessions, waiting notification), jj workspaces for isolated agents, project MCP servers seeded as disabled";
     platforms = lib.platforms.unix;
   };
 }
