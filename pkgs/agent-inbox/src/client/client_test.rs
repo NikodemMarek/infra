@@ -61,11 +61,7 @@ fn list_at_reads_items_sorted_by_received() {
         "a1.json",
         r#"{"id":"yyy","received":100.5,"event":{"type":"sudo.password_request","title":"sudo ls","reply":"/dev/null"}}"#,
     );
-    put(
-        &dir,
-        "c3.json",
-        r#"{"received":150,"event":{"type":"x"}}"#,
-    );
+    put(&dir, "c3.json", r#"{"received":150,"event":{"type":"x"}}"#);
     let items = list_at(&dir, 1000.0).unwrap();
     // Item.id is the file stem, the JSON id is ignored
     assert_eq!(ids(&items), vec!["a1", "c3", "b2"]);
@@ -81,7 +77,11 @@ fn list_at_reads_items_sorted_by_received() {
 #[test]
 fn list_at_non_numeric_received_is_zero() {
     let dir = tmp("recv0");
-    put(&dir, "a.json", r#"{"received":"soon","event":{"type":"x"}}"#);
+    put(
+        &dir,
+        "a.json",
+        r#"{"received":"soon","event":{"type":"x"}}"#,
+    );
     put(&dir, "b.json", r#"{"event":{"type":"x"}}"#);
     put(&dir, "c.json", r#"{"received":5,"event":{"type":"x"}}"#);
     let items = list_at(&dir, 10.0).unwrap();
@@ -265,7 +265,12 @@ fn stub_program(dir: &Path, code: i32, stderr: &str) -> PathBuf {
     // file open for writing fails with ETXTBSY; let a cp child write it so we never hold one.
     let src = dir.join("stub.src");
     fs::write(&src, script).unwrap();
-    assert!(Command::new("cp").arg(&src).arg(&path).status().unwrap().success());
+    assert!(Command::new("cp")
+        .arg(&src)
+        .arg(&path)
+        .status()
+        .unwrap()
+        .success());
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     path
 }
@@ -522,108 +527,189 @@ fn age_and_clean() {
     assert_eq!(clean("a\x1b[31m\tb\nc"), "a [31m b c");
 }
 
-/// Fresh `<temp>/<test>/claude-origin`.
-fn origin_dir(test: &str) -> PathBuf {
-    let root =
-        std::env::temp_dir().join(format!("agent-inbox-test-{}-{test}", std::process::id()));
-    let _ = fs::remove_dir_all(&root);
-    let dir = root.join("claude-origin");
-    fs::create_dir_all(&dir).unwrap();
-    dir
+#[test]
+fn agent_session_is_empty_without_one() {
+    assert_eq!(item_with(json!({"session": "s-1"})).agent_session(), "s-1");
+    assert_eq!(item_with(json!({})).agent_session(), "");
+    assert_eq!(
+        item_with(json!({"origin_file": "/o/1"})).agent_session(),
+        ""
+    );
 }
 
-/// `<dir>/<name>` holding `text`.
-fn write_origin(dir: &Path, name: &str, text: &str) -> PathBuf {
-    fs::write(dir.join(name), text).unwrap();
-    dir.join(name)
-}
+const FULL: &str = r#"{"kind":"review","title":"!7 Fix","description":"d","url":"https://g/7","mrs":["https://g/8",5]}"#;
 
 #[test]
-fn origin_loads_a_merge_request_and_a_task() {
-    let mr = r#"{"kind":"review","iid":7,"target":"MergeRequest","title":"T","url":"https://gitlab/x/-/merge_requests/7","description":"d"}"#;
-    let dir = origin_dir("origin-mr");
-    let path = write_origin(&dir, "a.json", mr);
+fn record_loads_all_fields_and_skips_non_string_mrs() {
+    let dir = tmp("rec-full");
+    put(&dir, "s-1.json", FULL);
     assert_eq!(
-        Origin::load(&path, &dir),
-        Some(Origin {
+        Record::load(&dir, "s-1"),
+        Some(Record {
             kind: "review".into(),
-            iid: Some(7),
-            target: "MergeRequest".into(),
-            title: "T".into(),
-            url: "https://gitlab/x/-/merge_requests/7".into(),
+            title: "!7 Fix".into(),
             description: "d".into(),
-            prompt: "".into(),
+            url: "https://g/7".into(),
+            mrs: vec!["https://g/8".into()],
         })
     );
-    let text = r#"{"kind":"task","title":"t","prompt":"p"}"#;
-    let path = write_origin(&dir, "b.json", text);
-    let task = Origin::load(&path, &dir).unwrap();
+}
+
+#[test]
+fn record_with_wrong_types_reads_as_empty() {
+    let dir = tmp("rec-types");
+    put(&dir, "s.json", r#"{"kind":1,"mrs":"x"}"#);
+    assert_eq!(Record::load(&dir, "s"), Some(Record::default()));
+}
+
+#[test]
+fn record_is_missing_for_bad_names_and_files() {
+    let dir = tmp("rec-bad");
+    put(&dir, "ok.json", FULL);
+    assert!(Record::load(&dir, "ok").is_some());
+    assert_eq!(Record::load(&dir, "gone"), None);
+    // a valid record sits at every path a bad name would reach
+    let sub = dir.join("sub");
+    fs::create_dir_all(sub.join("a")).unwrap();
+    put(&dir, "ok.json", FULL); // "../ok" from sub
+    for f in [".lock.json", "-x.json", ".json", "a/b.json"] {
+        put(&sub, f, FULL);
+    }
+    for name in ["", "../ok", "a/b", ".lock", "-x"] {
+        assert_eq!(Record::load(&sub, name), None, "{name:?}");
+    }
+    // a symlink is missing even when it points at a valid record
+    std::os::unix::fs::symlink(dir.join("ok.json"), dir.join("link.json")).unwrap();
+    assert_eq!(Record::load(&dir, "link"), None);
+    fs::create_dir(dir.join("d.json")).unwrap();
+    assert_eq!(Record::load(&dir, "d"), None);
+    put(&dir, "arr.json", "[]");
+    assert_eq!(Record::load(&dir, "arr"), None);
+    put(&dir, "junk.json", "{not json");
+    assert_eq!(Record::load(&dir, "junk"), None);
+}
+
+#[test]
+fn record_load_does_not_block_on_a_fifo() {
+    let dir = tmp("rec-fifo");
+    let made = Command::new("mkfifo")
+        .arg(dir.join("f.json"))
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !made {
+        eprintln!("mkfifo unavailable, skipping");
+        return;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let d: PathBuf = dir.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tx.send(Record::load(&d, "f"));
+    });
+    let got = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("Record::load blocked");
+    assert_eq!(got, None);
+}
+
+#[test]
+fn record_size_limit_is_65536_bytes() {
+    let dir = tmp("rec-size");
+    let base = r#"{"title":""}"#.len();
+    let with_len = |len: usize| format!(r#"{{"title":"{}"}}"#, "x".repeat(len - base));
+    let ok = with_len(65536);
+    assert_eq!(ok.len(), 65536);
+    put(&dir, "ok.json", &ok);
+    let rec = Record::load(&dir, "ok").expect("exactly 65536 bytes loads");
+    assert_eq!(rec.title.len(), 65536 - base);
+    let big = with_len(65537);
+    assert_eq!(big.len(), 65537);
+    put(&dir, "big.json", &big);
+    assert_eq!(Record::load(&dir, "big"), None);
+}
+
+fn rec(url: &str, mrs: &[&str]) -> Record {
+    Record {
+        url: url.into(),
+        mrs: mrs.iter().map(|s| s.to_string()).collect(),
+        ..Record::default()
+    }
+}
+
+#[test]
+fn record_link_follows_the_link_rule() {
     assert_eq!(
-        (task.iid, task.url.as_str(), task.prompt.as_str()),
-        (None, "", "p")
+        rec("", &["https://b", "https://c"]).link(),
+        Some("https://b")
     );
-    fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+    assert_eq!(rec("https://a", &["https://b"]).link(), Some("https://a"));
+    assert_eq!(rec("http://a", &["https://b"]).link(), None);
+    assert_eq!(rec("javascript:x", &[]).link(), None);
+    assert_eq!(rec("", &["file:///etc"]).link(), None);
+    assert_eq!(rec("", &[]).link(), None);
 }
 
 #[test]
-fn origin_rejects_foreign_oversized_and_malformed_files() {
-    let dir = origin_dir("origin-bad");
-    let load = |path: &Path| Origin::load(path, &dir);
-    let ok = write_origin(&dir, "a.json", r#"{"title":"T"}"#);
-    assert!(load(&ok).is_some());
-    // outside the directory, also by way of `..` and a subdirectory
-    let outside = write_origin(dir.parent().unwrap(), "b.json", r#"{"title":"T"}"#);
-    assert!(load(&outside).is_none());
-    assert!(load(&dir.join("../b.json")).is_none());
-    fs::create_dir(dir.join("sub")).unwrap();
-    let nested = write_origin(&dir.join("sub"), "c.json", r#"{"title":"T"}"#);
-    assert!(load(&nested).is_none());
-    // a directory, a missing file, over 64 KB, bad JSON, not an object
-    assert!(load(&dir.join("sub")).is_none());
-    assert!(load(&dir.join("gone.json")).is_none());
-    let big = format!(
-        r#"{{"title":"T","description":"{}"}}"#,
-        "x".repeat(64 * 1024)
-    );
-    assert!(load(&write_origin(&dir, "big.json", &big)).is_none());
-    assert!(load(&write_origin(&dir, "junk.json", "{not json")).is_none());
-    assert!(load(&write_origin(&dir, "list.json", "[]")).is_none());
-    fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+fn record_link_requires_printable_ascii_https_up_to_2048() {
+    let url = |len: usize| format!("https://{}", "a".repeat(len - 8));
+    let ok = url(2048);
+    assert_eq!(ok.len(), 2048);
+    assert_eq!(rec(&ok, &[]).link(), Some(ok.as_str()));
+    let long = url(2049);
+    assert_eq!(rec(&long, &[]).link(), None);
+    for bad in [
+        "https://",
+        "https://a\u{202e}",
+        "https://ż",
+        "https://a\tb",
+        "https://a b",
+    ] {
+        assert_eq!(rec(bad, &[]).link(), None, "{bad:?}");
+        assert_eq!(rec("", &[bad]).link(), None, "mrs {bad:?}");
+    }
+    let good = "https://g/a-b_c?x=1&y=%20";
+    assert_eq!(rec(good, &[]).link(), Some(good));
 }
 
 #[test]
-fn origin_label_names_the_merge_request_issue_or_task() {
-    let label = |target: &str, iid: Option<u64>, title: &str| {
-        origin_label(&Origin {
-            target: target.into(),
-            iid,
-            title: title.into(),
-            ..Origin::default()
-        })
+fn record_label_cleans_the_title() {
+    let label = |t: &str| {
+        Record {
+            title: t.into(),
+            ..Record::default()
+        }
+        .label()
     };
-    assert_eq!(label("MergeRequest", Some(7), "T"), Some("!7 T".into()));
-    assert_eq!(label("Issue", Some(12), "T"), Some("#12 T".into()));
-    assert_eq!(label("", None, "do it"), Some("do it".into()));
-    // without a number only the title is left
-    assert_eq!(label("MergeRequest", None, "T"), Some("T".into()));
-    assert_eq!(label("MergeRequest", Some(7), ""), Some("!7".into()));
-    assert_eq!(label("", None, ""), None);
-    assert_eq!(
-        label("Issue", Some(1), "a\x1b[31m\nb"),
-        Some("#1 a [31m b".into())
-    );
+    assert_eq!(label("!7 Fix"), Some("!7 Fix".into()));
+    assert_eq!(label("a\x1b[31m\nb"), Some("a [31m b".into()));
+    assert_eq!(label("  x\t"), Some("x".into()));
+    assert_eq!(label(""), None);
+    assert_eq!(label(" \n\t "), None);
 }
 
 #[test]
-fn origin_file_is_empty_without_one() {
-    let item = |event: Value| Item {
-        id: "a".into(),
-        received: 0.0,
-        event,
-    };
+fn session_names_are_checked() {
+    for ok in ["a", "A-1", "a.b_c", "0x", "cards-api-gl-mr-1228"] {
+        assert!(valid_session_name(ok), "{ok}");
+    }
+    for bad in [
+        "", "-x", ".lock", ".x", "_x", "../x", "a/b", "a b", "ż", "a\n",
+    ] {
+        assert!(!valid_session_name(bad), "{bad:?}");
+    }
+}
+
+#[test]
+fn records_dir_prefers_an_absolute_xdg_state_home() {
+    let d =
+        |x: Option<&str>, h: Option<&str>| records_dir_from(x.map(Into::into), h.map(Into::into));
     assert_eq!(
-        item(serde_json::json!({"origin_file": "/o/1"})).origin_file(),
-        "/o/1"
+        d(Some("/s"), Some("/h")),
+        Some(PathBuf::from("/s/agent-sessions"))
     );
-    assert_eq!(item(serde_json::json!({})).origin_file(), "");
+    let home = Some(PathBuf::from("/h/.local/state/agent-sessions"));
+    assert_eq!(d(Some(""), Some("/h")), home);
+    assert_eq!(d(Some("rel"), Some("/h")), home);
+    assert_eq!(d(None, Some("/h")), home);
+    assert_eq!(d(None, None), None);
 }
