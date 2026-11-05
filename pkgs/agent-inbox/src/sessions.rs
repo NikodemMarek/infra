@@ -27,8 +27,8 @@ pub struct Session {
     pub start: Option<u64>,
     /// The shpool session hosting the process (`jw attach <name>`), "" if there is none.
     pub shpool: String,
-    /// `CLAUDE_ORIGIN_FILE` of the process: the file describing what the session works on.
-    pub origin_file: String,
+    /// `AGENT_SESSION` of the process: the name of the record describing what the session works on.
+    pub agent_session: String,
 }
 
 impl Session {
@@ -85,7 +85,7 @@ pub fn config_dir() -> PathBuf {
 
 /// The live sessions of the registry in `sessions_dir`, newest first. Files that do not parse
 /// and sessions whose process is gone (or whose pid was reused) are skipped, as are those
-/// without CLAUDE_ORIGIN_FILE (not started by `jw agent` or the event handler); a missing
+/// without AGENT_SESSION (not started by `jw agent` or the event handler); a missing
 /// directory means no sessions.
 pub fn load(sessions_dir: &Path, proc: &Path) -> Vec<Session> {
     let Ok(entries) = fs::read_dir(sessions_dir) else {
@@ -99,7 +99,7 @@ pub fn load(sessions_dir: &Path, proc: &Path) -> Vec<Session> {
         .filter(|s| alive(proc, s.pid, s.start))
         .filter_map(|mut s| {
             let env = fs::read(proc.join(s.pid.to_string()).join("environ")).ok()?;
-            s.origin_file = environ_var(&env, "CLAUDE_ORIGIN_FILE")?;
+            s.agent_session = environ_var(&env, "AGENT_SESSION")?;
             s.shpool = environ_var(&env, "SHPOOL_SESSION_NAME").unwrap_or_default();
             Some(s)
         })
@@ -132,7 +132,7 @@ fn parse(text: &str) -> Option<Session> {
             Some(p) => Some(p.as_str()?.parse().ok()?),
         },
         shpool: String::new(),
-        origin_file: String::new(),
+        agent_session: String::new(),
     })
 }
 
@@ -193,12 +193,12 @@ mod tests {
         format!("{pid} ({comm}) S {} {start} 0 0\n", ["0"; 18].join(" "))
     }
 
-    /// `<proc>/<pid>/stat` and an `environ` with CLAUDE_ORIGIN_FILE and, if given, `environ`.
+    /// `<proc>/<pid>/stat` and an `environ` with AGENT_SESSION and, if given, `environ`.
     fn process(proc: &Path, pid: u32, stat: &str, environ: Option<&[u8]>) {
         let dir = proc.join(pid.to_string());
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("stat"), stat).unwrap();
-        let mut env = b"CLAUDE_ORIGIN_FILE=/o/1\0".to_vec();
+        let mut env = b"AGENT_SESSION=o1\0".to_vec();
         env.extend_from_slice(environ.unwrap_or_default());
         fs::write(dir.join("environ"), env).unwrap();
     }
@@ -228,7 +228,7 @@ mod tests {
             status_at: 0.0,
             start: None,
             shpool: String::new(),
-            origin_file: String::new(),
+            agent_session: String::new(),
         }
     }
 
@@ -256,25 +256,27 @@ mod tests {
                 status_at: 7.0,
                 start: Some(100),
                 shpool: "jw-1".into(),
-                origin_file: "/o/1".into(),
+                agent_session: "o1".into(),
             }]
         );
         cleanup(&sessions);
     }
 
     #[test]
-    fn session_without_origin_file_is_skipped() {
-        let (sessions, proc) = fixture("noorigin");
-        for pid in [10, 11, 12, 13] {
+    fn session_without_agent_session_is_skipped() {
+        let (sessions, proc) = fixture("nosession");
+        for pid in [10, 11, 12, 13, 14] {
             register(&sessions, pid, 2000, Some("100"));
             process(&proc, pid, &stat(pid, "claude", 100), None);
         }
-        // no variable, an empty one, an unreadable environment
+        // no variable, an empty one, an unreadable environment, only the old marker
         fs::write(proc.join("10/environ"), b"A=b\0").unwrap();
-        fs::write(proc.join("11/environ"), b"CLAUDE_ORIGIN_FILE=\0").unwrap();
+        fs::write(proc.join("11/environ"), b"AGENT_SESSION=\0").unwrap();
         fs::remove_file(proc.join("12/environ")).unwrap();
+        fs::write(proc.join("14/environ"), b"CLAUDE_ORIGIN_FILE=/o/1\0").unwrap();
         let found = load(&sessions, &proc);
         assert_eq!(found.iter().map(|s| s.pid).collect::<Vec<_>>(), vec![13]);
+        assert_eq!(found[0].agent_session, "o1");
         cleanup(&sessions);
     }
 

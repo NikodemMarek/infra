@@ -2,8 +2,10 @@
 //! handler (`<id>.json`), and `event-pub` to publish events.
 
 use std::error::Error;
+use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -12,8 +14,9 @@ use serde_json::{json, Value};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-const ORIGIN_MAX_BYTES: u64 = 64 * 1024;
+const RECORD_MAX_BYTES: u64 = 64 * 1024;
 const ITEM_MAX_BYTES: u64 = 1024 * 1024;
+const LINK_MAX_LEN: usize = 2048;
 
 /// One queued event with the inbox's bookkeeping.
 #[derive(Clone, Debug)]
@@ -35,46 +38,67 @@ pub struct Question {
     pub descriptions: Vec<String>,
 }
 
-/// What a session started by `jw agent` or the GitLab event handler works on (the JSON file
-/// `CLAUDE_ORIGIN_FILE` points to); fields the file does not have are empty.
+/// What a session started by `jw agent` or the event handlers works on (the JSON record
+/// `<records dir>/<name>.json` that `jw session set` writes); fields the record does not have
+/// are empty.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Origin {
+pub struct Record {
     /// What the agent was started for (`review`, `note`, `build-failed`, `default`, ... for GitLab
     /// events, `task` for `jw agent`): picks the filter tab, see `tui::Tab`.
     pub kind: String,
-    pub iid: Option<u64>,
-    /// `MergeRequest` or `Issue`, "" for a task.
-    pub target: String,
     pub title: String,
-    pub url: String,
     pub description: String,
-    pub prompt: String,
+    pub url: String,
+    pub mrs: Vec<String>,
 }
 
-impl Origin {
-    /// The origin file `path`, which must be a regular file of at most 64 KB directly in `dir`
-    /// (the path comes from an event: untrusted) holding a JSON object.
-    pub fn load(path: &Path, dir: &Path) -> Option<Origin> {
-        if path.parent() != Some(dir) {
+impl Record {
+    /// The record of the session `name` in `dir`: a regular file (not a symlink) of at most 64 KB
+    /// holding a JSON object. The name comes from an event or a process: untrusted.
+    pub fn load(dir: &Path, name: &str) -> Option<Record> {
+        if !valid_session_name(name) {
             return None;
         }
-        // not a FIFO: opening it would block
-        if !fs::metadata(path).ok()?.is_file() {
-            return None;
-        }
-        let raw = read_limited(path, ORIGIN_MAX_BYTES)?;
+        let path = dir.join(format!("{name}.json"));
+        let raw = read_limited(&path, RECORD_MAX_BYTES)?;
         let v: Value = serde_json::from_str(&raw).ok()?;
         v.as_object()?;
         let text = |key: &str| v.get(key).and_then(Value::as_str).unwrap_or("").to_string();
-        Some(Origin {
+        Some(Record {
             kind: text("kind"),
-            iid: v.get("iid").and_then(Value::as_u64),
-            target: text("target"),
             title: text("title"),
-            url: text("url"),
             description: text("description"),
-            prompt: text("prompt"),
+            url: text("url"),
+            mrs: v
+                .get("mrs")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(String::from)
+                .collect(),
         })
+    }
+
+    /// The link `o` opens: `url`, else the first merge request, but only an https one of at most
+    /// 2048 printable ASCII characters (the record is data of an event: a `file:` or
+    /// `javascript:` URL, spaces or control characters must not reach xdg-open).
+    pub fn link(&self) -> Option<&str> {
+        let url = if self.url.is_empty() {
+            self.mrs.first()?
+        } else {
+            &self.url
+        };
+        let rest = url.strip_prefix("https://")?;
+        let ok = url.len() <= LINK_MAX_LEN
+            && !rest.is_empty()
+            && rest.chars().all(|c| c.is_ascii_graphic());
+        ok.then_some(url.as_str())
+    }
+
+    /// The title for display; None if there is nothing to show.
+    pub fn label(&self) -> Option<String> {
+        Some(clean(&self.title).trim().to_string()).filter(|l| !l.is_empty())
     }
 }
 
@@ -108,15 +132,12 @@ pub fn task_event(task: &Task) -> Value {
     event
 }
 
-/// `!7 title` for a merge request, `#7 title` for an issue, else the title; None if there is
-/// nothing to show.
-pub fn origin_label(origin: &Origin) -> Option<String> {
-    let label = match (origin.target.as_str(), origin.iid) {
-        ("MergeRequest", Some(iid)) => format!("!{iid} {}", origin.title),
-        ("Issue", Some(iid)) => format!("#{iid} {}", origin.title),
-        _ => origin.title.clone(),
-    };
-    Some(clean(label.trim())).filter(|l| !l.is_empty())
+/// A session name (`jw session`, `AGENT_SESSION`) is made of these only, so it cannot leave the
+/// records directory.
+pub fn valid_session_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 impl Item {
@@ -150,9 +171,9 @@ impl Item {
         self.field("shpool")
     }
 
-    /// The origin file of the session the event comes from, "" for a hand-started one.
-    pub fn origin_file(&self) -> &str {
-        self.field("origin_file")
+    /// The `AGENT_SESSION` of the session the event comes from, "" for a hand-started one.
+    pub fn agent_session(&self) -> &str {
+        self.field("session")
     }
 
     pub fn prompt(&self) -> &str {
@@ -355,6 +376,21 @@ pub fn inbox_dir() -> PathBuf {
     runtime_dir().join("agent-inbox")
 }
 
+/// `<xdg>/agent-sessions` if `xdg` (XDG_STATE_HOME) is an absolute path, else
+/// `<home>/.local/state/agent-sessions`, where `jw session` writes the records; None without
+/// either.
+pub fn records_dir_from(xdg: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+    let state = match xdg.filter(|x| Path::new(x).is_absolute()) {
+        Some(xdg) => PathBuf::from(xdg),
+        None => PathBuf::from(home.filter(|h| !h.is_empty())?).join(".local/state"),
+    };
+    Some(state.join("agent-sessions"))
+}
+
+pub fn records_dir() -> Option<PathBuf> {
+    records_dir_from(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME"))
+}
+
 /// An item id (the file stem) is made of these only, so it cannot leave the directory.
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
@@ -383,14 +419,20 @@ fn expired(item: &Item, now: f64) -> bool {
         .is_some_and(|reply| fs::symlink_metadata(reply).is_err())
 }
 
-/// The content of the file `path` unless it is longer than `max` bytes.
+/// The content of the regular file `path` unless it is longer than `max` bytes. The file is
+/// checked on the open handle: no symlink (`O_NOFOLLOW`), and a FIFO opens without blocking
+/// (`O_NONBLOCK`) and is then rejected.
 fn read_limited(path: &Path, max: u64) -> Option<String> {
-    let mut raw = String::new();
-    fs::File::open(path)
-        .ok()?
-        .take(max + 1)
-        .read_to_string(&mut raw)
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
         .ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut raw = String::new();
+    file.take(max + 1).read_to_string(&mut raw).ok()?;
     Some(raw).filter(|raw| raw.len() as u64 <= max)
 }
 
@@ -407,13 +449,13 @@ pub fn list_at(dir: &Path, now: f64) -> Result<Vec<Item>> {
         if path.extension().is_none_or(|e| e != "json") {
             continue;
         }
-        let Some(id) = path.file_stem().and_then(|s| s.to_str()).filter(|s| valid_id(s)) else {
+        let Some(id) = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .filter(|s| valid_id(s))
+        else {
             continue;
         };
-        // not a FIFO (opening it would block) nor a symlink, and not a huge file
-        if !fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
-            continue;
-        }
         let Some(item) = read_limited(&path, ITEM_MAX_BYTES)
             .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
             .and_then(|v| parse_item(id, &v))
@@ -426,7 +468,11 @@ pub fn list_at(dir: &Path, now: f64) -> Result<Vec<Item>> {
             items.push(item);
         }
     }
-    items.sort_by(|a, b| a.received.total_cmp(&b.received).then_with(|| a.id.cmp(&b.id)));
+    items.sort_by(|a, b| {
+        a.received
+            .total_cmp(&b.received)
+            .then_with(|| a.id.cmp(&b.id))
+    });
     Ok(items)
 }
 

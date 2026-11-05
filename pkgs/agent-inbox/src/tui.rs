@@ -4,14 +4,15 @@
 //! Layout: a header line, the list of items next to (below, on narrow terminals) a detail pane
 //! for the selected item, and a footer with key hints or the last status message. Tab (Shift-Tab back) cycles
 //! through All, the configured filter tabs (`Tab`, which filter the items by the kind of their
-//! origin) and the Sessions tab: the same layout over the live Claude sessions (list and detail
-//! of the selected session; Enter opens the detail like an item's), all of them whatever
-//! their origin. `N` (everywhere) asks for a task
+//! session record) and the Sessions tab: the same layout over the live Claude sessions (list and
+//! detail of the selected session; Enter opens the detail like an item's), all of them whatever
+//! their record. `N` (everywhere) asks for a task
 //! in a popup (Ctrl+J adds a line) and publishes it as a `task.new` event (an empty
 //! task: pick the repo with `jw pick` first). Only the events and sessions of agents with an
-//! origin (a merge request, an issue or a task, see `Origin`) are shown, with it as their
-//! context, plus the requests that come from no agent (sudo, failed tasks: `p` picks a repo with
-//! `jw pick` and sends the task again); `o` opens the link of an origin (`xdg-open`).
+//! `AGENT_SESSION` (whose record, see `Record`, describes a merge request, an issue or a task)
+//! are shown, with it as their context, plus the requests that come from no agent (sudo, failed
+//! tasks: `p` picks a repo with `jw pick` and sends the task again); `o` opens the link of a
+//! record (`xdg-open`).
 
 use std::collections::HashMap;
 use std::io;
@@ -36,7 +37,7 @@ use ratatui::{DefaultTerminal, Frame};
 use serde_json::{json, Map, Value};
 use unicode_width::UnicodeWidthChar;
 
-use crate::client::{self, clean, Item, Origin, Question, Task};
+use crate::client::{self, clean, Item, Question, Record, Task};
 use crate::reply::{self, ReplyError};
 use crate::sessions::{self, Session};
 
@@ -64,8 +65,8 @@ const WAITING: &str = "waiting";
 const MAX_LINES: usize = 40;
 /// Lines of the last message of a waiting session shown in the session detail.
 const WAIT_BODY_LINES: usize = 5;
-/// Longest line of an origin description or prompt shown in the detail pane.
-const ORIGIN_LINE_CHARS: usize = 500;
+/// Longest line of a record description shown in the detail pane.
+const RECORD_LINE_CHARS: usize = 500;
 
 /// Decisions for the hook behind a claude.* item (one JSON object line).
 const ALLOW: &str = r#"{"behavior":"allow"}"#;
@@ -96,7 +97,7 @@ enum Effect {
         task: Task,
         dismiss: Option<String>,
     },
-    /// Open the http(s) link `.0` with `xdg-open`.
+    /// Open the https link `.0` with `xdg-open`.
     Open(String),
 }
 
@@ -141,7 +142,7 @@ struct Status {
     at: f64,
 }
 
-/// A filter tab: shows the items whose origin kind is in `kinds`; without `kinds`, those whose
+/// A filter tab: shows the items whose record kind is in `kinds`; without `kinds`, those whose
 /// kind no tab lists.
 #[derive(Debug, PartialEq)]
 pub struct Tab {
@@ -162,8 +163,8 @@ struct App {
     sessions: Vec<Session>,
     /// Index into `visible_sessions()`.
     session_sel: usize,
-    /// The origin files seen so far (items and sessions) and what `Origin::load` made of them.
-    origins: HashMap<String, Option<Origin>>,
+    /// The records of the sessions of the items and sessions, as of the last `update`.
+    records: HashMap<String, Record>,
     /// When (`now`) and by which key an item (or the next question) was opened, see `KEY_GUARD`.
     guard: Option<(f64, KeyCode)>,
     mode: Mode,
@@ -201,7 +202,7 @@ fn is_task_failed(item: &Item) -> bool {
     item.kind() == "task.failed"
 }
 
-/// Items that come from no agent with an origin, so every tab shows them.
+/// Items that come from no agent session, so every tab shows them.
 fn always_shown(item: &Item) -> bool {
     item.kind().starts_with("sudo.") || is_task_failed(item)
 }
@@ -279,19 +280,19 @@ impl App {
             .collect()
     }
 
-    /// The items that have an origin or are `always_shown`, in any session.
+    /// The items of an agent session or `always_shown`, in any session.
     fn shown(&self) -> impl Iterator<Item = &Item> {
         self.items
             .iter()
-            .filter(|i| !i.origin_file().is_empty() || always_shown(i))
+            .filter(|i| !i.agent_session().is_empty() || always_shown(i))
     }
 
     fn item_in_tab(&self, tab: usize, item: &Item) -> bool {
-        let kind = self.origin_kind(item.origin_file());
+        let kind = self.record_kind(item.agent_session());
         always_shown(item) || self.in_tab(tab, kind)
     }
 
-    /// All sessions: the origin tabs filter items only.
+    /// All sessions: the tabs filter items only.
     fn visible_sessions(&self) -> Vec<&Session> {
         self.sessions.iter().collect()
     }
@@ -318,7 +319,7 @@ impl App {
         self.tab_def(tab).map_or("All", |t| t.name.as_str())
     }
 
-    /// Whether something of origin kind `kind` shows in `tab`.
+    /// Whether something of record kind `kind` shows in `tab`.
     fn in_tab(&self, tab: usize, kind: &str) -> bool {
         let listed = |t: &Tab| t.kinds.iter().flatten().any(|k| k == kind);
         match self.tab_def(tab) {
@@ -369,42 +370,40 @@ impl App {
         (self.tab + 1) % (self.sessions_tab() + 1)
     }
 
-    /// The origin that was read from `file`.
-    fn origin(&self, file: &str) -> Option<&Origin> {
-        self.origins.get(file)?.as_ref()
+    /// The record of the session `name`, if it was read.
+    fn record(&self, name: &str) -> Option<&Record> {
+        self.records.get(name)
     }
 
-    /// The kind of the origin read from `file`, "" if there is none.
-    fn origin_kind(&self, file: &str) -> &str {
-        self.origin(file).map_or("", |o| o.kind.as_str())
+    /// The kind of the record of the session `name`, "" if there is none.
+    fn record_kind(&self, name: &str) -> &str {
+        self.record(name).map_or("", |r| r.kind.as_str())
     }
 
-    fn origin_label(&self, file: &str) -> Option<String> {
-        self.origin(file).and_then(client::origin_label)
+    fn record_label(&self, name: &str) -> Option<String> {
+        self.record(name).and_then(Record::label)
     }
 
-    /// What the item is about: its origin, else its workspace.
+    /// What the item is about: its record, else its workspace.
     fn item_context(&self, item: &Item) -> String {
-        let label = self.origin_label(item.origin_file());
+        let label = self.record_label(item.agent_session());
         label.unwrap_or_else(|| item.workspace())
     }
 
-    /// What the session is about: its origin, else its workspace.
+    /// What the session is about: its record, else its workspace.
     fn session_context(&self, session: &Session) -> String {
-        let label = self.origin_label(&session.origin_file);
+        let label = self.record_label(&session.agent_session);
         label.unwrap_or_else(|| session.workspace())
     }
 
-    /// The link of the origin read from `file`, if it has an http(s) one (the file is data of a
-    /// GitLab event: a `file:` or `javascript:` URL must not reach xdg-open).
-    fn link(&self, file: &str) -> Option<&str> {
-        let url = self.origin(file)?.url.as_str();
-        (url.starts_with("http://") || url.starts_with("https://")).then_some(url)
+    /// The link of the record of the session `name`.
+    fn link(&self, name: &str) -> Option<&str> {
+        self.record(name)?.link()
     }
 
-    /// The effect that opens the link of the origin `file`.
-    fn open_link(&mut self, file: &str) -> Effect {
-        let Some(url) = self.link(file).map(str::to_string) else {
+    /// The effect that opens the link of the record of the session `name`.
+    fn open_link(&mut self, name: &str) -> Effect {
+        let Some(url) = self.link(name).map(str::to_string) else {
             self.notify("no link for this item", true);
             return Effect::None;
         };
@@ -654,8 +653,8 @@ impl App {
                 None => {}
             },
             KeyCode::Char('o') => {
-                let file = session.map(|s| s.origin_file.clone());
-                return self.open_link(&file.unwrap_or_default());
+                let name = session.map(|s| s.agent_session.clone());
+                return self.open_link(&name.unwrap_or_default());
             }
             _ => {}
         }
@@ -731,8 +730,8 @@ impl App {
                 Some(Effect::Attach(name))
             }
             KeyCode::Char('o') => {
-                let file = self.find(&id).map_or("", Item::origin_file).to_string();
-                Some(self.open_link(&file))
+                let name = self.find(&id).map_or("", Item::agent_session).to_string();
+                Some(self.open_link(&name))
             }
             KeyCode::Char('?') => {
                 self.raw = !self.raw;
@@ -1006,7 +1005,7 @@ impl App {
         if !session.shpool.is_empty() {
             h.push(("a", "attach"));
         }
-        if self.link(&session.origin_file).is_some() {
+        if self.link(&session.agent_session).is_some() {
             h.push(("o", "open"));
         }
         if session.start.is_some() {
@@ -1037,7 +1036,7 @@ impl App {
                     if !item.shpool().is_empty() {
                         h.push(("a", "attach"));
                     }
-                    if self.link(item.origin_file()).is_some() {
+                    if self.link(item.agent_session()).is_some() {
                         h.push(("o", "open"));
                     }
                     if is_task_failed(item) {
@@ -1064,7 +1063,7 @@ impl App {
                 if !item.shpool().is_empty() {
                     h.push(("a", "attach"));
                 }
-                if self.link(item.origin_file()).is_some() {
+                if self.link(item.agent_session()).is_some() {
                     h.push(("o", "open"));
                 }
                 h.push(("?", "raw"));
@@ -1114,7 +1113,7 @@ impl App {
                 }
                 if self
                     .find(id)
-                    .is_some_and(|item| self.link(item.origin_file()).is_some())
+                    .is_some_and(|item| self.link(item.agent_session()).is_some())
                 {
                     h.push(("o", "open"));
                 }
@@ -1307,10 +1306,10 @@ fn detail_view(app: &App, item: &Item) -> Vec<Line<'static>> {
             )
         }
     });
-    let origin = origin_lines(app, item.origin_file());
-    if !origin.is_empty() {
+    let record = record_lines(app, item.agent_session());
+    if !record.is_empty() {
         lines.push(Line::default());
-        lines.extend(origin);
+        lines.extend(record);
     }
     lines
 }
@@ -1416,32 +1415,36 @@ fn question_summary(item: &Item, lines: &mut Vec<Line<'static>>) {
     }
 }
 
-/// What the agent behind the origin `file` works on: its name, link, and the description of the
-/// merge request or issue (or the prompt of the task); empty without an origin.
-fn origin_lines(app: &App, file: &str) -> Vec<Line<'static>> {
-    let Some(origin) = app.origin(file) else {
+/// What the agent of the session `name` works on: the title of its record, the link, the merge
+/// requests, and the description; empty without a record.
+fn record_lines(app: &App, name: &str) -> Vec<Line<'static>> {
+    let Some(record) = app.record(name) else {
         return Vec::new();
     };
-    let text = if origin.description.is_empty() {
-        &origin.prompt
-    } else {
-        &origin.description
-    };
-    let text = text
+    let text = record
+        .description
         .lines()
-        .map(|l| truncate(l, ORIGIN_LINE_CHARS))
+        .map(|l| truncate(l, RECORD_LINE_CHARS))
         .collect::<Vec<_>>()
         .join("\n");
     let mut lines = Vec::new();
     if let Some(label) = app
-        .origin_label(file)
+        .record_label(name)
         .filter(|label| !starts_with_loosely(&text, label))
     {
-        lines.push(Line::styled(label, bold()));
+        lines.push(Line::styled(truncate(&label, RECORD_LINE_CHARS), bold()));
     }
-    if !origin.url.is_empty() {
-        lines.push(Line::styled(clean(&origin.url), dim()));
+    if !record.url.is_empty() {
+        let url = truncate(&clean(&record.url), RECORD_LINE_CHARS);
+        lines.push(Line::styled(url, dim()));
     }
+    lines.extend(
+        record
+            .mrs
+            .iter()
+            .take(MAX_LINES)
+            .map(|mr| Line::styled(truncate(&clean(mr), RECORD_LINE_CHARS), dim())),
+    );
     lines.extend(lines_of(&text, Style::new()));
     lines
 }
@@ -1912,7 +1915,7 @@ fn session_row(
     Line::from(spans)
 }
 
-/// The detail of `session`: its fields, its pending items and its origin.
+/// The detail of `session`: its fields, its pending items and its record.
 fn session_lines(app: &App, session: &Session) -> Vec<Line<'static>> {
     let (badge_text, badge_style) = status_badge(&session.status);
     let mut head = vec![Span::styled(badge_text, badge_style)];
@@ -1967,10 +1970,10 @@ fn session_lines(app: &App, session: &Session) -> Vec<Line<'static>> {
             }
         }
     }
-    let origin = origin_lines(app, &session.origin_file);
-    if !origin.is_empty() {
+    let record = record_lines(app, &session.agent_session);
+    if !record.is_empty() {
         lines.push(Line::default());
-        lines.extend(origin);
+        lines.extend(record);
     }
     lines
 }
@@ -2086,17 +2089,18 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(line), area);
 }
 
-/// `inbox` is the directory of the inbox items, `sessions_dir` the session registry
-/// (`<config dir>/sessions`).
+/// `inbox` is the directory of the inbox items, `records` that of the session records,
+/// `sessions_dir` the session registry (`<config dir>/sessions`).
 pub fn run(
     inbox: &Path,
     runtime: Option<&Path>,
+    records: Option<&Path>,
     sessions_dir: &Path,
     tabs: Vec<Tab>,
 ) -> io::Result<()> {
     let mut terminal = ratatui::init();
     let result = execute!(io::stdout(), EnableBracketedPaste)
-        .and_then(|()| event_loop(&mut terminal, inbox, runtime, sessions_dir, tabs));
+        .and_then(|()| event_loop(&mut terminal, inbox, runtime, records, sessions_dir, tabs));
     let _ = execute!(io::stdout(), DisableBracketedPaste);
     ratatui::restore();
     result
@@ -2106,6 +2110,7 @@ fn event_loop(
     terminal: &mut DefaultTerminal,
     inbox: &Path,
     runtime: Option<&Path>,
+    records: Option<&Path>,
     sessions_dir: &Path,
     tabs: Vec<Tab>,
 ) -> io::Result<()> {
@@ -2116,7 +2121,7 @@ fn event_loop(
     let mut refreshed: Option<Instant> = None;
     loop {
         if refreshed.is_none_or(|t| t.elapsed() >= REFRESH) {
-            refresh(&mut app, inbox, runtime, sessions_dir);
+            refresh(&mut app, inbox, records, sessions_dir);
             refreshed = Some(Instant::now());
         }
         app.now = client::now();
@@ -2133,7 +2138,7 @@ fn event_loop(
                         refreshed = None; // a dismissed item goes, a new session shows up
                         continue;
                     }
-                    if perform(&mut app, effect, inbox, runtime, sessions_dir) {
+                    if perform(&mut app, effect, inbox, runtime, records, sessions_dir) {
                         return Ok(());
                     }
                 }
@@ -2144,21 +2149,21 @@ fn event_loop(
     }
 }
 
-/// Reloads the sessions (they need no inbox) and the inbox items, then reads the origins they
+/// Reloads the sessions (they need no inbox) and the inbox items, then reads the records they
 /// refer to.
-fn refresh(app: &mut App, inbox: &Path, runtime: Option<&Path>, sessions_dir: &Path) {
+fn refresh(app: &mut App, inbox: &Path, records: Option<&Path>, sessions_dir: &Path) {
     let sessions = sessions::load(sessions_dir, Path::new("/proc"));
     let items = client::list(inbox).map_err(|e| e.to_string());
-    update(app, sessions, items, runtime);
+    update(app, sessions, items, records);
 }
 
-/// Applies a refresh. The origins of new items and sessions are read last and decide what the
-/// tab shows, so the selection is restored after that, not only after each list.
+/// Applies a refresh. The records are read last and decide what the tab shows, so the selection
+/// is restored after that, not only after each list.
 fn update(
     app: &mut App,
     sessions: Vec<Session>,
     items: Result<Vec<Item>, String>,
-    runtime: Option<&Path>,
+    records: Option<&Path>,
 ) {
     let item = app.selected_item().map(|i| i.id.clone());
     let pid = app.selected_session().map(|s| s.pid);
@@ -2170,32 +2175,31 @@ fn update(
         }
         Err(e) => app.inbox_error = Some(e),
     }
-    load_origins(app, runtime);
+    load_records(app, records);
     app.select_id(item);
     app.select_pid(pid);
 }
 
-/// Reads the origin files of the items and sessions that have not been read yet (the files are
-/// written once, before the session starts). Without a runtime dir there is no origin dir and
+/// Replaces the records with those of the sessions of the items and sessions: read again on
+/// every refresh, as `jw session set` changes them while the session runs. Without a records dir
 /// nothing is read.
-fn load_origins(app: &mut App, runtime: Option<&Path>) {
-    let Some(runtime) = runtime else {
-        return;
-    };
-    let dir = runtime.join("claude-origin");
-    let files = app
+fn load_records(app: &mut App, dir: Option<&Path>) {
+    let names = app
         .items
         .iter()
-        .map(Item::origin_file)
-        .chain(app.sessions.iter().map(|s| s.origin_file.as_str()));
-    let new: Vec<String> = files
-        .filter(|f| !f.is_empty() && !app.origins.contains_key(*f))
-        .map(String::from)
-        .collect();
-    for file in new {
-        let origin = Origin::load(Path::new(&file), &dir);
-        app.origins.insert(file, origin);
+        .map(Item::agent_session)
+        .chain(app.sessions.iter().map(|s| s.agent_session.as_str()));
+    let mut records = HashMap::new();
+    if let Some(dir) = dir {
+        for name in names {
+            if !records.contains_key(name) {
+                if let Some(record) = Record::load(dir, name) {
+                    records.insert(name.to_string(), record);
+                }
+            }
+        }
     }
+    app.records = records;
 }
 
 /// Carries out an effect, then refreshes; true = quit.
@@ -2204,6 +2208,7 @@ fn perform(
     effect: Effect,
     inbox: &Path,
     runtime: Option<&Path>,
+    records: Option<&Path>,
     sessions_dir: &Path,
 ) -> bool {
     match effect {
@@ -2233,7 +2238,7 @@ fn perform(
         }
         Effect::PickRepo { .. } => return false, // needs the terminal: `event_loop` does it
     }
-    refresh(app, inbox, runtime, sessions_dir);
+    refresh(app, inbox, records, sessions_dir);
     false
 }
 
@@ -2502,11 +2507,11 @@ mod tests {
 
     const AGENT_CWD: &str = "/home/u/projects/infra.agents/s-1012-002032-2abc";
     const HOOK_REPLY: &str = "/run/user/1/claude-hook-x/reply";
-    const ORIGIN_FILE: &str = "/run/user/1/claude-origin/o1.json";
+    const AGENT_SESSION: &str = "o1";
 
     fn item(id: &str, kind: &str, title: &str, received: f64, reply: Option<&str>) -> Item {
         let mut event = json!({"type": kind, "project": "proj", "title": title, "cwd": AGENT_CWD,
-            "origin_file": ORIGIN_FILE});
+            "session": AGENT_SESSION});
         if let Some(r) = reply {
             event["reply"] = json!(r);
             event["command"] = json!("sudo ls /root");
@@ -2576,7 +2581,7 @@ mod tests {
 
     fn claude(id: &str, kind: &str, tool: &str, reply: Option<&str>, tool_input: Value) -> Item {
         let mut event = json!({"type": kind, "project": "proj", "title": format!("title-{id}"),
-            "cwd": AGENT_CWD, "origin_file": ORIGIN_FILE, "tool_name": tool,
+            "cwd": AGENT_CWD, "session": AGENT_SESSION, "tool_name": tool,
             "tool_input": tool_input});
         if let Some(r) = reply {
             event["reply"] = json!(r);
@@ -3805,7 +3810,7 @@ mod tests {
             status_at: 990.0,
             start: None,
             shpool: String::new(),
-            origin_file: ORIGIN_FILE.into(),
+            agent_session: AGENT_SESSION.into(),
         }
     }
 
@@ -3995,10 +4000,10 @@ mod tests {
 
     #[test]
     fn sessions_load_while_the_inbox_is_unreadable() {
-        // a process with an origin, without a start time: alive (/proc is the real one)
+        // a process with a session, without a start time: alive (/proc is the real one)
         let mut child = Command::new("sleep")
             .arg("30")
-            .env("CLAUDE_ORIGIN_FILE", ORIGIN_FILE)
+            .env("AGENT_SESSION", AGENT_SESSION)
             .spawn()
             .unwrap();
         let pid = child.id();
@@ -4019,7 +4024,7 @@ mod tests {
         child.wait().unwrap();
         assert!(a.inbox_error.is_some());
         assert_eq!(a.sessions.len(), 1);
-        assert_eq!(a.sessions[0].origin_file, ORIGIN_FILE);
+        assert_eq!(a.sessions[0].agent_session, AGENT_SESSION);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -4361,6 +4366,7 @@ mod tests {
             pick_repo(),
             Path::new(""),
             None,
+            None,
             Path::new("/nonexistent")
         ));
     }
@@ -4385,7 +4391,7 @@ mod tests {
 
     // --- failed tasks
 
-    /// A `task.failed` item, with no origin file.
+    /// A `task.failed` item, with no session.
     fn task_failed(id: &str) -> Item {
         Item {
             id: id.into(),
@@ -4523,34 +4529,32 @@ mod tests {
         assert_eq!(tail("日本", 0), "");
     }
 
-    // --- origin
+    // --- record
 
     const MR_URL: &str = "https://gitlab/x/-/merge_requests/7";
 
-    /// `ORIGIN_FILE` is a merge request !7 "T" with the link `url`.
-    fn with_origin(mut a: App, url: &str) -> App {
-        let origin = Origin {
-            target: "MergeRequest".into(),
-            iid: Some(7),
-            title: "T".into(),
+    /// `AGENT_SESSION` is a merge request with the title "!7 T" and the link `url`.
+    fn with_record(mut a: App, url: &str) -> App {
+        let record = Record {
+            title: "!7 T".into(),
             url: url.into(),
-            ..Origin::default()
+            ..Record::default()
         };
-        a.origins.insert(ORIGIN_FILE.into(), Some(origin));
+        a.records.insert(AGENT_SESSION.into(), record);
         a
     }
 
-    fn without_origin_file(mut item: Item) -> Item {
-        item.event.as_object_mut().unwrap().remove("origin_file");
+    fn without_session(mut item: Item) -> Item {
+        item.event.as_object_mut().unwrap().remove("session");
         item
     }
 
     #[test]
     fn items_of_hand_started_sessions_are_hidden_but_sudo_stays() {
         let a = app(vec![
-            without_origin_file(question("hand", 900.0)),
+            without_session(question("hand", 900.0)),
             question("agent", 950.0),
-            without_origin_file(sudo("s")),
+            without_session(sudo("s")),
         ]);
         let ids: Vec<&str> = a.visible().iter().map(|i| i.id.as_str()).collect();
         assert_eq!(ids, vec!["s", "agent"]);
@@ -4560,17 +4564,17 @@ mod tests {
             "{s}"
         );
         // nothing but hidden items: the empty state
-        let a = app(vec![without_origin_file(question("hand", 900.0))]);
+        let a = app(vec![without_session(question("hand", 900.0))]);
         assert!(screen(&a).contains("No pending requests"));
     }
 
     #[test]
-    fn rows_show_the_origin_else_the_place() {
+    fn rows_show_the_record_else_the_place() {
         let a = app(vec![question("a", 990.0)]);
         let s = screen_at(&a, 60, 30);
         let row = s.lines().find(|l| l.contains('○')).unwrap();
         assert!(row.contains("infra") && !row.contains("!7 T"), "{row}");
-        let a = with_origin(a, MR_URL);
+        let a = with_record(a, MR_URL);
         let s = screen_at(&a, 60, 30);
         let row = s.lines().find(|l| l.contains('○')).unwrap();
         assert!(row.contains("infra") && row.contains("!7 T"), "{row}");
@@ -4581,7 +4585,7 @@ mod tests {
             s.lines().find(|l| l.contains("IDLE")).unwrap().to_string()
         };
         assert!(idle_row(&a).contains("r w1 "), "{}", idle_row(&a));
-        let a = with_origin(a, MR_URL);
+        let a = with_record(a, MR_URL);
         let row = idle_row(&a);
         assert!(row.contains("r !7 T") && !row.contains("w1"), "{row}");
     }
@@ -4589,13 +4593,11 @@ mod tests {
     #[test]
     fn a_long_context_leaves_room_for_the_title_and_the_age() {
         let mut a = app(vec![question("a", 990.0)]);
-        let origin = Origin {
-            target: "MergeRequest".into(),
-            iid: Some(7),
-            title: "M".repeat(40),
-            ..Origin::default()
+        let record = Record {
+            title: format!("!7 {}", "M".repeat(40)),
+            ..Record::default()
         };
-        a.origins.insert(ORIGIN_FILE.into(), Some(origin));
+        a.records.insert(AGENT_SESSION.into(), record);
         let age = a.items[0].age(a.now);
         let s = screen_at(&a, 100, 30);
         let row = s.lines().find(|l| l.contains('○')).unwrap();
@@ -4605,7 +4607,7 @@ mod tests {
     #[test]
     fn o_opens_the_link_from_list_detail_answer_and_sessions() {
         let open = Effect::Open(MR_URL.into());
-        let mut a = with_origin(app(vec![question("a", 990.0)]), MR_URL);
+        let mut a = with_record(app(vec![question("a", 990.0)]), MR_URL);
         assert!(a.hints().contains(&("o", "open")));
         assert_eq!(a.on_key(key('o')), open);
         assert!(matches!(a.mode, Mode::List));
@@ -4614,13 +4616,13 @@ mod tests {
         assert_eq!(a.on_key(key('o')), open);
         assert!(matches!(a.mode, Mode::Detail { .. }));
         // the choice stays open
-        let mut a = with_origin(app(vec![ask("q", Some(HOOK_REPLY))]), MR_URL);
+        let mut a = with_record(app(vec![ask("q", Some(HOOK_REPLY))]), MR_URL);
         a.on_key(code(KeyCode::Enter));
         assert!(a.hints().contains(&("o", "open")));
         assert_eq!(a.on_key(key('o')), open);
         assert!(matches!(a.mode, Mode::Answer { .. }));
         let a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
-        let mut a = with_origin(a, MR_URL);
+        let mut a = with_record(a, MR_URL);
         assert!(a.hints().contains(&("o", "open")));
         assert_eq!(a.on_key(key('o')), open);
     }
@@ -4632,18 +4634,20 @@ mod tests {
             (Some(""), "no link for this item"),
             (Some("file:///x"), "no link for this item"),
             (Some("javascript:alert(1)"), "no link for this item"),
+            (Some("http://gitlab/x"), "no link for this item"),
+            (Some("https://gitlab/a b"), "no link for this item"),
         ];
         for (url, text) in cases {
             let mut a = app(vec![question("a", 990.0)]);
             if let Some(url) = url {
-                a = with_origin(a, url);
+                a = with_record(a, url);
             }
             assert!(!a.hints().contains(&("o", "open")));
             assert_eq!(a.on_key(key('o')), Effect::None, "{url:?}");
             let status = a.status().expect("a status message");
             assert!(status.error && status.text.contains(text), "{url:?}");
         }
-        // sessions: none selected, or without an origin
+        // sessions: none selected, or without a record
         for sessions in [vec![], vec![session(1, "s-a", "idle")]] {
             let mut a = sessions_app(vec![], sessions);
             assert_eq!(a.on_key(key('o')), Effect::None);
@@ -4651,40 +4655,68 @@ mod tests {
         }
     }
 
-    #[test]
-    fn origins_are_read_once_from_the_runtime_dir() {
+    /// A fresh directory for the records of the test `name`.
+    fn records_dir(name: &str) -> PathBuf {
         let pid = std::process::id();
-        let root = std::env::temp_dir().join(format!("agent-inbox-test-origins-{pid}"));
-        let dir = root.join("claude-origin");
-        let _ = std::fs::remove_dir_all(&root);
+        let dir = std::env::temp_dir().join(format!("agent-inbox-test-{name}-{pid}"));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("o1.json");
-        std::fs::write(&file, r#"{"title":"T","iid":7,"target":"MergeRequest"}"#).unwrap();
-        let file = file.to_string_lossy().into_owned();
-        let outside = root.join("outside.json");
-        std::fs::write(&outside, r#"{"title":"X","iid":9,"target":"MergeRequest"}"#).unwrap();
-        let outside = outside.to_string_lossy().into_owned();
-        let mut hand = question("b", 980.0);
-        hand.event["origin_file"] = json!(outside);
-        let mut agent = question("a", 990.0);
-        agent.event["origin_file"] = json!(file);
-        let mut a = app(vec![hand, agent]);
-        load_origins(&mut a, None);
-        assert!(a.origins.is_empty());
-        load_origins(&mut a, Some(&root));
-        assert_eq!(a.origin_label(&file), Some("!7 T".into()));
-        // a file outside the origin dir is not read
-        assert_eq!(a.origins.get(&outside), Some(&None));
-        // not read again
-        std::fs::remove_dir_all(&root).unwrap();
-        load_origins(&mut a, Some(&root));
-        assert_eq!(a.origin_label(&file), Some("!7 T".into()));
+        dir
     }
 
-    /// `with_origin` with a description for the merge request.
+    #[test]
+    fn records_are_read_again_on_every_update() {
+        let dir = records_dir("records");
+        let file = dir.join(format!("{AGENT_SESSION}.json"));
+        std::fs::write(&file, r#"{"title":"T","kind":"review"}"#).unwrap();
+        let items = || -> Result<Vec<Item>, String> { Ok(vec![question("a", 990.0)]) };
+        let mut a = app(vec![]);
+        // without a records dir nothing is read
+        update(&mut a, vec![], items(), None);
+        assert!(a.records.is_empty());
+        update(&mut a, vec![], items(), Some(&dir));
+        assert_eq!(a.record_label(AGENT_SESSION), Some("T".into()));
+        assert_eq!(a.record_kind(AGENT_SESSION), "review");
+        // retitled on disk
+        std::fs::write(&file, r#"{"title":"U"}"#).unwrap();
+        update(&mut a, vec![], items(), Some(&dir));
+        assert_eq!(a.record_label(AGENT_SESSION), Some("U".into()));
+        assert_eq!(a.record_kind(AGENT_SESSION), "");
+        // deleted
+        std::fs::remove_file(&file).unwrap();
+        update(&mut a, vec![], items(), Some(&dir));
+        assert!(a.records.is_empty());
+        assert_eq!(a.record_label(AGENT_SESSION), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_item_whose_session_is_gone_keeps_its_tab() {
+        let dir = records_dir("gone");
+        let file = dir.join(format!("{REVIEW_SESSION}.json"));
+        std::fs::write(file, r#"{"kind":"review"}"#).unwrap();
+        let item = from_session(question("r", 990.0), REVIEW_SESSION);
+        let live = session_from(session(1, "s-r", "idle"), REVIEW_SESSION);
+        let mut a = App {
+            tabs: tabs(),
+            area: Rect::new(0, 0, 100, 30),
+            now: 1000.0,
+            ..App::default()
+        };
+        update(&mut a, vec![live], Ok(vec![item.clone()]), Some(&dir));
+        a.tab = 1;
+        assert_eq!(visible_ids(&a), vec!["r"]);
+        // the process is gone, the record stays
+        update(&mut a, vec![], Ok(vec![item]), Some(&dir));
+        assert_eq!(visible_ids(&a), vec!["r"]);
+        a.tab = 2;
+        assert!(visible_ids(&a).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `with_record` with a description for the merge request.
     fn with_description(mut a: App, description: &str) -> App {
-        let origin = a.origins.get_mut(ORIGIN_FILE).unwrap().as_mut().unwrap();
-        origin.description = description.into();
+        a.records.get_mut(AGENT_SESSION).unwrap().description = description.into();
         a
     }
 
@@ -4704,7 +4736,7 @@ mod tests {
     #[test]
     fn detail_shows_the_merge_request_below_the_item() {
         let a = app(vec![permission("p", Some(HOOK_REPLY))]);
-        let a = with_description(with_origin(a, MR_URL), "Fixes the flaky test\nsecond line");
+        let a = with_description(with_record(a, MR_URL), "Fixes the flaky test\nsecond line");
         let s = screen(&a);
         // the label is in the list row too
         assert_eq!(s.matches("!7 T").count(), 2, "{s}");
@@ -4718,12 +4750,12 @@ mod tests {
     #[test]
     fn detail_shows_the_prompt_of_a_task() {
         let mut a = app(vec![permission("p", Some(HOOK_REPLY))]);
-        let origin = Origin {
+        let record = Record {
             title: "Tidy up".into(),
-            prompt: "Refactor the parser\nthen run the tests".into(),
-            ..Origin::default()
+            description: "Refactor the parser\nthen run the tests".into(),
+            ..Record::default()
         };
-        a.origins.insert(ORIGIN_FILE.into(), Some(origin));
+        a.records.insert(AGENT_SESSION.into(), record);
         let s = screen(&a);
         for text in ["Tidy up", "Refactor the parser", "then run the tests"] {
             assert!(s.contains(text), "{text}:\n{s}");
@@ -4737,7 +4769,7 @@ mod tests {
     #[test]
     fn detail_of_a_waiting_item_shows_its_message() {
         let a = app(vec![waiting("w", "Done with the change\nPlease review it")]);
-        let s = screen(&with_origin(a, MR_URL));
+        let s = screen(&with_record(a, MR_URL));
         assert!(s.contains("Please review it"), "{s}");
         assert!(
             row_of(&s, "Done with the change") < row_of(&s, MR_URL),
@@ -4746,15 +4778,28 @@ mod tests {
     }
 
     #[test]
-    fn detail_of_an_origin_without_text_shows_the_label_and_the_link_only() {
-        let a = with_origin(app(vec![permission("p", Some(HOOK_REPLY))]), MR_URL);
-        let lines = origin_lines(&a, ORIGIN_FILE);
+    fn detail_of_a_record_without_text_shows_the_label_and_the_link_only() {
+        let a = with_record(app(vec![permission("p", Some(HOOK_REPLY))]), MR_URL);
+        let lines = record_lines(&a, AGENT_SESSION);
         let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
         assert_eq!(text, ["!7 T", MR_URL]);
     }
 
     #[test]
-    fn session_detail_shows_the_waiting_message_and_then_the_origin() {
+    fn detail_shows_the_merge_requests_and_cleans_the_urls() {
+        let mut a = app(vec![]);
+        let record = Record {
+            url: "https://g/1\x1b[2J".into(),
+            mrs: vec!["https://g/2\n".into(), "https://g/3".into()],
+            ..Record::default()
+        };
+        a.records.insert(AGENT_SESSION.into(), record);
+        let text = plain(&record_lines(&a, AGENT_SESSION));
+        assert_eq!(text, ["https://g/1 [2J", "https://g/2 ", "https://g/3"]);
+    }
+
+    #[test]
+    fn session_detail_shows_the_waiting_message_and_then_the_record() {
         let body = (1..=7)
             .map(|n| format!("msg line {n}"))
             .collect::<Vec<_>>()
@@ -4763,7 +4808,7 @@ mod tests {
             vec![in_session(waiting("w", &body), "s-a")],
             vec![session(1, "s-a", "idle")],
         );
-        let a = with_description(with_origin(a, MR_URL), "Fixes the flaky test");
+        let a = with_description(with_record(a, MR_URL), "Fixes the flaky test");
         let s = screen(&a);
         let (url, description) = (row_of(&s, MR_URL), row_of(&s, "Fixes the flaky test"));
         assert!(row_of(&s, "pid: 1") < row_of(&s, "msg line 1"), "{s}");
@@ -4782,7 +4827,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let a = app(vec![permission("p", Some(HOOK_REPLY))]);
-        let mut a = with_description(with_origin(a, MR_URL), &description);
+        let mut a = with_description(with_record(a, MR_URL), &description);
         a.on_key(code(KeyCode::Enter));
         let s = screen(&a);
         assert!(s.contains("desc 01") && !s.contains("desc 30"), "{s}");
@@ -4796,8 +4841,8 @@ mod tests {
 
     // --- filter tabs
 
-    const REVIEW_FILE: &str = "/run/user/1/claude-origin/review.json";
-    const TASK_FILE: &str = "/run/user/1/claude-origin/task.json";
+    const REVIEW_SESSION: &str = "review";
+    const TASK_SESSION: &str = "task";
 
     /// Review shows the kind `review`, Coding the rest.
     fn tabs() -> Vec<Tab> {
@@ -4813,25 +4858,25 @@ mod tests {
         ]
     }
 
-    fn kind_origin(kind: &str) -> Option<Origin> {
-        Some(Origin {
+    fn kind_record(kind: &str) -> Record {
+        Record {
             kind: kind.into(),
-            ..Origin::default()
-        })
+            ..Record::default()
+        }
     }
 
-    fn from_file(mut item: Item, file: &str) -> Item {
-        item.event["origin_file"] = json!(file);
+    fn from_session(mut item: Item, name: &str) -> Item {
+        item.event["session"] = json!(name);
         item
     }
 
-    fn session_from(mut s: Session, file: &str) -> Session {
-        s.origin_file = file.into();
+    fn session_from(mut s: Session, name: &str) -> Session {
+        s.agent_session = name.into();
         s
     }
 
-    /// Items (newest first) sudo `s`, review `r`, task `t` and `u` of an origin that has not
-    /// been read.
+    /// Items (newest first) sudo `s`, review `r`, task `t` and `u` of a session without a
+    /// record.
     fn tabbed_app() -> App {
         let mut a = App {
             tabs: tabs(),
@@ -4839,12 +4884,13 @@ mod tests {
             now: 1000.0,
             ..App::default()
         };
-        a.origins.insert(REVIEW_FILE.into(), kind_origin("review"));
-        a.origins.insert(TASK_FILE.into(), kind_origin("task"));
+        a.records
+            .insert(REVIEW_SESSION.into(), kind_record("review"));
+        a.records.insert(TASK_SESSION.into(), kind_record("task"));
         a.set_items(vec![
             question("u", 900.0),
-            from_file(question("t", 910.0), TASK_FILE),
-            from_file(question("r", 920.0), REVIEW_FILE),
+            from_session(question("t", 910.0), TASK_SESSION),
+            from_session(question("r", 920.0), REVIEW_SESSION),
             sudo("s"),
         ]);
         a
@@ -4854,8 +4900,8 @@ mod tests {
     fn tabbed_sessions_app() -> App {
         let mut a = tabbed_app();
         a.set_sessions(vec![
-            session_from(session(1, "s-r", "idle"), REVIEW_FILE),
-            session_from(session(2, "s-t", "idle"), TASK_FILE),
+            session_from(session(1, "s-r", "idle"), REVIEW_SESSION),
+            session_from(session(2, "s-t", "idle"), TASK_SESSION),
             session(3, "s-u", "idle"),
         ]);
         to_sessions_tab(&mut a);
@@ -4902,8 +4948,8 @@ mod tests {
     fn tab_cycles_through_the_tabs_and_back() {
         let mut a = tabbed_app();
         a.set_sessions(vec![
-            session_from(session(1, "s-r", "idle"), REVIEW_FILE),
-            session_from(session(2, "s-t", "idle"), TASK_FILE),
+            session_from(session(1, "s-r", "idle"), REVIEW_SESSION),
+            session_from(session(2, "s-t", "idle"), TASK_SESSION),
             session(3, "s-u", "idle"),
         ]);
         assert_eq!(visible_ids(&a), vec!["s", "r", "t", "u"]);
@@ -4997,7 +5043,7 @@ mod tests {
     #[test]
     fn an_empty_tab_says_so() {
         let mut a = tabbed_app();
-        a.set_items(vec![from_file(question("t", 910.0), TASK_FILE)]);
+        a.set_items(vec![from_session(question("t", 910.0), TASK_SESSION)]);
         a.on_key(code(KeyCode::Tab));
         let s = screen(&a);
         assert!(s.contains("No pending items in Review"), "{s}");
@@ -5027,28 +5073,31 @@ mod tests {
     }
 
     #[test]
-    fn a_refresh_keeps_the_selection_when_new_origins_change_the_tab() {
-        let pid = std::process::id();
-        let root = std::env::temp_dir().join(format!("agent-inbox-test-tabs-{pid}"));
-        let dir = root.join("claude-origin");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&dir).unwrap();
-        let new = dir.join("new.json");
-        std::fs::write(&new, r#"{"kind":"review"}"#).unwrap();
-        let new = new.to_string_lossy().into_owned();
-        // the new item (newest) has an origin that is not read yet: until it is, it shows in
+    fn a_refresh_keeps_the_selection_when_new_records_change_the_tab() {
+        let dir = records_dir("tabs");
+        let kinds = [
+            (REVIEW_SESSION, "review"),
+            (TASK_SESSION, "task"),
+            ("new", "review"),
+        ];
+        for (name, kind) in kinds {
+            let record = format!(r#"{{"kind":"{kind}"}}"#);
+            std::fs::write(dir.join(format!("{name}.json")), record).unwrap();
+        }
+        let new = "new";
+        // the new item (newest) has a record that is not read yet: until it is, it shows in
         // Coding, afterwards in Review. Sessions are not filtered by tab; tab 3 is Sessions.
-        for (tab, old) in [(1, REVIEW_FILE), (2, TASK_FILE), (3, TASK_FILE)] {
+        for (tab, old) in [(1, REVIEW_SESSION), (2, TASK_SESSION), (3, TASK_SESSION)] {
             let items = |ids: &[&str]| -> Vec<Item> {
-                let file = |id: &str| if id == "n" { new.as_str() } else { old };
-                let item = |id: &str| from_file(question(id, 900.0), file(id));
+                let name = |id: &str| if id == "n" { new } else { old };
+                let item = |id: &str| from_session(question(id, 900.0), name(id));
                 ids.iter().map(|id| item(id)).collect()
             };
             let sessions = |pids: &[u32]| -> Vec<Session> {
-                let file = |pid: u32| if pid == 4 { new.as_str() } else { old };
+                let name = |pid: u32| if pid == 4 { new } else { old };
                 let make = |pid: u32| session(pid, &format!("s-{pid}"), "idle");
                 pids.iter()
-                    .map(|&p| session_from(make(p), file(p)))
+                    .map(|&p| session_from(make(p), name(p)))
                     .collect()
             };
             let mut a = tabbed_app();
@@ -5062,7 +5111,7 @@ mod tests {
                 assert_eq!(selected_id(&a), Some("i2"));
             }
             let new_items = items(&["i1", "i2", "i3", "n"]);
-            update(&mut a, sessions(&[4, 1, 2, 3]), Ok(new_items), Some(&root));
+            update(&mut a, sessions(&[4, 1, 2, 3]), Ok(new_items), Some(&dir));
             assert_eq!(selected_pid(&a), Some(2), "tab {tab}");
             assert_eq!(visible_pids(&a), vec![4, 1, 2, 3], "tab {tab}");
             if tab < 3 {
@@ -5070,13 +5119,13 @@ mod tests {
                 assert_eq!(visible_ids(&a).contains(&"n"), tab == 1);
             }
         }
-        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn the_sessions_tab_shows_every_session_and_the_selection_follows_its_pid() {
         let mut a = tabbed_sessions_app();
-        // whatever the kind of the origin
+        // whatever the kind of the record
         assert_eq!(visible_pids(&a), vec![1, 2, 3]);
         let s = screen(&a);
         assert!(
@@ -5097,7 +5146,7 @@ mod tests {
         // refreshes follow the pid
         a.set_sessions(vec![
             session(4, "s-4", "idle"),
-            session_from(session(2, "s-t", "idle"), TASK_FILE),
+            session_from(session(2, "s-t", "idle"), TASK_SESSION),
             session(3, "s-u", "idle"),
         ]);
         assert_eq!(selected_pid(&a), Some(3));
@@ -5183,26 +5232,22 @@ mod tests {
     }
 
     #[test]
-    fn origin_lines_skip_a_label_the_description_starts_with() {
-        let origin = |description: &str| Origin {
-            target: "MergeRequest".into(),
-            iid: Some(12),
-            title: "Fix foo".into(),
+    fn record_lines_skip_a_label_the_description_starts_with() {
+        let record = |description: &str| Record {
+            title: "!12 Fix foo".into(),
             description: description.into(),
-            ..Origin::default()
+            ..Record::default()
         };
         let mut a = app(vec![]);
-        a.origins.insert(
-            ORIGIN_FILE.into(),
-            Some(origin("!12 Fix foo\n\nMore details")),
-        );
-        let text = plain(&origin_lines(&a, ORIGIN_FILE)).join("\n");
+        a.records
+            .insert(AGENT_SESSION.into(), record("!12 Fix foo\n\nMore details"));
+        let text = plain(&record_lines(&a, AGENT_SESSION)).join("\n");
         assert_eq!(text.matches("Fix foo").count(), 1, "{text}");
         assert!(text.contains("More details"), "{text}");
 
-        a.origins
-            .insert(ORIGIN_FILE.into(), Some(origin("Something different")));
-        let lines = plain(&origin_lines(&a, ORIGIN_FILE));
+        a.records
+            .insert(AGENT_SESSION.into(), record("Something different"));
+        let lines = plain(&record_lines(&a, AGENT_SESSION));
         assert_eq!(lines.first().map(String::as_str), Some("!12 Fix foo"));
         assert!(
             lines.contains(&"Something different".to_string()),
@@ -5367,7 +5412,7 @@ mod tests {
     #[test]
     fn o_in_the_session_detail_opens_the_link_or_says_why_not() {
         let a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
-        let mut a = with_origin(a, MR_URL);
+        let mut a = with_record(a, MR_URL);
         open_session(&mut a);
         assert_eq!(a.on_key(key('o')), Effect::Open(MR_URL.into()));
         let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
@@ -5478,7 +5523,7 @@ mod tests {
             vec![in_session(question("a", 960.0), "s-a")],
             vec![started(shpooled(session(1, "s-a", "idle"), "jw-1"), 42)],
         );
-        let a = with_origin(a, MR_URL);
+        let a = with_record(a, MR_URL);
         assert_eq!(
             a.hints(),
             vec![
@@ -5515,7 +5560,7 @@ mod tests {
             vec![],
             vec![started(shpooled(session(1, "s-a", "idle"), "jw-1"), 42)],
         );
-        let mut a = with_origin(a, MR_URL);
+        let mut a = with_record(a, MR_URL);
         open_session(&mut a);
         assert_eq!(
             a.hints(),
@@ -5999,15 +6044,13 @@ mod tests {
         item
     }
 
-    /// `ORIGIN_FILE` is the merge request !12 "Fix foo".
+    /// `AGENT_SESSION` is the merge request !12 "Fix foo".
     fn with_mr_12(mut a: App) -> App {
-        let origin = Origin {
-            target: "MergeRequest".into(),
-            iid: Some(12),
-            title: "Fix foo".into(),
-            ..Origin::default()
+        let record = Record {
+            title: "!12 Fix foo".into(),
+            ..Record::default()
         };
-        a.origins.insert(ORIGIN_FILE.into(), Some(origin));
+        a.records.insert(AGENT_SESSION.into(), record);
         a
     }
 
@@ -6028,7 +6071,7 @@ mod tests {
     }
 
     #[test]
-    fn item_row_shows_repo_then_the_origin_label() {
+    fn item_row_shows_repo_then_the_record_title() {
         let a = with_mr_12(app(vec![placed(
             "a",
             "title-ctx",
@@ -6037,7 +6080,7 @@ mod tests {
         let buf = buffer_at(&a, 200, 30);
         let (y, row) = list_row(&buf, "title-ctx");
         assert!(row.contains("home-infra !12 Fix foo"), "{row}");
-        // the origin label wins over the workspace, which is not shown on the row
+        // the record title wins over the workspace, which is not shown on the row
         let before_title = &row[..row.find("title-ctx").unwrap()];
         assert!(!before_title.contains("s-1"), "{row}");
         assert!(col(&row, "!12 Fix foo") < col(&row, "title-ctx"), "{row}");
@@ -6049,7 +6092,7 @@ mod tests {
     }
 
     #[test]
-    fn item_row_without_an_origin_shows_repo_and_workspace_apart() {
+    fn item_row_without_a_record_shows_repo_and_workspace_apart() {
         let a = app(vec![with_jj(
             placed("a", "title-ws", "/p/dotfiles"),
             "dotfiles",
@@ -6162,7 +6205,7 @@ mod tests {
     }
 
     #[test]
-    fn session_row_shows_the_origin_label_instead_of_the_workspace() {
+    fn session_row_shows_the_record_title_instead_of_the_workspace() {
         let a = sessions_app(
             vec![],
             vec![session_in_cwd(

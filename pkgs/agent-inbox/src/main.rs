@@ -2,8 +2,8 @@
 //! sudo password requests and, via the permission hook, Claude permission prompts and
 //! questions (ADR-025); the last tab (Tab cycles them) shows the live Claude sessions (attach, kill, start a
 //! new one; `jw` must be on PATH, the Nix package adds it). Only agents started by `jw agent` or the
-//! GitLab event handler (those with CLAUDE_ORIGIN_FILE) are listed, `o` opens their merge
-//! request or issue (`xdg-open`, also added by the Nix package). `N` publishes a `task.new`
+//! GitLab event handler (those with AGENT_SESSION) are listed, `o` opens the link of their
+//! session record (`xdg-open`, also added by the Nix package). `N` publishes a `task.new`
 //! with `event-pub` to start an agent (an empty task: pick the repo with `jw pick` first); `task.failed`
 //! items show in every tab and `p` picks a repo and sends their task again.
 //!
@@ -15,7 +15,7 @@
 //!                            (sudo: the password; claude.*: a JSON decision such as
 //!                            {"behavior":"allow"}, see ADR-025)
 //!   agent-inbox dismiss <id>
-//!   agent-inbox sessions     live Claude sessions with an origin: pid, status, age of the status,
+//!   agent-inbox sessions     live Claude sessions with AGENT_SESSION: pid, status, age of the status,
 //!                            shpool session, place, session id (TSV, newest first; read from the
 //!                            session registry)
 
@@ -100,6 +100,7 @@ fn run_tui() -> Result<()> {
     tui::run(
         &client::inbox_dir(),
         Some(client::runtime_dir().as_path()),
+        client::records_dir().as_deref(),
         &sessions_dir,
         tabs,
     )?;
