@@ -9,7 +9,7 @@
 }:
 
 # event handler: desktop notification, "Open" action opens the event URL
-# (or the url of the session's origin file).
+# (or the url of the session's record, else its first MR), if it is an https URL.
 writeShellApplication {
   name = "event-handler-notify-${urgency}";
   runtimeInputs = [
@@ -29,15 +29,24 @@ writeShellApplication {
         ((.body // "") | .[0:300]) ]
       | map(select(. != null and . != "") | @html) | join("\n")
     ' <<<"$event")
-    url=$(jq -r '.url // ""' <<<"$event")
+    url=$(jq -r '.url | strings // ""' <<<"$event")
     if [[ -z "$url" ]]; then
-      # the path comes from an event: only read files directly in the origin dir
-      origin_file=$(jq -r '.origin_file // ""' <<<"$event" || true)
-      origin_dir=''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/claude-origin
-      if [[ -n "$origin_file" && "''${origin_file%/*}" == "$origin_dir" && -f "$origin_file" ]]; then
-        url=$(jq -r '.url // empty' "$origin_file" 2>/dev/null || true)
+      # the name comes from an event: build a path only from a valid one
+      session=$(jq -r '.session | strings | select(test("^[A-Za-z0-9][A-Za-z0-9._-]*\\z"))' <<<"$event" || true)
+      state=''${XDG_STATE_HOME:-}
+      [[ "$state" == /* ]] || state=$HOME/.local/state
+      record=$state/agent-sessions/$session.json
+      if [[ -n "$session" && -f "$record" && ! -L "$record" && "$(stat -c %s "$record")" -le 65536 ]]; then
+        # -s: a file with several JSON values is rejected, not read from its first one
+        url=$(jq -rs 'if length == 1 and (.[0] | type) == "object"
+          then .[0] | (.url | strings | select(. != "")) // (.mrs | arrays | first | strings) // ""
+          else "" end' "$record" 2>/dev/null || true)
       fi
     fi
+
+    # only a plain https URL is opened (\z, not $: the regex of jq also matches before a trailing newline);
+    # the whole string is tested, so a URL with a newline is rejected
+    url=$(jq -rn --arg u "$url" '$u | select(length <= 2048 and test("^https://[!-~]+\\z"))' || true)
 
     # detach: notify-send -A blocks until the notification is closed
     (

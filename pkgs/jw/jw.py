@@ -494,7 +494,7 @@ def cmd_reap(a):
         except OSError:
             rc = 1
         if rc == 0:
-            print(f"stopped {name} in {cwd}: claude --resume {sid}")
+            print(f"stopped {name} in {cwd}: AGENT_SESSION={name} claude --resume {sid}")
         else:
             sys.stderr.write(f"jw: shpool kill {name} failed\n")
             failed = True
@@ -586,7 +586,7 @@ def cmd_prune(a):
 def agent_env(env):
     """env without the variables that tie a session to the caller's own (repo key, event queue, nested-claude marker)."""
     drop = {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_PROJECT_DIR_NAME", "CLAUDE_EVENT_SESSION_DIR",
-            "KNOWLEDGE_ORIGIN", "CLAUDE_WORKSPACE_BASE", "CLAUDE_ORIGIN_FILE"}
+            "KNOWLEDGE_ORIGIN", "CLAUDE_WORKSPACE_BASE", "AGENT_SESSION"}
     return {k: v for k, v in env.items() if k not in drop}
 
 
@@ -594,30 +594,14 @@ def runtime_dir():
     return os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
 
 
-def task_origin(prompt):
-    origin = {"kind": "task"}
+def task_record(prompt, workspace):
+    record = {"kind": "task", "workspace": workspace}
+    prompt = prompt.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
     lines = [l.strip() for l in prompt.splitlines() if l.strip()]
     if lines:
-        origin["title"] = lines[0][:200]
-        origin["prompt"] = prompt[:32768]
-    return origin
-
-
-def write_origin(origin):
-    """Write the session's origin file (agent-inbox shows only sessions that have one) and return its path."""
-    d = f"{runtime_dir()}/claude-origin"
-    os.makedirs(d, mode=0o700, exist_ok=True)
-    for name in os.listdir(d):  # nothing else removes them
-        p = f"{d}/{name}"
-        try:
-            if name.endswith(".json") and os.stat(p).st_mtime < time.time() - 2 * 86400:
-                os.unlink(p)
-        except OSError:
-            pass
-    fd, path = tempfile.mkstemp(suffix=".json", dir=d)
-    with os.fdopen(fd, "w") as f:
-        json.dump(origin, f)
-    return path
+        record["title"] = lines[0][:200]
+        record["description"] = prompt[:8000]
+    return record
 
 
 def cmd_agent(a):
@@ -666,7 +650,11 @@ def cmd_agent(a):
         while name in taken or os.path.exists(f"{home}.agents/{name}"):
             name, i = f"{base}-{i}", i + 1
         d = add_workspace(home, a.revision or "trunk()", name, resolve_in)
-        env = agent_env(os.environ) | {"CLAUDE_ORIGIN_FILE": write_origin(task_origin(" ".join(prompt)))}
+        env = agent_env(os.environ) | {"AGENT_SESSION": name}
+        try:  # the inbox shows the session from its record; a failure must not stop the session
+            update_record(records_dir(), name, task_record(" ".join(prompt), d))
+        except (Fail, OSError, ValueError) as e:
+            sys.stderr.write(f"jw: cannot write the session record: {e}\n")
         # started from a service (task.new) there is no terminal env, and claude falls back to no colors
         if env.get("TERM", "dumb") == "dumb":
             env["TERM"] = "xterm-256color"
@@ -947,7 +935,7 @@ def cmd_session(a):
     fields = {"kind": a.kind, "title": a.title, "description": a.description, "url": a.url, "workspace": a.workspace}
     try:
         update_record(d, name, fields, mrs)
-    except OSError as e:
+    except (OSError, ValueError) as e:  # ValueError: text that is not valid UTF-8
         raise Fail(f"cannot write the session record: {e}")
 
 

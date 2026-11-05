@@ -114,16 +114,25 @@ class Enrich(unittest.TestCase):
         self.assertIsNone(enrich({}, PERM)["project"])
 
     def test_env_added_when_set(self):
-        with mock.patch.dict(os.environ, {"SHPOOL_SESSION_NAME": "s1", "CLAUDE_ORIGIN_FILE": "/o"}):
+        with mock.patch.dict(os.environ, {"SHPOOL_SESSION_NAME": "s1", "AGENT_SESSION": "s2"}):
             event = enrich({}, PERM)
         self.assertEqual(event["shpool"], "s1")
-        self.assertEqual(event["origin_file"], "/o")
+        self.assertEqual(event["session"], "s2")
 
     def test_env_absent_when_empty(self):
-        with mock.patch.dict(os.environ, {"SHPOOL_SESSION_NAME": "", "CLAUDE_ORIGIN_FILE": ""}):
+        with mock.patch.dict(os.environ, {"SHPOOL_SESSION_NAME": "", "AGENT_SESSION": ""}):
             event = enrich({}, PERM)
         self.assertNotIn("shpool", event)
-        self.assertNotIn("origin_file", event)
+        self.assertNotIn("session", event)
+
+    def test_session_absent_when_unset(self):
+        with mock.patch.dict(os.environ, {}):
+            os.environ.pop("AGENT_SESSION", None)
+            self.assertNotIn("session", enrich({}, PERM))
+
+    def test_origin_file_never_set(self):
+        with mock.patch.dict(os.environ, {"CLAUDE_ORIGIN_FILE": "/o", "AGENT_SESSION": "s"}):
+            self.assertNotIn("origin_file", enrich({}, PERM))
 
 
 class Main(unittest.TestCase):
@@ -148,7 +157,7 @@ class Main(unittest.TestCase):
               mock.patch("sys.stdout", out),
               mock.patch("sys.stderr", err),
               mock.patch.dict(os.environ, {"PATH": path, "SHPOOL_SESSION_NAME": "",
-                                           "CLAUDE_ORIGIN_FILE": ""})):
+                                           "AGENT_SESSION": ""})):
             code = main()
         self.assertEqual(out.getvalue(), "")
         return code, err.getvalue()
