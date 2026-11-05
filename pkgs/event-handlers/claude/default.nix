@@ -27,7 +27,9 @@
   # "resume": <bool>}`: one claude conversation per workspace. `dir/queue/*.md`
   # holds follow-up prompts not yet delivered (with `resume` the tool has put
   # this event's there, besides `context_dir/prompt.md`), `dir/read/` the
-  # delivered ones. The launcher writes `dir/started` (the conversation `id`
+  # delivered ones. The shpool session is then named `<repo>-<basename of cwd>`
+  # (not `<repo>[-<iid>]-<type>`), so every event of the workspace gets the same
+  # name. The launcher writes `dir/started` (the conversation `id`
   # exists, so resume it) and `dir/shpool` (the shpool session name). If the
   # session is live (`session_lock` held), the handler only notifies and the
   # session's hooks deliver the queue
@@ -270,6 +272,10 @@ writeShellApplication {
     sdir=""
     resume=""
     ${prepareBlock}
+    # a workspace conversation gets a stable name, the same for every event of the workspace
+    if [[ -n "$sid" ]]; then
+      name=$(jq -rn --arg repo "$repo" --arg ws "$(basename -- "$cwd")" '"\($repo)-\($ws)" | gsub("[^A-Za-z0-9_.-]"; "-")')
+    fi
     # queued: a claude session of this MR is live, its hooks deliver the queue
     mode=start
     if [[ "$resume" == true ]] && ! flock -n -s "$session_lock" true; then
