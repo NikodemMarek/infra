@@ -491,6 +491,21 @@ def record_session(branch: str, now: float | None = None, state_home: str | None
         info(f"jj upload: cannot record the session for {branch}: {e}")
 
 
+def record_mr(url: str) -> None:
+    """Add the created MR to the jw session running this upload; never fails the upload."""
+    name = os.environ.get("AGENT_SESSION")
+    if not name:
+        return
+    try:
+        p = subprocess.run(["jw", "session", "set", "--mr", url], stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        info(f"jj upload: cannot add {url} to session {name}: {e}")
+        return
+    if p.returncode != 0:
+        info(f"jj upload: cannot add {url} to session {name}: {p.stderr.strip() or f'exit {p.returncode}'}")
+
+
 # ---------------------------------------------------------------- main
 
 def pull_descriptions(commits, fg, prefix, pushed, dry_run):
@@ -787,6 +802,7 @@ def main():
             info(f"  created {mr['ref']}  {mr['url']}")
             # only on create: the default revset also re-pushes other sessions' changes
             record_session(e["branch"])
+            record_mr(mr["url"])
         else:
             # the draft state chosen in the forge is kept
             mr = fg.update(mr, title=e["title"] if mr["title"] != e["title"] else None,

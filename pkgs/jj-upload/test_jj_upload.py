@@ -128,5 +128,63 @@ class RecordSession(unittest.TestCase):
         self.assertEqual(self.files(), [])
 
 
+class RecordMr(unittest.TestCase):
+    URL = "https://git.example/g/p/-/merge_requests/7"
+
+    def env(self, **kw):
+        env = {k: v for k, v in os.environ.items() if k != "AGENT_SESSION"}
+        env.update(kw)
+        return mock.patch.dict(os.environ, env, clear=True)
+
+    def test_unset_no_call(self):
+        with self.env(), mock.patch.object(jj_upload.subprocess, "run") as run:
+            jj_upload.record_mr(self.URL)
+        run.assert_not_called()
+
+    def test_empty_no_call(self):
+        with self.env(AGENT_SESSION=""), mock.patch.object(jj_upload.subprocess, "run") as run:
+            jj_upload.record_mr(self.URL)
+        run.assert_not_called()
+
+    def test_set_runs_jw(self):
+        with self.env(AGENT_SESSION="s-1"), mock.patch.object(jj_upload.subprocess, "run") as run, \
+                mock.patch.object(jj_upload, "info") as info:
+            run.return_value = mock.Mock(returncode=0, stderr="")
+            jj_upload.record_mr(self.URL)
+        run.assert_called_once_with(
+            ["jw", "session", "set", "--mr", self.URL],
+            stdin=jj_upload.subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        info.assert_not_called()
+
+    def test_nonzero_reports(self):
+        with self.env(AGENT_SESSION="s-1"), mock.patch.object(jj_upload.subprocess, "run") as run, \
+                mock.patch.object(jj_upload, "info") as info:
+            run.return_value = mock.Mock(returncode=1, stderr="boom happened")
+            jj_upload.record_mr(self.URL)
+        info.assert_called_once()
+        msg = info.call_args[0][0]
+        for part in (self.URL, "s-1", "boom happened"):
+            self.assertIn(part, msg)
+
+    def test_oserror_reports(self):
+        with self.env(AGENT_SESSION="s-1"), \
+                mock.patch.object(jj_upload.subprocess, "run", side_effect=OSError("no jw")), \
+                mock.patch.object(jj_upload, "info") as info:
+            jj_upload.record_mr(self.URL)
+        info.assert_called_once()
+
+    def test_timeout_reports(self):
+        exc = jj_upload.subprocess.TimeoutExpired(["jw"], 10)
+        with self.env(AGENT_SESSION="s-1"), \
+                mock.patch.object(jj_upload.subprocess, "run", side_effect=exc), \
+                mock.patch.object(jj_upload, "info") as info:
+            jj_upload.record_mr(self.URL)
+        info.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
