@@ -1,4 +1,5 @@
 import contextlib
+import fcntl
 import io
 import json
 import os
@@ -587,6 +588,406 @@ class CmdMsg(unittest.TestCase):
                 self.msg("s", "hi")
         self.assertGreaterEqual(time.monotonic() - t0, 0.9)
         self.assertTrue(str(c.exception).startswith("cannot reach session s"), str(c.exception))
+
+
+class RecordsDir(unittest.TestCase):
+    def test_xdg(self):
+        self.assertEqual(jw.records_dir({"XDG_STATE_HOME": "/s", "HOME": "/h"}), "/s/agent-sessions")
+
+    def test_empty_xdg(self):
+        self.assertEqual(jw.records_dir({"XDG_STATE_HOME": "", "HOME": "/h"}), "/h/.local/state/agent-sessions")
+
+    def test_relative_xdg(self):
+        self.assertEqual(jw.records_dir({"XDG_STATE_HOME": "rel", "HOME": "/h"}),
+                         "/h/.local/state/agent-sessions")
+
+
+class SessionName(unittest.TestCase):
+    def test_given(self):
+        self.assertEqual(jw.session_name("a-1", {}), "a-1")
+
+    def test_env(self):
+        self.assertEqual(jw.session_name(None, {"AGENT_SESSION": "s-1"}), "s-1")
+
+    def test_given_wins(self):
+        self.assertEqual(jw.session_name("x", {"AGENT_SESSION": "y"}), "x")
+
+    def test_none(self):
+        with self.assertRaises(Fail):
+            jw.session_name(None, {})
+
+    def test_invalid(self):
+        for n in ["", "../x", ".lock", "-x", "a/b", "x\n"]:
+            with self.subTest(name=n), self.assertRaises(Fail):
+                jw.session_name(n, {})
+
+
+class RecordsBase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(dir="/tmp")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.d = os.path.join(self.tmp, "agent-sessions")
+
+    def mkdir(self):
+        os.makedirs(self.d, mode=0o700, exist_ok=True)
+
+    def path(self, name):
+        return os.path.join(self.d, name)
+
+    def write(self, name, content):
+        self.mkdir()
+        with open(self.path(name), "wb") as f:
+            f.write(content if isinstance(content, bytes) else content.encode())
+
+    def age(self, name, days):
+        t = time.time() - days * 86400
+        os.utime(self.path(name), (t, t), follow_symlinks=False)
+
+
+class ReadRecord(RecordsBase):
+    def test_valid(self):
+        self.write("a.json", '{"kind":"task"}')
+        self.assertEqual(jw.read_record(self.d, "a"), {"kind": "task"})
+
+    def test_missing(self):
+        self.assertIsNone(jw.read_record(self.d, "a"))
+        self.mkdir()
+        self.assertIsNone(jw.read_record(self.d, "a"))
+
+    def test_symlink(self):
+        self.write("real.json", '{"kind":"task"}')
+        os.symlink(self.path("real.json"), self.path("a.json"))
+        self.assertIsNone(jw.read_record(self.d, "a"))
+
+    def test_fifo_does_not_block(self):
+        self.mkdir()
+        os.mkfifo(self.path("a.json"))
+        res = []
+        t = threading.Thread(target=lambda: res.append(jw.read_record(self.d, "a")), daemon=True)
+        t.start()
+        t.join(5)
+        self.assertFalse(t.is_alive(), "read_record blocked on a FIFO")
+        self.assertEqual(res, [None])
+
+    def test_directory(self):
+        self.mkdir()
+        os.mkdir(self.path("a.json"))
+        self.assertIsNone(jw.read_record(self.d, "a"))
+
+    def test_too_big(self):
+        body = b'{"a":"' + b"x" * (65537 - 8) + b'"}'
+        self.assertEqual(len(body), 65537)
+        self.write("a.json", body)
+        self.assertIsNone(jw.read_record(self.d, "a"))
+
+    def test_exactly_max(self):
+        body = b'{"a":"' + b"x" * (65536 - 8) + b'"}'
+        self.assertEqual(len(body), 65536)
+        self.write("a.json", body)
+        self.assertEqual(jw.read_record(self.d, "a"), {"a": "x" * (65536 - 8)})
+
+    def test_bad_json(self):
+        self.write("a.json", "{not json")
+        self.assertIsNone(jw.read_record(self.d, "a"))
+
+    def test_bad_utf8(self):
+        self.write("a.json", b'{"a":"\xff"}')
+        self.assertIsNone(jw.read_record(self.d, "a"))
+
+    def test_non_object(self):
+        for body in ["[]", '"s"', "5", "null"]:
+            with self.subTest(body=body):
+                self.write("a.json", body)
+                self.assertIsNone(jw.read_record(self.d, "a"))
+
+    def test_invalid_name(self):
+        self.write("x.json", '{"kind":"task"}')
+        for n in ["", "../x", ".lock", "-x", "a/b"]:
+            with self.subTest(name=n):
+                self.assertIsNone(jw.read_record(self.d, n))
+
+
+class UpdateRecord(RecordsBase):
+    def test_create_modes(self):
+        r = jw.update_record(self.d, "s-1", {"kind": "task", "title": "T"})
+        self.assertEqual(r, {"kind": "task", "title": "T"})
+        with open(self.path("s-1.json")) as f:
+            self.assertEqual(json.load(f), {"kind": "task", "title": "T"})
+        self.assertEqual(os.stat(self.d).st_mode & 0o777, 0o700)
+        self.assertEqual(os.stat(self.path("s-1.json")).st_mode & 0o777, 0o600)
+
+    def test_invalid_name_touches_nothing(self):
+        with self.assertRaises(Fail):
+            jw.update_record(self.d, "../x", {"kind": "task"})
+        self.assertFalse(os.path.exists(self.d))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "x.json")))
+
+    def test_merge_preserves_unknown(self):
+        self.write("s.json", json.dumps({"kind": "task", "title": "T", "extra": 1}))
+        r = jw.update_record(self.d, "s", {"title": "U"}, ["https://g/1"])
+        exp = {"kind": "task", "title": "U", "extra": 1, "mrs": ["https://g/1"]}
+        self.assertEqual(r, exp)
+        self.assertEqual(jw.read_record(self.d, "s"), exp)
+
+    def test_none_fields_ignored(self):
+        self.write("s.json", json.dumps({"kind": "task", "title": "T"}))
+        r = jw.update_record(self.d, "s", {"title": None, "kind": "review"})
+        self.assertEqual(r, {"kind": "review", "title": "T"})
+
+    def test_mrs_dedupe_order(self):
+        r = jw.update_record(self.d, "s", {}, ["https://a", "https://b", "https://a"])
+        self.assertEqual(r["mrs"], ["https://a", "https://b"])
+        r = jw.update_record(self.d, "s", {}, ["https://c", "https://a"])
+        self.assertEqual(r["mrs"], ["https://a", "https://b", "https://c"])
+
+    def test_non_list_mrs_replaced(self):
+        self.write("s.json", json.dumps({"mrs": "x"}))
+        r = jw.update_record(self.d, "s", {}, ["https://a"])
+        self.assertEqual(r["mrs"], ["https://a"])
+
+    def test_corrupt_replaced(self):
+        self.write("s.json", "{garbage")
+        r = jw.update_record(self.d, "s", {"kind": "task"})
+        self.assertEqual(r, {"kind": "task"})
+        self.assertEqual(jw.read_record(self.d, "s"), {"kind": "task"})
+
+    def test_raw_utf8(self):
+        jw.update_record(self.d, "s", {"title": "ż"})
+        with open(self.path("s.json"), "rb") as f:
+            raw = f.read()
+        self.assertIn("ż".encode(), raw)
+        self.assertNotIn(b"\\u", raw)
+
+    def test_prune_on_create_only(self):
+        self.write("s.json", "{}")
+        self.write("o.json", "{}")
+        self.age("o.json", 8)
+        self.age("s.json", 8)
+        jw.update_record(self.d, "s", {"kind": "x"})  # existing: no prune
+        self.assertTrue(os.path.exists(self.path("o.json")))
+        self.write("p.json", "{}")
+        self.age("p.json", 6)
+        jw.update_record(self.d, "new", {"kind": "x"})  # new: prune
+        self.assertFalse(os.path.exists(self.path("o.json")))
+        self.assertTrue(os.path.exists(self.path("p.json")))
+        self.assertTrue(os.path.exists(self.path("new.json")))
+
+    def test_lock_busy(self):
+        self.write("s.json", '{"kind":"task"}')
+        fd = os.open(self.path(".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        with mock.patch.object(jw, "LOCK_WAIT", 0.3):
+            t0 = time.monotonic()
+            with self.assertRaises(Fail) as c:
+                jw.update_record(self.d, "s", {"kind": "other"})
+        elapsed = time.monotonic() - t0
+        self.assertGreaterEqual(elapsed, 0.3)
+        self.assertLess(elapsed, 5)
+        self.assertIn("busy", str(c.exception))
+        with open(self.path("s.json")) as f:
+            self.assertEqual(json.load(f), {"kind": "task"})
+
+    def test_lock_released_while_waiting(self):
+        self.write("s.json", '{"kind":"task"}')
+        fd = os.open(self.path(".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        timer = threading.Timer(0.1, lambda: fcntl.flock(fd, fcntl.LOCK_UN))
+        timer.start()
+        self.addCleanup(timer.join)
+        with mock.patch.object(jw, "LOCK_WAIT", 2):
+            r = jw.update_record(self.d, "s", {"kind": "other"})
+        self.assertEqual(r, {"kind": "other"})
+        self.assertEqual(jw.read_record(self.d, "s"), {"kind": "other"})
+
+    def test_symlinked_record_not_followed(self):
+        self.mkdir()
+        outside = os.path.join(self.tmp, "outside.json")
+        with open(outside, "w") as f:
+            f.write('{"secret":1}')
+        os.symlink(outside, self.path("s.json"))
+        jw.update_record(self.d, "s", {"kind": "task"})
+        with open(outside) as f:
+            self.assertEqual(f.read(), '{"secret":1}')
+        self.assertFalse(os.path.islink(self.path("s.json")))
+        self.assertTrue(os.path.isfile(self.path("s.json")))
+        with open(self.path("s.json")) as f:
+            self.assertEqual(json.load(f), {"kind": "task"})
+
+    def test_lock_symlink_not_followed(self):
+        self.mkdir()
+        outside = os.path.join(self.tmp, "outside-lock")
+        os.symlink(outside, self.path(".lock"))
+        with self.assertRaises((Fail, OSError)):
+            jw.update_record(self.d, "s", {"kind": "task"})
+        self.assertFalse(os.path.exists(outside))
+        self.assertFalse(os.path.exists(self.path("s.json")))
+
+
+class PruneRecords(RecordsBase):
+    def test_deletes_old_regular_only(self):
+        self.write("old.json", "{}")
+        self.write("new.json", "{}")
+        self.write(".lock", "")
+        self.write("target.json", "{}")
+        os.symlink(self.path("target.json"), self.path("link.json"))
+        os.mkfifo(self.path("fifo.json"))
+        os.mkdir(self.path("dir.json"))
+        for n in ["old.json", ".lock", "link.json", "fifo.json", "dir.json"]:
+            self.age(n, 8)
+        self.age("target.json", 1)
+        self.assertEqual(jw.prune_records(self.d, time.time()), ["old.json"])
+        self.assertEqual(sorted(os.listdir(self.d)),
+                         [".lock", "dir.json", "fifo.json", "link.json", "new.json", "target.json"])
+
+    def test_sorted(self):
+        for n in ["b.json", "a.json"]:
+            self.write(n, "{}")
+            self.age(n, 9)
+        self.assertEqual(jw.prune_records(self.d, time.time()), ["a.json", "b.json"])
+
+    def test_missing_dir(self):
+        self.assertEqual(jw.prune_records(self.d, time.time()), [])
+
+
+class CmdSession(RecordsBase):
+    def setUp(self):
+        super().setUp()
+        self.d = os.path.join(self.tmp, "state", "agent-sessions")
+        env = mock.patch.dict(os.environ, {"XDG_STATE_HOME": os.path.join(self.tmp, "state"),
+                                           "AGENT_SESSION": "s-1", "KNOWLEDGE_ORIGIN": ""})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def run_cmd(self, *args):
+        with mock.patch.object(sys, "argv", ["jw", "session", *args]):
+            a = jw.parse_args()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            a.func(a)
+        return out.getvalue()
+
+    def test_set_creates(self):
+        self.assertEqual(self.run_cmd("set", "--kind", "task", "--title", "T"), "")
+        with open(self.path("s-1.json")) as f:
+            self.assertEqual(json.load(f), {"kind": "task", "title": "T"})
+        self.assertEqual(os.stat(self.d).st_mode & 0o777, 0o700)
+        self.assertEqual(os.stat(self.path("s-1.json")).st_mode & 0o777, 0o600)
+
+    def test_set_all_fields(self):
+        self.run_cmd("set", "--kind", "k", "--description", "D", "--workspace", "/w",
+                     "--url", "https://u/1", "--title", "T")
+        self.assertEqual(jw.read_record(self.d, "s-1"),
+                         {"kind": "k", "description": "D", "workspace": "/w", "url": "https://u/1", "title": "T"})
+
+    def test_set_merge(self):
+        self.write("s-1.json", json.dumps({"kind": "task", "title": "T", "extra": 1}))
+        self.run_cmd("set", "--title", "U", "--mr", "https://g/1")
+        self.assertEqual(jw.read_record(self.d, "s-1"),
+                         {"kind": "task", "title": "U", "extra": 1, "mrs": ["https://g/1"]})
+
+    def test_set_mr_dedupe(self):
+        self.run_cmd("set", "--mr", "https://a", "--mr", "https://b", "--mr", "https://a")
+        self.assertEqual(jw.read_record(self.d, "s-1")["mrs"], ["https://a", "https://b"])
+
+    def test_set_utf8(self):
+        self.run_cmd("set", "--title", "ż")
+        with open(self.path("s-1.json"), "rb") as f:
+            self.assertIn("ż".encode(), f.read())
+
+    def test_set_session_override(self):
+        self.run_cmd("set", "-s", "other", "--kind", "k")
+        self.assertTrue(os.path.exists(self.path("other.json")))
+        self.assertFalse(os.path.exists(self.path("s-1.json")))
+
+    def test_set_no_session(self):
+        with mock.patch.dict(os.environ):
+            del os.environ["AGENT_SESSION"]
+            with self.assertRaises(Fail):
+                self.run_cmd("set", "--kind", "k")
+        self.assertFalse(os.path.exists(self.d))
+
+    def test_set_refused_in_event(self):
+        with mock.patch.dict(os.environ, {"KNOWLEDGE_ORIGIN": "event:gl-mr-1"}):
+            with self.assertRaises(Fail):
+                self.run_cmd("set", "--kind", "k")
+        self.assertFalse(os.path.exists(self.d))
+        self.assertFalse(os.path.exists(os.path.dirname(self.d)))
+
+    def test_set_other_origin_allowed(self):
+        with mock.patch.dict(os.environ, {"KNOWLEDGE_ORIGIN": "manual"}):
+            self.run_cmd("set", "--kind", "k")
+        self.assertEqual(jw.read_record(self.d, "s-1"), {"kind": "k"})
+
+    def test_set_bad_urls(self):
+        bad = ["http://x", "javascript:x", "https://a b", "https://", "https://" + "a" * 2041]
+        self.assertEqual(len(bad[-1]), 2049)
+        for u in bad:
+            for flag in ("--url", "--mr"):
+                with self.subTest(url=u[:30], flag=flag):
+                    with self.assertRaises(Fail):
+                        self.run_cmd("set", "--kind", "k", flag, u)
+                    self.assertFalse(os.path.exists(self.d))
+
+    def test_set_bad_chars_in_urls(self):
+        bad = ["https://x\x1b]0;e\x07", "https://x‮", "https://ż"]
+        for u in bad:
+            for flag in ("--url", "--mr"):
+                with self.subTest(url=repr(u), flag=flag):
+                    with self.assertRaises(Fail):
+                        self.run_cmd("set", "--kind", "k", flag, u)
+                    self.assertFalse(os.path.exists(self.d))
+
+    def test_set_url_printable_ascii_ok(self):
+        u = "https://g/a-b_c?x=1&y=%20"
+        self.run_cmd("set", "--url", u, "--mr", u)
+        r = jw.read_record(self.d, "s-1")
+        self.assertEqual(r["url"], u)
+        self.assertEqual(r["mrs"], [u])
+
+    def test_invalid_name_cli(self):
+        with self.assertRaises(Fail):
+            self.run_cmd("get", "-s", "../x")
+        with self.assertRaises(Fail):
+            self.run_cmd("set", "-s", "../x", "--title", "t")
+        self.assertFalse(os.path.exists(self.d))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "state", "x.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "x.json")))
+
+    def test_set_bad_url_leaves_existing(self):
+        self.write("s-1.json", '{"kind":"task"}')
+        with self.assertRaises(Fail):
+            self.run_cmd("set", "--kind", "k", "--mr", "https://ok", "--mr", "http://bad")
+        self.assertEqual(jw.read_record(self.d, "s-1"), {"kind": "task"})
+
+    def test_set_url_max_ok(self):
+        u = "https://" + "a" * 2040
+        self.assertEqual(len(u), 2048)
+        self.run_cmd("set", "--url", u)
+        self.assertEqual(jw.read_record(self.d, "s-1")["url"], u)
+
+    def test_get(self):
+        self.write("s-1.json", json.dumps({"kind": "task", "title": "ż"}, ensure_ascii=False))
+        out = self.run_cmd("get")
+        self.assertTrue(out.endswith("\n"))
+        self.assertEqual(out.count("\n"), 1)
+        self.assertEqual(json.loads(out), {"kind": "task", "title": "ż"})
+        self.assertIn("ż", out)
+
+    def test_get_override(self):
+        self.write("o.json", '{"kind":"x"}')
+        self.assertEqual(json.loads(self.run_cmd("get", "-s", "o")), {"kind": "x"})
+
+    def test_get_missing(self):
+        with self.assertRaises(Fail) as c:
+            self.run_cmd("get")
+        self.assertIn("no session record s-1", str(c.exception))
+
+    def test_get_corrupt(self):
+        self.write("s-1.json", "{bad")
+        with self.assertRaises(Fail):
+            self.run_cmd("get")
 
 
 if __name__ == "__main__":
