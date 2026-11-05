@@ -4,6 +4,7 @@
   python3,
   makeWrapper,
   jujutsu,
+  jw,
 }:
 
 # Used through the jj aliases `upload` (`jj util exec -- jj-upload`) and `sync`
@@ -31,7 +32,7 @@ stdenvNoCC.mkDerivation {
     substituteInPlace $out/bin/jj-upload \
       --replace-fail "#!/usr/bin/env python3" "#!${python3}/bin/python3"
     wrapProgram $out/bin/jj-upload \
-      --suffix PATH : ${lib.makeBinPath [ jujutsu ]}
+      --suffix PATH : ${lib.makeBinPath [ jujutsu jw ]}
     runHook postInstall
   '';
 
