@@ -261,8 +261,15 @@ writeShellApplication {
     host=$(jq -r '.host // ""' <<<"$event")
     # event-subscribe sets ER_TYPE; sessions started here submit knowledge as untrusted
     origin="event:''${ER_TYPE:-unknown}"
-    # the handler variant `name` is the origin kind that agent-inbox tabs match on
-    claude_origin=$(jq -c --arg kind ${lib.escapeShellArg name} '(.raw.target // .raw.merge_request // {}) as $t | {kind:$kind, iid:.target_iid, target:.target_type, title, url, description:(($t.description // "")[0:8000])} | with_entries(select(.value != null and .value != ""))' <<<"$event")
+    # fields of the session record (`jw session set`); the handler variant `name` is the kind that agent-inbox tabs match on
+    record_title=$(jq -r '(.title // "" | tostring) as $t
+      | (if .target_iid and .target_type == "MergeRequest" then "!\(.target_iid) \($t)"
+         elif .target_iid and .target_type == "Issue" then "#\(.target_iid) \($t)"
+         else $t end)
+      | gsub("\\s+"; " ") | gsub("^ | $"; "") | .[0:200]' <<<"$event")
+    record_description=$(jq -r '((.raw.target // .raw.merge_request // {}).description | strings // "")[0:8000]' <<<"$event")
+    # \z, not $: the regex of jq also matches before a trailing newline
+    record_url=$(jq -r '.url | strings | select(length <= 2048 and test("^https://[!-~]+\\z")) // ""' <<<"$event")
 
     prepared=0
     cwd=""
@@ -302,7 +309,8 @@ writeShellApplication {
         echo "context: $context_dir"
       fi
       echo "session: $name"
-      echo "origin: $claude_origin"
+      echo "kind: ${name}"
+      echo "title: $record_title"
       if [[ -n "$sid" ]]; then
         echo "session: $sid $sdir resume=$resume"
         echo "action: $mode"
@@ -328,13 +336,6 @@ writeShellApplication {
     if [[ -z "''${TERM:-}" || "$TERM" == dumb ]]; then export TERM=xterm-256color; fi
     export COLORTERM=truecolor
     rundir=''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
-    mkdir -p "$rundir/claude-origin"
-    chmod 700 "$rundir/claude-origin"
-    # -ignore_readdir_race and || true: a concurrent pruner deleting the same file must not kill the handler
-    find "$rundir/claude-origin" -ignore_readdir_race -name '*.json' -mmin +2880 -delete || true
-    CLAUDE_ORIGIN_FILE=$(mktemp --suffix=.json "$rundir/claude-origin/XXXXXXXX")
-    printf '%s\n' "$claude_origin" >"$CLAUDE_ORIGIN_FILE"
-    export CLAUDE_ORIGIN_FILE
     # concurrent events must not pick the same name; fd 9 is closed for the
     # shpool calls so nothing they start can hold the lock
     exec 9>"$rundir/event-claude.lock"
@@ -344,6 +345,22 @@ writeShellApplication {
     taken() { local n _; while read -r n _; do [[ "$n" == "$1" ]] && return 0; done <<<"$existing"; return 1; }
     base=$name; i=2
     while taken "$name"; do name="$base-$i"; i=$((i + 1)); done
+    # exported before the job script is written, so the session gets it. No KNOWLEDGE_ORIGIN
+    # in this environment (the launcher sets it): `jw session set` refuses event sessions
+    export AGENT_SESSION=$name
+    # --opt=value: a value starting with `-` must not be taken for an option
+    record=(--kind=${lib.escapeShellArg name} "--workspace=$workdir")
+    if [[ -n "$record_title" ]]; then
+      record+=("--title=$record_title")
+    fi
+    if [[ -n "$record_description" ]]; then
+      record+=("--description=$record_description")
+    fi
+    if [[ -n "$record_url" ]]; then
+      record+=("--url=$record_url")
+    fi
+    ${jw}/bin/jw session set -s "$name" "''${record[@]}" </dev/null 9>&- ||
+      echo "cannot write the session record of $name" >&2
     # the prompt and the environment go only into this 0600 file, never through
     # shpool's shell-words-split -c; the script removes itself when it starts
     # (shpool starts it without a usable PATH, hence the absolute rm)

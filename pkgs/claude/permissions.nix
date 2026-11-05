@@ -17,6 +17,7 @@
     "Bash(jj upload:*)"
     "Bash(jw agent -d:*)"
     "Bash(jw msg:*)"
+    "Bash(jw session:*)"
 
     # Images attached to tasks by the capture tool.
     "Read(//run/user/*/agent-task/**)"
@@ -67,6 +68,7 @@
     "Edit(@memoryDir@/org/**)"
     "Edit(@memoryDir@/projects/*/facts.md)"
     "Edit(~/.local/state/knowledge/inbox/**)"
+    "Edit(~/.local/state/agent-sessions/**)"
 
     # MR comments, replies and resolves go only through `gitlab-review` drafts.
     # Threads are read with `glab mr note list` (allowed), so all `glab api`

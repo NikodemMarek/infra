@@ -17,6 +17,122 @@ import jw
 from jw import Fail, attach, match_session, session_rows
 
 
+class TaskRecord(unittest.TestCase):
+    def test_empty_prompt(self):
+        self.assertEqual(jw.task_record("", "/w"), {"kind": "task", "workspace": "/w"})
+
+    def test_title_and_description(self):
+        prompt = "  \n fix x \nmore"
+        r = jw.task_record(prompt, "/w")
+        self.assertEqual(r["kind"], "task")
+        self.assertEqual(r["workspace"], "/w")
+        self.assertEqual(r["title"], "fix x")
+        self.assertEqual(r["description"], prompt)
+
+    def test_caps(self):
+        r = jw.task_record("t" * 300 + "\n" + "d" * 9000, "/w")
+        self.assertEqual(r["title"], "t" * 200)
+        self.assertEqual(len(r["description"]), 8000)
+
+
+BAD = b"fix \xff x".decode("utf-8", "surrogateescape")
+
+
+class TaskRecordSurrogate(unittest.TestCase):
+    def test_valid_utf8_and_writable(self):
+        r = jw.task_record(BAD + "\nmore", "/w")
+        for k in ("title", "description"):
+            r[k].encode("utf-8")  # must not raise
+            self.assertIn("\ufffd", r[k])
+        self.assertEqual(r["title"], "fix \ufffd x")
+        d = tempfile.mkdtemp(dir="/tmp")
+        self.addCleanup(shutil.rmtree, d, True)
+        out = jw.update_record(d, "s-1", r)
+        self.assertEqual(jw.read_record(d, "s-1"), out)
+        self.assertEqual(out["title"], "fix \ufffd x")
+
+
+class AgentEnv(unittest.TestCase):
+    def test_drops_session_marker(self):
+        env = jw.agent_env({"AGENT_SESSION": "s", "CLAUDECODE": "1", "KEEP": "1"})
+        self.assertEqual(env, {"KEEP": "1"})
+
+    def test_origin_file_no_longer_special(self):
+        self.assertEqual(jw.agent_env({"CLAUDE_ORIGIN_FILE": "/o"}), {"CLAUDE_ORIGIN_FILE": "/o"})
+
+
+class CmdAgent(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(dir="/tmp")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.state = os.path.join(self.tmp, "state")
+        self.run_dir = os.path.join(self.tmp, "run")
+        os.makedirs(self.run_dir)
+        self.work = os.path.join(self.tmp, "work")
+        os.makedirs(self.work)
+
+    def agent(self, update=None, prompt="fix x\nmore"):
+        """Runs cmd_agent -d with a fake shpool; returns stderr. Sets self.job (script text), self.at_attach
+        (record file content when shpool ran), self.attach_m."""
+        self.job = self.at_attach = None
+        rec = os.path.join(self.state, "agent-sessions", "s-1.json")
+
+        def run(argv, *a, **kw):
+            self.job = open(argv[argv.index("-c") + 1].split()[-1], errors="surrogateescape").read()
+            if os.path.exists(rec):
+                self.at_attach = open(rec).read()
+            return mock.Mock(returncode=0)
+
+        err = io.StringIO()
+        env = {"XDG_STATE_HOME": self.state, "XDG_RUNTIME_DIR": self.run_dir, "KNOWLEDGE_ORIGIN": "",
+               "AGENT_SESSION": "outer"}
+        patches = [
+            mock.patch.dict(os.environ, env),
+            mock.patch.object(jw, "locate", return_value=("x", self.tmp)),
+            mock.patch.object(jw, "fetch"),
+            mock.patch.object(jw, "add_workspace", return_value=self.work),
+            mock.patch.object(jw, "shpool_status", side_effect=[{}, {"s-1": "detached"}]),
+            mock.patch.object(jw.time, "strftime", return_value="s-1"),
+            mock.patch.object(jw, "attach"),
+            mock.patch("subprocess.run", side_effect=run),
+            mock.patch("sys.stderr", err),
+        ]
+        if update:
+            patches.append(mock.patch.object(jw, "update_record", side_effect=update))
+        with contextlib.ExitStack() as st:
+            ms = [st.enter_context(p) for p in patches]
+            self.attach_m = ms[6]
+            jw.cmd_agent(mock.Mock(args=["--", prompt], revision=None, detach=False))
+        return err.getvalue()
+
+    def test_session_env_and_record(self):
+        self.agent()
+        self.assertIn("export AGENT_SESSION=s-1\n", self.job)
+        self.assertNotIn("outer", self.job)
+        self.assertIsNotNone(self.at_attach, "record must exist before shpool attach")
+        r = json.loads(self.at_attach)
+        self.assertEqual(r["kind"], "task")
+        self.assertEqual(r["title"], "fix x")
+        self.assertEqual(r["workspace"], self.work)
+        self.attach_m.assert_called_once_with("s-1")
+
+    def test_record_failure_warns_and_starts(self):
+        for exc in (Fail("boom"), OSError("disk")):
+            with self.subTest(exc=exc):
+                err = self.agent(update=exc)
+                self.assertIn("jw: cannot write the session record:", err)
+                self.assertIsNotNone(self.job)
+                self.attach_m.assert_called_once_with("s-1")
+
+    def test_surrogate_prompt_still_starts(self):
+        err = self.agent(prompt=BAD + "\nmore")
+        self.assertNotIn("cannot write the session record", err)
+        self.assertIsNotNone(self.job)
+        self.attach_m.assert_called_once_with("s-1")
+        r = json.loads(self.at_attach)
+        self.assertEqual(r["title"], "fix \ufffd x")
+
+
 class MatchSession(unittest.TestCase):
     def test_exact_wins_over_longer(self):
         self.assertEqual(match_session(["ab", "abc"], "ab"), "ab")
@@ -297,7 +413,7 @@ class CmdReap(unittest.TestCase):
     def test_stops(self):
         out, err = self.reap([("n", "/w", "sid")])
         self.assertIsNone(self.exc)
-        self.assertEqual(out, "stopped n in /w: claude --resume sid\n")
+        self.assertEqual(out, "stopped n in /w: AGENT_SESSION=n claude --resume sid\n")
         self.assertEqual(self.run_m.call_args_list[0].args[0], [jw.SHPOOL, "--no-daemonize", "kill", "n"])
 
     def test_failure_continues_then_fails(self):
@@ -305,7 +421,7 @@ class CmdReap(unittest.TestCase):
         out, err = self.reap([("a", "/a", "sa"), ("b", "/b", "sb")], run={"side_effect": rets})
         self.assertIsInstance(self.exc, Fail)
         self.assertEqual(err, "jw: shpool kill a failed\n")
-        self.assertEqual(out, "stopped b in /b: claude --resume sb\n")
+        self.assertEqual(out, "stopped b in /b: AGENT_SESSION=b claude --resume sb\n")
         self.assertEqual(self.run_m.call_count, 2)
 
     def test_oserror(self):
@@ -966,6 +1082,17 @@ class CmdSession(RecordsBase):
         self.assertEqual(len(u), 2048)
         self.run_cmd("set", "--url", u)
         self.assertEqual(jw.read_record(self.d, "s-1")["url"], u)
+
+    def test_set_surrogate_title(self):
+        try:
+            self.run_cmd("set", "--title", BAD)
+        except Fail as e:
+            self.assertIn("cannot write the session record", str(e))
+            self.assertIsNone(jw.read_record(self.d, "s-1"))
+        else:
+            self.assertEqual(jw.read_record(self.d, "s-1")["title"], "fix \ufffd x")
+        self.assertFalse(os.path.exists(self.path("s-1.json")) and jw.read_record(self.d, "s-1") is None)
+        self.assertEqual([n for n in os.listdir(self.d) if n.startswith(".tmp-")], [])
 
     def test_get(self):
         self.write("s-1.json", json.dumps({"kind": "task", "title": "ż"}, ensure_ascii=False))

@@ -5,7 +5,7 @@ Publishes the object as an event with `event-pub` (NATS subject events.<type>).
 Without a type, derives one from a PermissionRequest hook payload: AskUserQuestion ->
 claude.question, else claude.permission_request. Adds `project` (last component of cwd), `title`,
 `jj` (the output of `jw info` in the cwd) when available, `shpool` (the shpool session name) when run
-inside one, and `origin_file` (CLAUDE_ORIGIN_FILE, the session's origin description) when set.
+inside one, and `session` (AGENT_SESSION, the name of the session's record) when set.
 
 Title (non-empty strings only): .title, else the question, the Bash description / first command line,
 "<tool> <file relative to cwd>", "<tool> <url>", the tool name, the type.
@@ -70,8 +70,8 @@ def enrich(inp, etype):
     event = {**inp, "type": etype, "project": cwd.split("/")[-1] or None, "title": title(inp, etype)}
     if os.environ.get("SHPOOL_SESSION_NAME"):
         event["shpool"] = os.environ["SHPOOL_SESSION_NAME"]
-    if os.environ.get("CLAUDE_ORIGIN_FILE"):
-        event["origin_file"] = os.environ["CLAUDE_ORIGIN_FILE"]
+    if os.environ.get("AGENT_SESSION"):
+        event["session"] = os.environ["AGENT_SESSION"]
     info = jj_info(cwd) if cwd else None
     if info is not None:
         event["jj"] = info
