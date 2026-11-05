@@ -8,6 +8,7 @@ agent always starts Claude in a new workspace (s-*, like `jw new`) in a shpool s
 """
 
 import argparse
+import contextlib
 import fcntl
 import json
 import os
@@ -15,6 +16,7 @@ import re
 import shlex
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -26,11 +28,16 @@ FZF = "fzf"  # the nix package pins the store paths
 SHPOOL = "shpool"
 BASH = "bash"
 KNOWLEDGE = "knowledge"  # the nix package pins it
-NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+SESSION_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")  # fullmatch
 GITLAB = re.compile(r"^gl-[a-z]+-[0-9]+(-[0-9]+)?$")  # gitlab-context's workspaces: it reuses and cleans them
 IDLE_LIMIT = 4 * 3600  # seconds a detached Claude session must have been idle to be reaped
 MSG_WAIT = 10  # seconds `jw msg` waits for a session to register
 MSG_MAX = 8000  # characters of a message delivered
+RECORD_MAX = 65536  # bytes of a session record that are read
+RECORD_DAYS = 7  # age in days after which creating a record deletes the untouched ones
+LOCK_WAIT = 5  # seconds a record update waits for the records lock
+HTTPS = re.compile(r"https://[!-~]+")  # fullmatch
+URL_MAX = 2048
 
 
 class Fail(Exception):
@@ -215,7 +222,7 @@ def cmd_cd(a):
 
 def cmd_clone(a):
     name = a.name or re.split(r"[/:]", a.url.rstrip("/"))[-1].removesuffix(".git")
-    if not NAME.match(name) or name.endswith(".agents"):
+    if not SESSION_NAME.fullmatch(name) or name.endswith(".agents"):
         raise Fail(f"invalid name {name!r}")
     d = f"{ROOT}/{name}"
     if os.path.lexists(d):
@@ -315,7 +322,7 @@ def cmd_rm(a):
     if not name:
         raise Fail("give a workspace name (this is the main one)")
     d = f"{home}.agents/{name}"
-    if name == "default" or not NAME.match(name) or not os.path.isdir(f"{d}/.jj"):
+    if name == "default" or not SESSION_NAME.fullmatch(name) or not os.path.isdir(f"{d}/.jj"):
         raise Fail(f"no workspace at {d}")
     inside = (os.path.realpath(os.getcwd()) + "/").startswith(os.path.realpath(d) + "/")
     ask_lost(d)
@@ -826,6 +833,124 @@ def cmd_msg(a):
     sys.stderr.write(f"jw: sent to {session}\n")
 
 
+def records_dir(env=None):
+    env = os.environ if env is None else env
+    state = env.get("XDG_STATE_HOME", "")
+    if not os.path.isabs(state):
+        state = f"{env.get('HOME') or os.path.expanduser('~')}/.local/state"
+    return f"{state}/agent-sessions"
+
+
+def session_name(name, env=None):
+    """name, else the session this process runs in."""
+    env = os.environ if env is None else env
+    if name is None:
+        name = env.get("AGENT_SESSION")
+        if not name:
+            raise Fail("no session: pass -s NAME or run in an agent session")
+    if not SESSION_NAME.fullmatch(name):
+        raise Fail(f"invalid session name: {name!r}")
+    return name
+
+
+def read_record(d, name):
+    """The record of session name in d, or None if it is missing or not a plain, small JSON object file."""
+    if not SESSION_NAME.fullmatch(name):
+        return None
+    try:
+        # O_NONBLOCK: opening a FIFO must not wait for a writer
+        fd = os.open(f"{d}/{name}.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return None
+            data = f.read(RECORD_MAX + 1)
+        record = json.loads(data.decode("utf-8")) if len(data) <= RECORD_MAX else None
+    except (OSError, ValueError, RecursionError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def prune_records(d, now):
+    """Delete the records in d untouched for RECORD_DAYS; return their file names."""
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return []
+    gone = []
+    for n in names:
+        p = f"{d}/{n}"
+        try:
+            st = os.lstat(p)
+            if n != ".lock" and stat.S_ISREG(st.st_mode) and st.st_mtime < now - RECORD_DAYS * 86400:
+                os.unlink(p)
+                gone.append(n)
+        except OSError:
+            pass
+    return gone
+
+
+def update_record(d, name, fields, mrs=()):
+    """Merge fields (the ones that are not None) and the MR urls into the record of session name and return it."""
+    if not SESSION_NAME.fullmatch(name):
+        raise Fail(f"invalid session name: {name!r}")
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    path = f"{d}/{name}.json"
+    # polling: a writer that died holding the lock cannot hang the callers (agents, hooks) for good
+    with os.fdopen(os.open(f"{d}/.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)) as lock:
+        deadline = time.monotonic() + LOCK_WAIT
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise Fail("session records are busy")
+                time.sleep(0.05)
+        existed = os.path.lexists(path)
+        record = read_record(d, name) or {}
+        record.update({k: v for k, v in fields.items() if v is not None})
+        if mrs:
+            urls = record["mrs"] if isinstance(record.get("mrs"), list) else []
+            urls += [u for u in dict.fromkeys(mrs) if u not in urls]
+            record["mrs"] = urls
+        fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=d)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(record, f, ensure_ascii=False)
+            os.replace(tmp, path)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
+            raise
+        if not existed:
+            prune_records(d, time.time())
+    return record
+
+
+def cmd_session(a):
+    d = records_dir()
+    if a.action == "get":
+        name = session_name(a.session)
+        record = read_record(d, name)
+        if record is None:
+            raise Fail(f"no session record {name}")
+        print(json.dumps(record, ensure_ascii=False))
+        return
+    # event sessions run on untrusted text (GitLab); the record is shown to the user and its url opened
+    if os.environ.get("KNOWLEDGE_ORIGIN", "").startswith("event:"):
+        raise Fail("event sessions cannot change session records")
+    name = session_name(a.session)
+    mrs = a.mr or []
+    for url in [a.url, *mrs]:
+        if url is not None and (len(url) > URL_MAX or not HTTPS.fullmatch(url)):
+            raise Fail(f"not an https url: {url}")
+    fields = {"kind": a.kind, "title": a.title, "description": a.description, "url": a.url, "workspace": a.workspace}
+    try:
+        update_record(d, name, fields, mrs)
+    except OSError as e:
+        raise Fail(f"cannot write the session record: {e}")
+
+
 def cmd_info(a):
     """Print the workspace and stack of the current directory as JSON (the prompt runs this, so keep it fast)."""
     root = os.getcwd()
@@ -897,6 +1022,19 @@ def parse_args():
     s.add_argument("name", help="the session's name, its workspace name or its shpool session name")
     s.add_argument("text", nargs=argparse.REMAINDER, help="words of the message (default: read stdin); a leading -- is dropped")
     s.set_defaults(func=cmd_msg)
+    s = sub.add_parser("session", help="read or update the record of an agent session (kind, title, description, url, workspace, mrs), a JSON file in $XDG_STATE_HOME/agent-sessions that agent-inbox and the notifications show")
+    s.set_defaults(func=cmd_session)
+    ss = s.add_subparsers(dest="action", required=True)
+    s = ss.add_parser("get", help="print the record as JSON; fails if there is none")
+    s.add_argument("-s", "--session", help="session name (default: $AGENT_SESSION)")
+    s = ss.add_parser("set", help="set the given fields of the record, creating it; --mr adds to the list; refused in GitLab event sessions")
+    s.add_argument("-s", "--session", help="session name (default: $AGENT_SESSION)")
+    s.add_argument("--kind", help="what started the session, e.g. task, review, MergeRequest")
+    s.add_argument("--title")
+    s.add_argument("--description")
+    s.add_argument("--workspace", help="the session's workspace directory")
+    s.add_argument("--url", help="https link to the work item")
+    s.add_argument("--mr", action="append", help="https url of a merge request to add (repeatable)")
     sub.add_parser("ls", help="list the workspaces")
     return p.parse_args()
 

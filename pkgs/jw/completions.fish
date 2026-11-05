@@ -15,7 +15,7 @@ function __jw_shpool_sessions  # first column of `shpool list`, after the header
 end
 
 complete -c jw -f
-complete -c jw -n __fish_use_subcommand -a 'new n cd c rm clone prune reap info ls pick agent a attach at msg'
+complete -c jw -n __fish_use_subcommand -a 'new n cd c rm clone prune reap info ls pick agent a attach at msg session'
 complete -c jw -n '__fish_seen_subcommand_from new n' -s r -l revision -r -d 'revision to start from (default: trunk())'
 complete -c jw -n '__fish_seen_subcommand_from new n' -a '(__jw_repos)'
 complete -c jw -n '__fish_seen_subcommand_from agent a' -s r -l revision -r -d 'revision to start from (default: trunk())'
@@ -23,3 +23,11 @@ complete -c jw -n '__fish_seen_subcommand_from agent a' -s d -l detach -d 'start
 complete -c jw -n '__fish_seen_subcommand_from agent a' -a '(__jw_repos)'
 complete -c jw -n '__fish_seen_subcommand_from cd c rm' -a '(__jw_workspaces)'
 complete -c jw -n '__fish_seen_subcommand_from attach at' -a '(__jw_shpool_sessions)'
+complete -c jw -n '__fish_seen_subcommand_from session; and not __fish_seen_subcommand_from get set' -a 'get set'
+complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from get set' -s s -l session -r -d 'session name (default: $AGENT_SESSION)'
+complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from set' -l kind -r -d 'what started the session'
+complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from set' -l title -r
+complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from set' -l description -r
+complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from set' -l workspace -r -F
+complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from set' -l url -r -d 'https link to the work item'
+complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from set' -l mr -r -d 'https url of a merge request to add'
