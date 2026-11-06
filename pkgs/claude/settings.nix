@@ -14,6 +14,7 @@
   autoMemoryEnabled = false;
   env = {
     CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW = "300000";
   };
 
   hooks = {
@@ -23,6 +24,17 @@
           {
             type = "command";
             command = "knowledge hook session-start";
+            timeout = 10;
+          }
+        ];
+      }
+      # After a compaction the summary can drop the stack and session state the coordinator works from.
+      {
+        matcher = "compact";
+        hooks = [
+          {
+            type = "command";
+            command = "jj log --no-graph -r 'trunk()..@' 2>/dev/null; [ -n \"$AGENT_SESSION\" ] && jw session get 2>/dev/null; true";
             timeout = 10;
           }
         ];
