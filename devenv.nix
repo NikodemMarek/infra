@@ -123,6 +123,8 @@ in {
     pkgs.qrencode
   ];
 
+  languages.rust.enable = true;
+
   scripts = {
     secrets-build = {
       exec = ''
