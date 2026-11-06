@@ -56,13 +56,21 @@ in {
       };
 
       jw-reap = {
-        description = "Stop detached Claude shpool sessions idle or stuck on a permission prompt for 4 hours";
+        description = "Stop finished or long-idle Claude agent sessions and remove their merged workspaces";
+        path = [
+          pkgs.jujutsu
+          pkgs.git
+          pkgs.openssh
+          pkgs.glab
+          pkgs.gh
+        ];
+        environment.SSH_AUTH_SOCK = "%t/ssh-agent";
         serviceConfig = {
           Type = "oneshot";
           ExecStart = "${pkgs.jw}/bin/jw reap";
-          TimeoutStartSec = "2min";
+          TimeoutStartSec = "15min";
         };
-        startAt = "hourly";
+        startAt = "*:0/10";
       };
     };
 
