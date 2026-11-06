@@ -16,3 +16,5 @@ spec:
   mountOptions:
     - nfsvers=4.2
     - noatime
+    - nocto
+    - actimeo=60
