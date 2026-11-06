@@ -7,6 +7,14 @@
     "Bash(jj status:*)"
     "Bash(jj show:*)"
     "Bash(jj diff:*)"
+    "Bash(jj evolog:*)"
+    "Bash(jj op log:*)"
+    "Bash(jj op show:*)"
+    "Bash(jj workspace list:*)"
+    "Bash(jj bookmark list:*)"
+    "Bash(jj file show:*)"
+    "Bash(jj file list:*)"
+    "Bash(jj config list:*)"
     "Bash(jj new:*)"
     "Bash(jj squash:*)"
     "Bash(jj split:*)"
@@ -51,6 +59,7 @@
 
     "Bash(mvn test:*)"
     "Bash(mvn compile:*)"
+    "Bash(mvn verify:*)"
   ];
   deny = [
     # Sessions are started only with `jw agent`: others are invisible to agent-inbox.
