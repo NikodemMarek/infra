@@ -78,8 +78,7 @@ data:
 
     def run_beets_import(target_path):
         logging.info(f"Starting beets import for path: {target_path}")
-        config_file = "/config/config.yaml"
-        cmd = ["beet", "-c", config_file, "import", "-q", target_path]
+        cmd = ["beet", "import", "-q", target_path]
         try:
             result = subprocess.run(
                 cmd,
