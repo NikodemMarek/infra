@@ -15,12 +15,15 @@ function __jw_shpool_sessions  # first column of `shpool list`, after the header
 end
 
 complete -c jw -f
-complete -c jw -n __fish_use_subcommand -a 'new n cd c rm clone prune reap info ls pick agent a attach at msg session'
+complete -c jw -n __fish_use_subcommand -a 'new n cd c rm clone prune reap info ls pick agent a resume r attach at msg session'
 complete -c jw -n '__fish_seen_subcommand_from new n' -s r -l revision -r -d 'revision to start from (default: trunk())'
 complete -c jw -n '__fish_seen_subcommand_from new n' -a '(__jw_repos)'
 complete -c jw -n '__fish_seen_subcommand_from agent a' -s r -l revision -r -d 'revision to start from (default: trunk())'
 complete -c jw -n '__fish_seen_subcommand_from agent a' -s d -l detach -d 'start the session in the background'
 complete -c jw -n '__fish_seen_subcommand_from agent a' -a '(__jw_repos)'
+complete -c jw -n '__fish_seen_subcommand_from resume r' -s d -l detach -d 'start the session in the background'
+complete -c jw -n '__fish_seen_subcommand_from resume r' -s l -l last -d 'resume the newest session without asking'
+complete -c jw -n '__fish_seen_subcommand_from resume r' -a '(__jw_repos)'
 complete -c jw -n '__fish_seen_subcommand_from cd c rm' -a '(__jw_workspaces)'
 complete -c jw -n '__fish_seen_subcommand_from attach at' -a '(__jw_shpool_sessions)'
 complete -c jw -n '__fish_seen_subcommand_from session; and not __fish_seen_subcommand_from get set' -a 'get set'
