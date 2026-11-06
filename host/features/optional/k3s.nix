@@ -22,6 +22,9 @@ in {
     "d /run/flannel 0755 root root -"
   ];
 
+  # a switch reloads the firewall; flushing the whole ruleset would drop kube-proxy's service rules
+  networking.nftables.flushRuleset = false;
+
   services.k3s = {
     enable = true;
     tokenFile = config.secrets.k3s_token.path;
