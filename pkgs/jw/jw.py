@@ -28,6 +28,7 @@ ROOT = os.path.expanduser("~/projects")
 FZF = "fzf"  # the nix package pins the store paths
 SHPOOL = "shpool"
 BASH = "bash"
+DIRENV = "direnv"
 CKSUM = "cksum"
 KNOWLEDGE = "knowledge"  # the nix package pins it
 SESSION_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")  # fullmatch
@@ -882,7 +883,7 @@ def launch(home, detach, argv, text, make_dir, preferred=None, resume=False):
                     f.write(f"export {k}={shlex.quote(v)}\n")
             f.write('rm -f -- "$0"\n')  # after the exports: PATH is set now
             f.write(f"cd -- {shlex.quote(d)} || exit 1\n")
-            f.write(f"exec {shlex.join(argv)}\n")
+            f.write(f"exec {DIRENV} exec . {shlex.join(argv)}\n")  # also unloads an inherited direnv env
         try:
             status = subprocess.run([SHPOOL, "--no-daemonize", "attach", "-b", "--ttl", "1d", "-d", d,
                                      "-c", shlex.join([BASH, job]), name]).returncode
