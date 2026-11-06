@@ -61,6 +61,8 @@ const REPO_MAX_WIDTH: usize = 20;
 const CONTEXT_MAX_WIDTH: usize = 32;
 /// The status of a session that waits for the user.
 const WAITING: &str = "waiting";
+/// The status shown for a session that ran `jw done`, whatever Claude reports.
+const DONE: &str = "done";
 /// Longest multi-line value (a command, ...) shown in the detail pane.
 const MAX_LINES: usize = 40;
 /// Lines of the last message of a waiting session shown in the session detail.
@@ -292,9 +294,19 @@ impl App {
         always_shown(item) || self.in_tab(tab, kind)
     }
 
-    /// All sessions: the tabs filter items only.
+    /// All sessions, those that are done last: the tabs filter items only.
     fn visible_sessions(&self) -> Vec<&Session> {
-        self.sessions.iter().collect()
+        let mut sessions: Vec<&Session> = self.sessions.iter().collect();
+        sessions.sort_by_key(|s| self.session_status(s) == DONE);
+        sessions
+    }
+
+    /// The status of `session`: `DONE` once its record says so, else what Claude reports.
+    fn session_status<'a>(&self, session: &'a Session) -> &'a str {
+        match self.records.get(&session.agent_session) {
+            Some(record) if record.done => DONE,
+            _ => session.status.as_str(),
+        }
     }
 
     /// The Sessions tab: after All and the configured tabs.
@@ -1683,7 +1695,12 @@ fn empty_row(app: &App) -> ListItem<'static> {
 fn render_header(f: &mut Frame, app: &App, area: Rect) {
     let pending = app.shown().count();
     let answerable = app.shown().filter(|i| action(i).is_some()).count();
-    let waiting = match app.sessions.iter().filter(|s| s.status == WAITING).count() {
+    let waiting = match app
+        .sessions
+        .iter()
+        .filter(|s| app.session_status(s) == WAITING)
+        .count()
+    {
         0 => String::new(),
         n => format!(" ({n} waiting)"),
     };
@@ -1841,6 +1858,7 @@ fn status_badge(status: &str) -> (String, Style) {
         ),
         "idle" => ("IDLE".into(), Style::new().fg(Color::Green)),
         "busy" => ("BUSY".into(), dim()),
+        DONE => ("DONE".into(), dim()),
         other => (truncate(&clean(other), BADGE_WIDTH), dim()),
     }
 }
@@ -1880,7 +1898,8 @@ fn session_row(
     repo_width: usize,
     context_width: usize,
 ) -> Line<'static> {
-    let (badge_text, badge_style) = status_badge(&session.status);
+    let status = app.session_status(session);
+    let (badge_text, badge_style) = status_badge(status);
     let pending = app.session_items(session).len();
     let count = if pending == 0 {
         "  ".to_string()
@@ -1890,10 +1909,14 @@ fn session_row(
     let age = client::age(session.status_at, app.now);
     let head = 2 + 1 + BADGE_WIDTH + 1 + place_width(repo_width, context_width);
     let age_width = age.chars().count();
-    let waiting_for = truncate(
-        &clean(&session.waiting_for),
-        width.saturating_sub(head + age_width + 1),
-    );
+    let waiting_for = if status == DONE {
+        String::new()
+    } else {
+        truncate(
+            &clean(&session.waiting_for),
+            width.saturating_sub(head + age_width + 1),
+        )
+    };
     let pad = width.saturating_sub(head + waiting_for.chars().count() + age_width);
     let mut spans = vec![
         Span::styled(count, bold()),
@@ -1917,14 +1940,15 @@ fn session_row(
 
 /// The detail of `session`: its fields, its pending items and its record.
 fn session_lines(app: &App, session: &Session) -> Vec<Line<'static>> {
-    let (badge_text, badge_style) = status_badge(&session.status);
+    let status = app.session_status(session);
+    let (badge_text, badge_style) = status_badge(status);
     let mut head = vec![Span::styled(badge_text, badge_style)];
     let repo = session.repo();
     if !repo.is_empty() {
         head.push(Span::raw("  "));
         head.push(Span::styled(clean(&repo), repo_style()));
     }
-    if !session.waiting_for.is_empty() {
+    if status != DONE && !session.waiting_for.is_empty() {
         head.push(Span::raw(format!("  {}", clean(&session.waiting_for))));
     }
     let since = client::age(session.status_at, app.now);
@@ -6279,5 +6303,103 @@ mod tests {
             let cell = &buf[((x + dx) as u16, y as u16)];
             assert!(is_repo_style(cell), "{dx}: {cell:?}");
         }
+    }
+
+    fn done_record() -> Record {
+        Record {
+            done: true,
+            ..Record::default()
+        }
+    }
+
+    fn with_agent_session(mut s: Session, name: &str) -> Session {
+        s.agent_session = name.into();
+        s
+    }
+
+    #[test]
+    fn done_status_badge_is_done_text() {
+        assert_eq!(DONE, "done");
+        assert_eq!(status_badge(DONE).0, "DONE");
+    }
+
+    #[test]
+    fn session_status_is_done_only_for_a_done_record() {
+        let mut a = app(vec![]);
+        let s = session(1, "s-a", WAITING);
+        assert_eq!(a.session_status(&s), WAITING);
+        a.records.insert(AGENT_SESSION.into(), Record::default());
+        assert_eq!(a.session_status(&s), WAITING);
+        a.records.insert(AGENT_SESSION.into(), done_record());
+        assert_eq!(a.session_status(&s), DONE);
+        let idle = session(2, "s-b", "idle");
+        assert_eq!(a.session_status(&idle), DONE);
+        let other = with_agent_session(session(3, "s-c", "busy"), "other");
+        assert_eq!(a.session_status(&other), "busy");
+    }
+
+    #[test]
+    fn done_session_row_and_detail_show_done_without_waiting_for() {
+        let mut a = sessions_app(vec![], vec![session(1, "s-a", WAITING)]);
+        let s = screen_at(&a, 200, 30);
+        assert!(s.contains("WAIT") && s.contains("permission prompt"), "{s}");
+        a.records.insert(AGENT_SESSION.into(), done_record());
+        let s = screen_at(&a, 200, 30);
+        assert!(s.contains("DONE"), "{s}");
+        assert!(!s.contains("WAIT"), "{s}");
+        assert!(!s.contains("permission prompt"), "{s}");
+    }
+
+    #[test]
+    fn header_waiting_count_excludes_done_sessions() {
+        let mut a = app(vec![]);
+        a.set_sessions(vec![
+            with_agent_session(session(1, "s-a", WAITING), "x1"),
+            with_agent_session(session(2, "s-b", WAITING), "x2"),
+        ]);
+        assert!(screen(&a).contains("2 sessions (2 waiting)"));
+        a.records.insert("x1".into(), done_record());
+        let s = screen(&a);
+        assert!(s.contains("2 sessions (1 waiting)"), "{s}");
+        a.records.insert("x2".into(), done_record());
+        let s = screen(&a);
+        assert!(s.contains("2 sessions") && !s.contains("waiting)"), "{s}");
+    }
+
+    #[test]
+    fn visible_sessions_puts_done_last_and_keeps_the_order() {
+        let mut a = app(vec![]);
+        a.set_sessions(vec![
+            with_agent_session(session(1, "s-1", "idle"), "x1"),
+            with_agent_session(session(2, "s-2", "idle"), "x2"),
+            with_agent_session(session(3, "s-3", "busy"), "x3"),
+            with_agent_session(session(4, "s-4", WAITING), "x4"),
+            with_agent_session(session(5, "s-5", "idle"), "x5"),
+        ]);
+        assert_eq!(visible_pids(&a), vec![1, 2, 3, 4, 5]);
+        a.records.insert("x1".into(), done_record());
+        a.records.insert("x4".into(), done_record());
+        assert_eq!(visible_pids(&a), vec![2, 3, 5, 1, 4]);
+    }
+
+    #[test]
+    fn selection_follows_the_session_that_becomes_done() {
+        let dir = records_dir("done-selection");
+        let sessions = || {
+            vec![
+                with_agent_session(session(1, "s-1", "idle"), "x1"),
+                with_agent_session(session(2, "s-2", "idle"), "x2"),
+                with_agent_session(session(3, "s-3", "idle"), "x3"),
+            ]
+        };
+        let mut a = app(vec![]);
+        a.set_sessions(sessions());
+        update(&mut a, sessions(), Ok(vec![]), Some(&dir));
+        assert_eq!(selected_pid(&a), Some(1));
+        std::fs::write(dir.join("x1.json"), r#"{"done":true}"#).unwrap();
+        update(&mut a, sessions(), Ok(vec![]), Some(&dir));
+        assert_eq!(visible_pids(&a), vec![2, 3, 1]);
+        assert_eq!(selected_pid(&a), Some(1));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -50,6 +50,8 @@ pub struct Record {
     pub description: String,
     pub url: String,
     pub mrs: Vec<String>,
+    /// Set by `jw done`: the session finished its work.
+    pub done: bool,
 }
 
 impl Record {
@@ -77,6 +79,7 @@ impl Record {
                 .filter_map(Value::as_str)
                 .map(String::from)
                 .collect(),
+            done: v.get("done").and_then(Value::as_bool) == Some(true),
         })
     }
 
