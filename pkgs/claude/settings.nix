@@ -28,6 +28,18 @@
         ];
       }
     ];
+    PreToolUse = [
+      {
+        matcher = "Bash";
+        hooks = [
+          {
+            type = "command";
+            command = "claude-sudo-guard";
+            timeout = 10;
+          }
+        ];
+      }
+    ];
     # Covers AskUserQuestion too; `|| true` keeps a failing notification from ever blocking.
     # Only sessions with a record (AGENT_SESSION: `jw agent`, events) reach the inbox and notifications;
     # hand-started sessions get only the local dialog.
