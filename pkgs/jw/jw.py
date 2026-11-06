@@ -46,6 +46,10 @@ class Fail(Exception):
     pass
 
 
+class Unchecked(Fail):
+    """The stack's merge state couldn't be checked; retry later."""
+
+
 def jj(*args, cwd=None):
     """Run jj; its own messages and errors go straight to the terminal."""
     p = subprocess.run(["jj", "--no-pager", *args], cwd=cwd, stdout=subprocess.PIPE, text=True)
@@ -249,8 +253,11 @@ def untracked(d):
     return sorted(on_disk - set(jj("--ignore-working-copy", "file", "list", cwd=d).splitlines()))
 
 
-def confirm(question):
-    """Ask on the terminal; Fail unless the answer is y."""
+def confirm(question, yes=False):
+    """Ask on the terminal; Fail unless the answer is y. With yes, answer y without asking."""
+    if yes:
+        sys.stderr.write(f"{question}y (--yes)\n")
+        return
     sys.stderr.write(question)
     sys.stderr.flush()  # the question has no newline, and stderr is line-buffered
     try:
@@ -270,14 +277,34 @@ def rmdir_agents(home):
         pass
 
 
-def ask_lost(d):
-    """Snapshot the workspace at d and, if files jj does not track would be lost with it, ask whether to delete."""
-    jj("status", cwd=d)  # snapshot: its work stays in its change after the workspace is gone
+def collapse(paths, many=10):
+    """paths, with each top-level directory that holds more than many of them as one `dir/ (N files)`."""
+    count = {}
+    for p in paths:
+        top = p.split("/", 1)[0]
+        count[top] = count.get(top, 0) + 1
+    shown = {}
+    for p in paths:
+        top = p.split("/", 1)[0]
+        shown[f"{top}/ ({count[top]} files)" if count[top] > many and top != p else p] = None
+    return list(shown)
+
+
+def ask_lost(d, yes=False, snapshot=True, asked=()):
+    """Snapshot the workspace at d (unless snapshot is false) and, if files jj does not track would be lost with it
+    and are not all in asked, ask whether to delete. Return the files that would be lost."""
+    if snapshot:
+        jj("status", cwd=d)  # snapshot: its work stays in its change after the workspace is gone
     lost = untracked(d)
-    if lost:
-        more = f", ... (+{len(lost) - 5} more)" if len(lost) > 5 else ""
+    if set(lost) - set(asked):
+        if yes:
+            listed = ", ".join(collapse(lost))
+        else:
+            more = f", ... (+{len(lost) - 5} more)" if len(lost) > 5 else ""
+            listed = f"{', '.join(lost[:5])}{more}"
         confirm(f"jw: {len(lost)} file(s) in {d} are not tracked by jj (ignored or too large) "
-                f"and will be lost: {', '.join(lost[:5])}{more}. Delete? [y/N] ")
+                f"and will be lost: {listed}. Delete? [y/N] ", yes)
+    return lost
 
 
 def remove(home, name):
@@ -371,10 +398,11 @@ def live_claudes():
 
 
 def claude_sessions(d):
-    """{pid: (status, shpool session or None, statusUpdatedAt in ms or None)} of the live Claude sessions with their
-    working directory in d."""
+    """{pid: (status, shpool session or None, statusUpdatedAt in ms or None, sessionId)} of the live Claude sessions
+    with their working directory in d."""
     d = os.path.realpath(d)
-    return {pid: (s.get("status"), name, s.get("statusUpdatedAt")) for pid, s, cwd, name in live_claudes()
+    return {pid: (s.get("status"), name, s.get("statusUpdatedAt"), s.get("sessionId", "?"))
+            for pid, s, cwd, name in live_claudes()
             if cwd == d or cwd.startswith(d + "/")}
 
 
@@ -410,30 +438,29 @@ def shpool_status():
     return {r[0]: r[-1] for r in rows if r}
 
 
-def check_claudes(d, sessions):
-    """The shpool sessions of the Claude sessions in d if all are idle for an hour, alone in detached shpool sessions
-    and nothing else is using d. Fail says why not."""
+def check_claudes(d, sessions, idle):
+    """The shpool sessions of the Claude sessions in d if all are idle for idle seconds, alone in detached shpool
+    sessions and nothing else is using d. Fail says why not."""
     mine = descendants(sessions)
     if os.getpid() in mine:
         raise Fail("this session runs jw")
     if in_use(d, mine):
         raise Fail("in use by other processes")
-    for pid, (status, name, at) in sessions.items():
+    for pid, (status, name, at, _) in sessions.items():
         if status != "idle":
             raise Fail(f"Claude {pid} is {status}")
         if not name:
             raise Fail(f"Claude {pid} is not in a shpool session")
-        if not isinstance(at, (int, float)) or time.time() - at / 1000 < 3600:
-            raise Fail(f"Claude {pid} idle for less than an hour")
-    names = sorted({name for _, name, _ in sessions.values()})
+        if not isinstance(at, (int, float)) or time.time() - at / 1000 < idle:
+            raise Fail(f"Claude {pid} idle for less than {idle}s")
+    names = sorted({name for _, name, _, _ in sessions.values()})
     state = shpool_status()
     for n in names:
         if state.get(n) != "disconnected":
             raise Fail(f"shpool session {n} is {state.get(n, 'unknown')}")
-    for pid, (_, name, _) in sessions.items():  # the shpool daemon is the parent of the session's first process
-        with open(f"/proc/{stat_fields(pid)[1]}/comm") as f:
-            if f.read().strip() != "shpool":
-                raise Fail(f"shpool session {name} also runs other processes")
+    for pid, (_, name, _, _) in sessions.items():
+        if not session_top(pid):
+            raise Fail(f"shpool session {name} also runs other processes")
     return names
 
 
@@ -508,20 +535,81 @@ def cmd_reap(a):
         raise Fail()
 
 
-def removable(d):
-    """Whether the workspace at d holds nothing. Not --ignore-working-copy: snapshot first, so unsnapshotted edits
-    count. Merged: @ is in trunk (snapshotted edits make a new commit that is not); after a squash-merge `jj sync`
-    leaves an empty @."""
-    out = jj("log", "--no-graph", "-T", "change_id", "-r",
-             '@ & (::trunk() | (empty() & description(exact:"") & visible_heads()))', cwd=d)
-    return bool(out.strip())
+def stack_merged(d) -> "bool | None":
+    """Run `jj stack status` in d: True if the stack is merged, False if not, None if it couldn't check."""
+    try:
+        p = subprocess.run(["jj", "stack", "status"], cwd=d, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           text=True, timeout=300)
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
+        return None
+    lines = [l.strip() for l in p.stdout.splitlines() if l.strip()]
+    if p.returncode == 1:
+        return False
+    # an old `jj stack` (a `jj log` alias) exits 0 without the summary line
+    return True if p.returncode == 0 and lines and lines[-1] == "merged" else None
+
+
+def stop_sessions(d, idle) -> list:
+    """Stop d's Claude shpool sessions if all are idle for at least idle seconds and detached; return
+    [(shpool name, sessionId)]."""
+    sessions = claude_sessions(d)
+    if not sessions:
+        if in_use(d):
+            raise Fail("in use by other processes")
+        return []
+    kill_shpool(d, check_claudes(d, sessions, idle))
+    return [(name, sid) for _, name, _, sid in sessions.values()]
+
+
+def retire(home, name, *, yes, idle) -> list:
+    """Remove the workspace name of the repo at home if its stack is merged and nothing would be lost, stopping its
+    idle sessions; return the killed sessions. Fail if it can't (Unchecked if it couldn't check)."""
+    d = f"{home}.agents/{name}"
+    if in_use(d):  # cheap: before the stack check, which can fetch
+        sessions = claude_sessions(d)
+        if not sessions:
+            raise Fail("in use by other processes")
+        check_claudes(d, sessions, idle)
+    at = ("--ignore-working-copy", "log", "--no-graph", "-r", "@", "-T", "commit_id")
+    before = jj(*at, cwd=d)  # before the slow stack check, so a rewrite during it is caught below
+    merged = stack_merged(d)
+    if merged is False:
+        raise Fail("unmerged work")
+    if merged is None:
+        raise Unchecked("couldn't check the stack")
+    asked = [] if yes else ask_lost(d, snapshot=False)  # before the kill: listing needs no snapshot
+    killed = stop_sessions(d, idle)
+    try:
+        ask_lost(d, yes, asked=asked)  # snapshots, and may wait for the user
+        if jj(*at, cwd=d) != before:
+            raise Fail("changed while removing")
+        # visible work that no workspace's or pushed history includes; only logged, the stack is merged
+        try:
+            heads = jj("--ignore-working-copy", "log", "--no-graph",
+                       "-r", "heads(trunk().. ~ ::(working_copies() | remote_bookmarks()))",
+                       "-T", 'change_id.shortest() ++ " " ++ description.first_line() ++ "\\n"', cwd=d).splitlines()
+        except Fail:
+            heads = []
+        if heads:
+            more = f", ... (+{len(heads) - 10} more)" if len(heads) > 10 else ""
+            sys.stderr.write(f"jw: {name}: heads outside the workspaces: {'; '.join(heads[:10])}{more}\n")
+        remove(home, name)
+    except (Fail, OSError) as e:
+        e.killed = killed  # the caller reports the sessions that are gone
+        raise
+    return killed
+
+
+def killed_note(killed):
+    return f" (killed shpool session {', '.join(sorted({n for n, _ in killed}))})" if killed else ""
 
 
 def cmd_prune(a):
-    """Remove the workspaces that hold nothing: empty and undescribed (a visible head) or merged into trunk, not
+    """Remove the workspaces whose stack is merged into trunk and that hold nothing else (`jj stack status`), not
     modified within the last hour. Those in use go too if the only users are idle Claude sessions in detached shpool
     sessions, which are killed along with their background jobs. gitlab-context's (gl-*) are left to `gitlab-context gc`, which knows when they are
-    reused. Directories jj cannot read (failing to load) are deleted only after asking once for all of them."""
+    reused. Directories jj cannot read (failing to load) are deleted only after asking once for all of them; with
+    --yes they are kept, as they may hold unsnapshotted edits."""
     broken_ones = []
     for r in repos():
         home = f"{ROOT}/{r}"
@@ -530,10 +618,6 @@ def cmd_prune(a):
         except OSError:
             continue
         try:
-            jj("--ignore-working-copy", "git", "fetch", cwd=home)  # to see what has been merged
-        except Fail:
-            sys.stderr.write(f"jw: {r}: fetch failed, continuing\n")
-        try:
             known = jj("--ignore-working-copy", "workspace", "list", "-T", 'name ++ "\\n"', cwd=home).split()
         except Fail:
             continue  # jj already said why
@@ -541,38 +625,22 @@ def cmd_prune(a):
             d = f"{home}.agents/{name}"
             if GITLAB.match(name) or not os.path.isdir(f"{d}/.jj") or recent(d):
                 continue
-            busy = in_use(d)
-            sessions = claude_sessions(d) if busy else {}
-            if busy and not sessions:
-                continue  # something else is using it
+            if not in_use(d) and not loads(d):
+                broken_ones.append((r, home, name, known))
+                continue
             try:
-                if busy:
-                    try:
-                        killable = check_claudes(d, sessions)
-                    except (Fail, OSError):
-                        continue  # not ours to kill; no jj call for that
-                if not loads(d):
-                    if not busy:
-                        broken_ones.append((r, home, name, known))
-                    continue
-                if not removable(d):
-                    continue
-                if busy:
-                    sys.stderr.write(f"jw: {r}.agents/{name}: will kill shpool session(s) {', '.join(killable)}\n")
-                ask_lost(d)  # may wait for the user: check again afterwards
-                if busy:
-                    killable = check_claudes(d, claude_sessions(d))
-                    kill_shpool(d, killable)
-                    if not removable(d):
-                        raise Fail("changed while pruning")
-                remove(home, name)
-                sys.stderr.write(f"jw: removed {r}.agents/{name}"
-                                 + (f" (killed shpool session {', '.join(killable)})" if busy else "") + "\n")
+                killed = retire(home, name, yes=a.yes, idle=3600)
+                sys.stderr.write(f"jw: removed {r}.agents/{name}{killed_note(killed)}\n")
             except (Fail, OSError) as e:
-                sys.stderr.write(f"jw: kept {r}.agents/{name}" + (f": {e}" if str(e) else "") + "\n")
+                sys.stderr.write(f"jw: kept {r}.agents/{name}" + (f": {e}" if str(e) else "")
+                                 + killed_note(getattr(e, "killed", [])) + "\n")
     if shutil.which("gitlab-context"):
         subprocess.run(["gitlab-context", "gc", "--all"], stdout=subprocess.DEVNULL)  # it logs what it removes
     if not broken_ones:
+        return
+    if a.yes:  # they may hold unsnapshotted edits: only a person deletes them
+        for r, _, name, _ in broken_ones:
+            sys.stderr.write(f"jw: kept {r}.agents/{name}: jj can't load it; run jw prune interactively to delete\n")
         return
     sys.stderr.write("jw: broken workspaces (jj cannot read them, so it cannot tell what is in them):\n")
     for r, _, name, _ in broken_ones:
@@ -1128,7 +1196,8 @@ def parse_args():
     s.add_argument("url")
     s.add_argument("name", nargs="?", help=f"directory name under {ROOT} (default: from the url)")
     s.set_defaults(func=cmd_clone)
-    s = sub.add_parser("prune", help="remove empty, merged and broken workspaces in all repos, and the idle detached Claude shpool sessions in merged ones (killing a session kills its background jobs)")
+    s = sub.add_parser("prune", help="remove the workspaces whose stack is merged and broken ones in all repos, and the idle detached Claude shpool sessions in merged ones (killing a session kills its background jobs)")
+    s.add_argument("--yes", action="store_true", help="don't ask; answer yes to every question")
     s.set_defaults(func=cmd_prune)
     s = sub.add_parser("reap", help="stop the detached Claude shpool sessions idle or stuck on a permission prompt for 4 hours (their workspaces stay; resume with claude --resume)")
     s.set_defaults(func=cmd_reap)

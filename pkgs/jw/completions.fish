@@ -16,6 +16,7 @@ end
 
 complete -c jw -f
 complete -c jw -n __fish_use_subcommand -a 'new n cd c rm clone prune reap info ls pick agent a resume r attach at msg session done'
+complete -c jw -n '__fish_seen_subcommand_from prune' -l yes -d "don't ask; answer yes to every question"
 complete -c jw -n '__fish_seen_subcommand_from new n' -s r -l revision -r -d 'revision to start from (default: trunk())'
 complete -c jw -n '__fish_seen_subcommand_from new n' -a '(__jw_repos)'
 complete -c jw -n '__fish_seen_subcommand_from agent a' -s r -l revision -r -d 'revision to start from (default: trunk())'
