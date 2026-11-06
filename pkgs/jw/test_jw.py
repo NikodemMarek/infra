@@ -1976,7 +1976,7 @@ class CmdResume(unittest.TestCase):
     def resume(self, last=False, picked=None, repo=None):
         self.err = io.StringIO()
         self.picker = mock.Mock(side_effect=lambda rows, *a, **kw: rows[picked if picked is not None else 0])
-        a = mock.Mock(repo=repo, detach=False, last=last)
+        a = mock.Mock(repo=repo, detach=False, last=last, session=None)
         with contextlib.ExitStack() as st:
             st.enter_context(mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.cfg}))
             st.enter_context(mock.patch.object(jw, "locate", return_value=("x", self.home)))
@@ -2136,6 +2136,185 @@ class CmdResume(unittest.TestCase):
         with mock.patch.object(jw, "locate", side_effect=Fail("no")):
             self.resume(last=True, repo="repo")
         self.assertEqual(self.launch.call_args.args[0], self.home)
+
+
+class CmdResumeSession(unittest.TestCase):
+    """jw resume --session NAME: the transcript of the workspace in the record of NAME."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = tmp.name
+        self.root = os.path.join(self.tmp, "projects")
+        self.home = os.path.join(self.root, "repo")
+        os.makedirs(os.path.join(self.home, ".jj"))
+        self.cfg = os.path.join(self.tmp, "claude")
+        self.proj = os.path.join(self.cfg, "projects", jw.project_key(self.home))
+        os.makedirs(self.proj)
+        self.state = os.path.join(self.tmp, "state")
+        self.d = os.path.join(self.state, "agent-sessions")
+        os.makedirs(self.d)
+        self.live = []
+        self.shpool = {}
+        self.w = self.workspace("w1")
+
+    def workspace(self, name, create=True):
+        p = os.path.join(self.root, "repo.agents", name)
+        if create:
+            os.makedirs(os.path.join(p, ".jj"))
+        return p
+
+    def record(self, name, workspace):
+        with open(os.path.join(self.d, name + ".json"), "w") as f:
+            json.dump({"kind": "task", "workspace": workspace}, f)
+
+    def session(self, sid, mtime, text, cwd):
+        p = os.path.join(self.proj, sid + ".jsonl")
+        with open(p, "w") as f:
+            f.write(json.dumps({"type": "user", "cwd": cwd, "message": {"role": "user", "content": text}}) + "\n")
+        os.utime(p, (mtime, mtime))
+
+    def resume(self, name="s-1", origin="", repo=None):
+        self.err = io.StringIO()
+        a = mock.Mock(repo=repo, detach=False, last=False, session=name)
+        with contextlib.ExitStack() as st:
+            st.enter_context(mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.cfg, "XDG_STATE_HOME": self.state,
+                                                          "KNOWLEDGE_ORIGIN": origin}))
+            st.enter_context(mock.patch.object(jw, "ROOT", self.root))
+            st.enter_context(mock.patch.object(jw, "live_claudes", return_value=self.live))
+            st.enter_context(mock.patch.object(jw, "shpool_status", side_effect=lambda: self.shpool))
+            self.picker = st.enter_context(mock.patch.object(jw, "pick"))
+            self.add_ws = st.enter_context(mock.patch.object(jw, "add_workspace", return_value="/new/ws"))
+            self.fetch = st.enter_context(mock.patch.object(jw, "fetch"))
+            self.launch = st.enter_context(mock.patch.object(jw, "launch"))
+            st.enter_context(mock.patch("sys.stderr", self.err))
+            jw.cmd_resume(a)
+
+    def preferred(self):
+        c = self.launch.call_args
+        return c.kwargs["preferred"] if "preferred" in c.kwargs else c.args[5]
+
+    def resumed(self):
+        c = self.launch.call_args
+        return c.kwargs["resume"] if "resume" in c.kwargs else c.args[6]
+
+    def test_picks_transcript_of_the_workspace(self):
+        w2 = self.workspace("w2")
+        self.record("s-1", self.w)
+        self.session("other-newest", 4000, "other", w2)
+        self.session("mine-new", 3000, "mine new", self.w)
+        self.session("mine-old", 1000, "mine old", self.w)
+        self.resume()
+        self.picker.assert_not_called()
+        home, detach, argv, text = self.launch.call_args.args[:4]
+        self.assertEqual(home, self.home)
+        self.assertFalse(detach)
+        self.assertEqual(argv, ["claude", "--resume", "mine-new"])
+        self.assertEqual(text, "mine new")
+        self.assertEqual(self.preferred(), "s-1")
+        self.assertTrue(self.resumed())
+
+    def test_live_newest_transcript_fails_without_falling_through(self):
+        self.record("s-1", self.w)
+        self.session("mine-new", 3000, "new", self.w)
+        self.session("mine-old", 1000, "old", self.w)
+        self.live = [(1, {"sessionId": "mine-new"}, self.w, None)]
+        with self.assertRaisesRegex(Fail, "session s-1 is running"):
+            self.resume()
+        self.launch.assert_not_called()
+
+    def test_live_shpool_session_fails(self):
+        self.record("s-1", self.w)
+        self.session("a-1", 1000, "task", self.w)
+        for state in ("attached", "disconnected"):
+            with self.subTest(state=state):
+                self.shpool = {"s-1": state}
+                with self.assertRaisesRegex(Fail, "session s-1 is running"):
+                    self.resume()
+                self.launch.assert_not_called()
+
+    def test_missing_workspace_recreated(self):
+        gone = self.workspace("gone", create=False)
+        self.record("s-1", gone)
+        self.session("a-1", 1000, "task", gone)
+        self.resume()
+        self.assertEqual(self.launch.call_args.args[2], ["claude", "--resume", "a-1"])
+        self.assertEqual(self.preferred(), "s-1")
+        with mock.patch.object(jw, "add_workspace", return_value="/new/ws") as add_ws, \
+                mock.patch.object(jw, "fetch"), mock.patch("sys.stderr", self.err):
+            self.assertEqual(self.launch.call_args.args[4]("s-1"), "/new/ws")
+        self.assertEqual(add_ws.call_args.args[:3], (self.home, "trunk()", "s-1"))
+
+    def test_gone_workspace_outside_root_fails(self):
+        gone = os.path.join(self.tmp, "elsewhere", "x")
+        self.record("s-1", gone)
+        self.session("a-1", 1000, "task", gone)
+        with self.assertRaisesRegex(Fail, "no repo for session s-1"):
+            self.resume()
+        self.launch.assert_not_called()
+
+    def test_repo_argument_fails_before_reading_record(self):
+        with mock.patch.object(jw, "read_record") as rr, \
+                self.assertRaisesRegex(Fail, "--session takes no repo"):
+            self.resume(repo="repo")
+        rr.assert_not_called()
+        self.launch.assert_not_called()
+
+    def test_existing_workspace_not_recreated(self):
+        self.record("s-1", self.w)
+        self.session("a-1", 1000, "task", self.w)
+        self.resume()
+        with mock.patch.object(jw, "add_workspace") as add_ws:
+            self.assertEqual(self.launch.call_args.args[4]("s-1"), self.w)
+        add_ws.assert_not_called()
+
+    def test_no_record_fails(self):
+        self.session("a-1", 1000, "task", self.w)
+        with self.assertRaisesRegex(Fail, "no session record s-1"):
+            self.resume()
+        self.launch.assert_not_called()
+
+    def test_no_matching_transcript_fails(self):
+        self.record("s-1", self.w)
+        self.session("other", 1000, "other", self.workspace("w2"))
+        with self.assertRaisesRegex(Fail, "no sessions to resume for s-1"):
+            self.resume()
+        self.launch.assert_not_called()
+
+    def test_invalid_name_fails(self):
+        with self.assertRaisesRegex(Fail, "invalid session name"):
+            self.resume("../x")
+        self.launch.assert_not_called()
+
+    def test_event_session_fails(self):
+        self.record("s-1", self.w)
+        self.session("a-1", 1000, "task", self.w)
+        with self.assertRaises(Fail):
+            self.resume(origin="event:comment")
+        self.launch.assert_not_called()
+
+    def parse(self, *args):
+        err = io.StringIO()
+        with mock.patch.object(sys, "argv", ["jw", "resume", *args]), contextlib.redirect_stderr(err):
+            return jw.parse_args()
+
+    def test_cli_session_option(self):
+        a = self.parse("-d", "--session", "s-1")
+        self.assertIs(a.func, jw.cmd_resume)
+        self.assertEqual(a.session, "s-1")
+        self.assertTrue(a.detach)
+
+    def test_usage_error_with_last(self):
+        for flag in ("-l", "--last"):
+            with self.subTest(flag=flag):
+                with self.assertRaises(SystemExit) as cm:
+                    self.parse("--session", "s-1", flag)
+                self.assertEqual(cm.exception.code, 2)
+
+    def test_last_with_repo_still_parses(self):
+        a = self.parse("-l", "repo")
+        self.assertTrue(a.last)
+        self.assertEqual(a.repo, "repo")
 
 
 class Launch(unittest.TestCase):
