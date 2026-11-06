@@ -27,6 +27,7 @@
     "Bash(jw agent -d:*)"
     "Bash(jw msg:*)"
     "Bash(jw session:*)"
+    "Bash(jw done:*)"
 
     # Images attached to tasks by the capture tool.
     "Read(//run/user/*/agent-task/**)"
