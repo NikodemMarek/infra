@@ -33,6 +33,12 @@ KNOWLEDGE = "knowledge"  # the nix package pins it
 SESSION_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")  # fullmatch
 GITLAB = re.compile(r"^gl-[a-z]+-[0-9]+(-[0-9]+)?$")  # gitlab-context's workspaces: it reuses and cleans them
 IDLE_LIMIT = 4 * 3600  # seconds a detached Claude session must have been idle to be reaped
+FINISHED_IDLE = 600  # seconds a finished session must have been idle and detached to be stopped
+REAP_DEADLINE = 600  # seconds the reaper works through the session records, so the run ends within its timeout
+FINISH_MARKS = ("done", "notified", "reaped")  # record keys of a finished session; a new session start drops them
+WRAP_UP = ("The merge requests of this session are merged. Finish what is left of this work "
+           "(e.g. record the outcome), then run `jw done`. The session is stopped once it is idle "
+           "and nobody is attached.")
 MSG_WAIT = 10  # seconds `jw msg` waits for a session to register
 MSG_MAX = 8000  # characters of a message delivered
 RECORD_MAX = 65536  # bytes of a session record that are read
@@ -517,22 +523,139 @@ def idle_sessions(claudes, state, now, proc="/proc"):
     return found
 
 
-def cmd_reap(a):
-    """Stop the Claude shpool sessions that are idle for IDLE_LIMIT and detached; their workspaces stay."""
-    failed = False
-    for name, cwd, sid in idle_sessions(live_claudes(), shpool_status(), time.time()):
+def agent_workspace(ws):
+    """(home, name, path) of the agent workspace a record points to, or None."""
+    if not isinstance(ws, str) or "\0" in ws or not os.path.isabs(ws):
+        return None
+    parent, name = os.path.split(os.path.realpath(ws))
+    agents = os.path.basename(parent)
+    if os.path.dirname(parent) != os.path.realpath(ROOT) or not re.search(r".\.agents$", agents):
+        return None
+    repo = agents.removesuffix(".agents")
+    if (not os.path.isdir(f"{os.path.dirname(parent)}/{repo}/.jj") or not SESSION_NAME.fullmatch(name)
+            or not os.path.isdir(f"{parent}/{name}/.jj")):
+        return None
+    return f"{ROOT}/{repo}", name, f"{ROOT}/{agents}/{name}"
+
+
+def load_records(d):
+    """[(name, record)] of the session records in d, sorted by name."""
+    try:
+        files = sorted(os.listdir(d))
+    except OSError:
+        return []
+    found = []
+    for f in files:
+        name = f.removesuffix(".json")
+        record = read_record(d, name) if name != f else None
+        if record is not None:
+            found.append((name, record))
+    return found
+
+
+def report_stopped(killed, path, seen):
+    for name, sid in killed:
+        seen.add(name)
+        print(f"stopped {name} in {path}: AGENT_SESSION={name} claude --resume {sid}")
+
+
+def mark_record(name, **fields):
+    try:
+        update_record(records_dir(), name, fields)
+    except (OSError, ValueError, Fail) as e:
+        sys.stderr.write(f"jw: {name}: cannot write the session record: {e}\n")
+
+
+def reap_record(name, r, now, seen):
+    """Stop and remove the workspace of the session record r if its work is finished; see cmd_reap."""
+    ws = agent_workspace(r.get("workspace"))
+    done = r.get("done") is True
+    if "reaped" in r or ws is None or not (done or isinstance(r.get("mrs"), list) and r["mrs"]):
+        return
+    home, ws_name, path = ws
+    gitlab = bool(GITLAB.match(ws_name))
+    removed = f"removed {os.path.basename(home)}.agents/{ws_name}"
+    if done:
         try:
-            rc = subprocess.run([SHPOOL, "--no-daemonize", "kill", name], stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL).returncode
-        except OSError:
-            rc = 1
-        if rc == 0:
-            print(f"stopped {name} in {cwd}: AGENT_SESSION={name} claude --resume {sid}")
-        else:
-            sys.stderr.write(f"jw: shpool kill {name} failed\n")
-            failed = True
-    if failed:
-        raise Fail()
+            report_stopped(stop_sessions(path, FINISHED_IDLE), path, seen)
+        except (Fail, OSError):
+            return  # not idle and detached yet
+        if not gitlab:
+            try:
+                report_stopped(retire(home, ws_name, yes=True, idle=FINISHED_IDLE), path, seen)
+                print(removed)
+            except (Fail, OSError) as e:
+                report_stopped(getattr(e, "killed", []), path, seen)
+                print(f"kept {path}" + (f": {e}" if str(e) else ""))
+        mark_record(name, reaped=now)
+        return
+    if gitlab:
+        return
+    if "notified" not in r and claude_sessions(path):
+        merged = stack_merged(path)
+        if merged is None:
+            sys.stderr.write(f"jw: {name}: couldn't check the stack\n")
+        elif merged:
+            try:
+                deliver(name, WRAP_UP, "jw-reap", wait=0)
+            except Fail as e:
+                sys.stderr.write(f"jw: {name}: {e}\n")
+            mark_record(name, notified=now)
+            print(f"notified {name}")
+        return
+    try:
+        killed = retire(home, ws_name, yes=True, idle=FINISHED_IDLE)
+    except (Fail, OSError) as e:
+        report_stopped(getattr(e, "killed", []), path, seen)
+        if isinstance(e, (Unchecked, OSError)):  # other Fails: still waiting or not ready
+            sys.stderr.write(f"jw: {name}: {e}\n")
+        return
+    report_stopped(killed, path, seen)
+    print(removed)
+    mark_record(name, reaped=now)
+
+
+def cmd_reap(a):
+    """Stop the sessions whose work is finished (`jw done`, or their MRs are merged) once they are idle for
+    FINISHED_IDLE and detached, and remove their merged workspaces; a session whose MRs got merged is first asked to
+    wrap up. Then stop the detached Claude shpool sessions idle for IDLE_LIMIT, whose workspaces stay."""
+    with open(f"{runtime_dir()}/jw-reap.lock", "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            sys.stderr.write("jw: reap already running\n")
+            return
+        missing = [t for t in ("jj", "git", "glab", "gh") if not shutil.which(t)]
+        if missing:
+            sys.stderr.write(f"jw: missing on PATH: {' '.join(missing)}\n")
+        seen = set()
+        now = time.time()
+        records = load_records(records_dir())
+        deadline = time.monotonic() + REAP_DEADLINE
+        for i, (name, r) in enumerate(records):
+            if time.monotonic() > deadline:
+                sys.stderr.write(f"jw: reap: out of time, {len(records) - i} record(s) left for the next run\n")
+                break
+            try:
+                reap_record(name, r, now, seen)
+            except Exception as e:  # one bad record must not stop the others or the idle pass
+                sys.stderr.write(f"jw: {name}: {type(e).__name__}: {e}\n")
+        failed = False
+        for name, cwd, sid in idle_sessions(live_claudes(), shpool_status(), time.time()):
+            if name in seen:
+                continue
+            try:
+                rc = subprocess.run([SHPOOL, "--no-daemonize", "kill", name], stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL).returncode
+            except OSError:
+                rc = 1
+            if rc == 0:
+                report_stopped([(name, sid)], cwd, seen)
+            else:
+                sys.stderr.write(f"jw: shpool kill {name} failed\n")
+                failed = True
+        if failed:
+            raise Fail()
 
 
 def stack_merged(d) -> "bool | None":
@@ -743,7 +866,7 @@ def launch(home, detach, argv, text, make_dir, preferred=None, resume=False):
         env = agent_env(os.environ) | {"AGENT_SESSION": name}
         fields = {"workspace": d} if resume and read_record(records_dir(), name) is not None else task_record(text, d)
         try:  # the inbox shows the session from its record; a failure must not stop the session
-            update_record(records_dir(), name, fields)
+            update_record(records_dir(), name, fields, drop=FINISH_MARKS)  # a (re)started session is not finished
         except (Fail, OSError, ValueError) as e:
             sys.stderr.write(f"jw: cannot write the session record: {e}\n")
         # started from a service (task.new) there is no terminal env, and claude falls back to no colors
@@ -1070,8 +1193,9 @@ def prune_records(d, now):
     return gone
 
 
-def update_record(d, name, fields, mrs=()):
-    """Merge fields (the ones that are not None) and the MR urls into the record of session name and return it."""
+def update_record(d, name, fields, mrs=(), drop=()):
+    """Merge fields (the ones that are not None) and the MR urls into the record of session name, remove the keys in
+    drop and return it."""
     if not SESSION_NAME.fullmatch(name):
         raise Fail(f"invalid session name: {name!r}")
     os.makedirs(d, mode=0o700, exist_ok=True)
@@ -1090,6 +1214,8 @@ def update_record(d, name, fields, mrs=()):
         existed = os.path.lexists(path)
         record = read_record(d, name) or {}
         record.update({k: v for k, v in fields.items() if v is not None})
+        for k in drop:
+            record.pop(k, None)
         if mrs:
             urls = record["mrs"] if isinstance(record.get("mrs"), list) else []
             urls += [u for u in dict.fromkeys(mrs) if u not in urls]
@@ -1127,7 +1253,7 @@ def cmd_session(a):
             raise Fail(f"not an https url: {url}")
     fields = {"kind": a.kind, "title": a.title, "description": a.description, "url": a.url, "workspace": a.workspace}
     try:
-        update_record(d, name, fields, mrs)
+        update_record(d, name, fields, mrs, drop=FINISH_MARKS if a.workspace else ())
     except (OSError, ValueError) as e:  # ValueError: text that is not valid UTF-8
         raise Fail(f"cannot write the session record: {e}")
 
@@ -1199,7 +1325,7 @@ def parse_args():
     s = sub.add_parser("prune", help="remove the workspaces whose stack is merged and broken ones in all repos, and the idle detached Claude shpool sessions in merged ones (killing a session kills its background jobs)")
     s.add_argument("--yes", action="store_true", help="don't ask; answer yes to every question")
     s.set_defaults(func=cmd_prune)
-    s = sub.add_parser("reap", help="stop the detached Claude shpool sessions idle or stuck on a permission prompt for 4 hours (their workspaces stay; resume with claude --resume)")
+    s = sub.add_parser("reap", help="stop the finished sessions (jw done, or merged MRs) once idle and detached, and remove their merged workspaces; stop the detached Claude shpool sessions idle or stuck on a permission prompt for 4 hours (their workspaces stay; resume with claude --resume)")
     s.set_defaults(func=cmd_reap)
     s = sub.add_parser("info", help="print the jj workspace and stack of the current directory as JSON")
     s.set_defaults(func=cmd_info)

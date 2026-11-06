@@ -19,7 +19,7 @@ host/
     global/            always on: networking, nix, openssh, sops
     optional/          opt-in features: k3s, tailscale, docker, libvirt, maintenance, ...
     disko/             disk layouts, parametrised by device (and swap size)
-modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-notifier.nix, flux-sops-age.nix, agents.nix (the NATS event handler user services, the knowledge curator timer, the `jw-reap` timer that stops idle agent sessions, and the shpool user service)
+modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-notifier.nix, flux-sops-age.nix, agents.nix (the NATS event handler user services, the knowledge curator timer, the `jw-reap` timer that stops idle and finished agent sessions and removes the merged workspaces of finished ones, and the shpool user service)
 pkgs/                  wrapped packages (package + bundled config) and own tools (pkgs/agent-skills/skills: Agent Skills, shared by claude and agent-skills)
 overlays/              exposes pkgs/ (the wrapped packages, shadowing the nixpkgs ones, and the tools), flake inputs as packages, deploy-rs
 clusters/dijkstra/     Kubernetes manifests, reconciled by Flux

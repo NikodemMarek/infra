@@ -123,6 +123,15 @@ class CmdAgent(unittest.TestCase):
         self.assertEqual(r["workspace"], self.work)
         self.attach_m.assert_called_once_with("s-1")
 
+    def test_initial_record_resets_finished(self):
+        jw.update_record(os.path.join(self.state, "agent-sessions"), "s-1",
+                         {"kind": "old", "done": True, "notified": 1, "reaped": 2})
+        self.agent()
+        r = json.loads(self.at_attach)
+        for k in ("done", "notified", "reaped"):
+            self.assertNotIn(k, r)
+        self.assertEqual(r["workspace"], self.work)
+
     def test_record_failure_warns_and_starts(self):
         for exc in (Fail("boom"), OSError("disk")):
             with self.subTest(exc=exc):
@@ -398,9 +407,13 @@ class CmdReap(unittest.TestCase):
             mock.patch("subprocess.run", **(run or {"return_value": mock.Mock(returncode=0)})),
             mock.patch("sys.stdout", out),
             mock.patch("sys.stderr", err),
+            mock.patch.object(jw, "load_records", return_value=[]),
+            mock.patch.object(jw.shutil, "which", return_value="/bin/x"),
         ]
         with contextlib.ExitStack() as st:
             m = [st.enter_context(p) for p in patches]
+            tmp = st.enter_context(tempfile.TemporaryDirectory(dir="/tmp"))
+            st.enter_context(mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": tmp, "XDG_STATE_HOME": tmp}))
             try:
                 self.result = jw.cmd_reap(mock.Mock())
                 self.exc = None
@@ -447,6 +460,650 @@ class CmdReap(unittest.TestCase):
         self.run_m.assert_called()
         for c in self.run_m.call_args_list:
             self.assertNotIn("jj", c.args[0])
+
+
+class AgentWorkspace(unittest.TestCase):
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp(dir="/tmp"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.root = os.path.join(self.tmp, "root")
+        os.mkdir(self.root)
+        p = mock.patch.object(jw, "ROOT", self.root)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def make(self, repo="r", name="w", repo_jj=True, ws_jj=True):
+        os.makedirs(f"{self.root}/{repo}", exist_ok=True)
+        if repo_jj:
+            os.makedirs(f"{self.root}/{repo}/.jj", exist_ok=True)
+        os.makedirs(f"{self.root}/{repo}.agents/{name}", exist_ok=True)
+        if ws_jj:
+            os.makedirs(f"{self.root}/{repo}.agents/{name}/.jj", exist_ok=True)
+        return f"{self.root}/{repo}.agents/{name}"
+
+    def expect(self, repo="r", name="w"):
+        return (f"{self.root}/{repo}", name, f"{self.root}/{repo}.agents/{name}")
+
+    def test_valid(self):
+        ws = self.make()
+        self.assertEqual(jw.agent_workspace(ws), self.expect())
+
+    def test_valid_other_names(self):
+        ws = self.make("my-repo", "s-1.x_y")
+        self.assertEqual(jw.agent_workspace(ws), self.expect("my-repo", "s-1.x_y"))
+
+    def test_missing(self):
+        self.make()
+        self.assertIsNone(jw.agent_workspace(f"{self.root}/r.agents/nope"))
+
+    def test_relative(self):
+        self.make()
+        old = os.getcwd()
+        self.addCleanup(os.chdir, old)
+        os.chdir(self.root)
+        self.assertIsNone(jw.agent_workspace("r.agents/w"))
+
+    def test_not_under_agents(self):
+        self.make()
+        os.makedirs(f"{self.root}/r/sub/.jj")
+        self.assertIsNone(jw.agent_workspace(f"{self.root}/r/sub"))
+        self.assertIsNone(jw.agent_workspace(f"{self.root}/r"))
+
+    def test_agents_not_directly_in_root(self):
+        os.makedirs(f"{self.root}/x/r/.jj")
+        os.makedirs(f"{self.root}/x/r.agents/w/.jj")
+        self.assertIsNone(jw.agent_workspace(f"{self.root}/x/r.agents/w"))
+
+    def test_outside_root(self):
+        other = f"{self.tmp}/other"
+        os.makedirs(f"{other}/r/.jj")
+        os.makedirs(f"{other}/r.agents/w/.jj")
+        self.assertIsNone(jw.agent_workspace(f"{other}/r.agents/w"))
+
+    def test_nested_deeper(self):
+        ws = self.make()
+        os.makedirs(f"{ws}/sub/.jj")
+        self.assertIsNone(jw.agent_workspace(f"{ws}/sub"))
+
+    def test_repo_without_jj(self):
+        ws = self.make(repo_jj=False)
+        self.assertIsNone(jw.agent_workspace(ws))
+
+    def test_bad_names(self):
+        for name in (".hidden", "-x", "a b", "a:b"):
+            ws = self.make(name=name)
+            self.assertIsNone(jw.agent_workspace(ws), name)
+
+    def test_workspace_without_jj(self):
+        ws = self.make(ws_jj=False)
+        self.assertIsNone(jw.agent_workspace(ws))
+
+    def test_jj_is_a_file(self):
+        ws = self.make(ws_jj=False)
+        open(f"{ws}/.jj", "w").close()
+        self.assertIsNone(jw.agent_workspace(ws))
+
+    def test_not_a_str(self):
+        self.make()
+        for v in (None, 5, b"x", ["a"]):
+            self.assertIsNone(jw.agent_workspace(v), v)
+
+    def test_symlinked_root(self):
+        ws = self.make()
+        link = f"{self.tmp}/link"
+        os.symlink(self.root, link)
+        expect = (f"{link}/r", "w", f"{link}/r.agents/w")  # built from ROOT, like layout/remove
+        with mock.patch.object(jw, "ROOT", link):
+            self.assertEqual(jw.agent_workspace(f"{link}/r.agents/w"), expect)
+            self.assertEqual(jw.agent_workspace(ws), expect)
+
+    def test_nul_in_path(self):
+        self.make()
+        self.assertIsNone(jw.agent_workspace(f"{self.root}/r.agents/w\0x"))
+        self.assertIsNone(jw.agent_workspace("\0"))
+
+    def test_symlinked_workspace_leaving_root(self):
+        self.make()
+        other = f"{self.tmp}/other/w"
+        os.makedirs(f"{other}/.jj")
+        os.symlink(other, f"{self.root}/r.agents/l")
+        self.assertIsNone(jw.agent_workspace(f"{self.root}/r.agents/l"))
+
+
+class LoadRecords(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp(dir="/tmp")
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def write(self, name, content):
+        with open(os.path.join(self.d, name), "w") as f:
+            f.write(content)
+
+    def test_missing_dir(self):
+        self.assertEqual(jw.load_records(self.d + "/nope"), [])
+
+    def test_filters_and_sorts(self):
+        self.write("b.json", '{"x": 2}')
+        self.write("a.json", '{"x": 1}')
+        self.write("list.json", "[1]")
+        self.write("str.json", '"s"')
+        self.write("bad.json", "{nope")
+        self.write("bad name.json", "{}")
+        self.write(".hidden.json", "{}")
+        self.write("-dash.json", "{}")
+        self.write("c.txt", "{}")
+        self.write("d", "{}")
+        self.assertEqual(jw.load_records(self.d), [("a", {"x": 1}), ("b", {"x": 2})])
+
+    def test_empty_dir(self):
+        self.assertEqual(jw.load_records(self.d), [])
+
+    def test_name_with_dots(self):
+        self.write("s-1.x.json", "{}")
+        self.assertEqual(jw.load_records(self.d), [("s-1.x", {})])
+
+
+class CmdReapRecords(unittest.TestCase):
+    """cmd_reap's record loop with every helper mocked, a temp ROOT, XDG_STATE_HOME and XDG_RUNTIME_DIR."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp(dir="/tmp"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.root = f"{self.tmp}/root"
+        self.rt = f"{self.tmp}/run"
+        self.state = f"{self.tmp}/state"
+        for d in (self.root, self.rt, self.state):
+            os.mkdir(d)
+        os.makedirs(f"{self.root}/r/.jj")
+        self.home = f"{self.root}/r"
+        self.calls = []
+        self.out, self.err = io.StringIO(), io.StringIO()
+        self.sessions = {}
+        self.missing = None
+        self.idle = []
+        self.live = ["live"]
+        self.runs = []
+        self.m = {}
+
+        def rec(name, ret=None, exc=None):
+            def f(*a, **k):
+                self.calls.append(name)
+                if exc is not None:
+                    raise exc
+                return ret
+            return f
+
+        self.rec = rec
+        self.set("stop_sessions", [])
+        self.set("retire", [])
+        self.set("stack_merged", True)
+        self.set("deliver", "label")
+
+        self.cs_args = []
+
+        def claude_sessions(d):
+            self.calls.append("claude_sessions")
+            self.cs_args.append(d)
+            return self.sessions
+
+        def live():
+            self.calls.append("live_claudes")
+            return self.live
+
+        def idle(claudes, state, now, *a, **k):
+            self.calls.append("idle_sessions")
+            self.idle_args = (claudes, state)
+            return self.idle
+
+        def run(cmd, *a, **k):
+            self.calls.append("subprocess")
+            self.runs.append(cmd)
+            return mock.Mock(returncode=0)
+
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        for p in (
+            mock.patch.object(jw, "ROOT", self.root),
+            mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.state, "XDG_RUNTIME_DIR": self.rt}),
+            mock.patch.object(jw, "claude_sessions", claude_sessions),
+            mock.patch.object(jw, "live_claudes", live),
+            mock.patch.object(jw, "shpool_status", rec("shpool_status", {"s": "x"})),
+            mock.patch.object(jw, "idle_sessions", idle),
+            mock.patch.object(jw.shutil, "which", lambda t: None if t == self.missing else "/bin/" + t),
+            mock.patch("subprocess.run", run),
+            mock.patch("sys.stdout", self.out),
+            mock.patch("sys.stderr", self.err),
+        ):
+            stack.enter_context(p)
+
+    def set(self, name, ret=None, exc=None):
+        p = mock.Mock(side_effect=self.rec(name, ret, exc))
+        self.m[name] = p
+        patcher = mock.patch.object(jw, name, p)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def ws(self, name="w", jj=True):
+        d = f"{self.root}/r.agents/{name}"
+        os.makedirs(f"{d}/.jj" if jj else d, exist_ok=True)
+        return d
+
+    def record(self, name="w", ws=True, **fields):
+        if ws is True:
+            ws = self.ws(name)
+        if ws:
+            fields["workspace"] = ws
+        jw.update_record(f"{self.state}/agent-sessions", name, fields)
+
+    def read(self, name="w"):
+        return jw.read_record(f"{self.state}/agent-sessions", name)
+
+    def reap(self):
+        try:
+            jw.cmd_reap(mock.Mock())
+            self.exc = None
+        except BaseException as e:
+            self.exc = e
+        return self.out.getvalue(), self.err.getvalue()
+
+    def path(self, name="w"):
+        return f"{self.root}/r.agents/{name}"
+
+    def helpers(self):
+        return [c for c in self.calls if c not in ("live_claudes", "shpool_status", "idle_sessions")]
+
+    def live_session(self):
+        self.sessions = {1: ("idle", "sh", 1, "sid")}
+
+    # skips
+
+    def test_no_records(self):
+        self.reap()
+        self.assertIsNone(self.exc)
+        self.assertEqual(self.helpers(), [])
+
+    def test_reaped_skipped_without_calls(self):
+        self.record(done=True, reaped=True)
+        self.record("m", mrs=["https://x/1"], reaped=True)
+        self.reap()
+        self.assertIsNone(self.exc)
+        self.assertEqual(self.helpers(), [])
+
+    def test_bad_workspace_skipped(self):
+        self.record("a", ws=f"{self.root}/nowhere", done=True)
+        self.record("b", ws=False, done=True)
+        self.record("c", ws=self.ws("c", jj=False), done=True)
+        self.record("d", ws="rel/path", mrs=["https://x/1"])
+        self.reap()
+        self.assertIsNone(self.exc)
+        self.assertEqual(self.helpers(), [])
+        for n in "abcd":
+            self.assertNotIn("reaped", self.read(n))
+
+    def test_neither_done_nor_mrs_skipped(self):
+        self.record("a")
+        self.record("b", done=False)
+        self.record("c", mrs=[])
+        self.record("d", done="yes")
+        self.reap()
+        self.assertEqual(self.helpers(), [])
+
+    # done path
+
+    def test_done_stops_then_retires_and_marks(self):
+        self.set("stop_sessions", [("sh", "sid1")])
+        self.record(done=True)
+        out, err = self.reap()
+        self.assertIsNone(self.exc)
+        self.assertEqual(self.helpers(), ["stop_sessions", "retire"])
+        self.m["stop_sessions"].assert_called_once_with(self.path(), 600)
+        self.m["retire"].assert_called_once_with(self.home, "w", yes=True, idle=600)
+        self.assertTrue(self.read()["reaped"])
+        self.assertIn(f"stopped sh in {self.path()}: AGENT_SESSION=sh claude --resume sid1\n", out)
+        self.assertIn("removed r.agents/w", out)
+
+    def test_done_stop_fail_no_retire_no_mark(self):
+        self.set("stop_sessions", exc=Fail("busy"))
+        self.record(done=True)
+        self.reap()
+        self.assertEqual(self.helpers(), ["stop_sessions"])
+        self.assertNotIn("reaped", self.read())
+
+    def test_done_retire_fail_kept_and_marked(self):
+        self.set("retire", exc=Fail("unmerged work"))
+        self.record(done=True)
+        out, err = self.reap()
+        self.assertIn(f"kept {self.path()}: unmerged work", out)
+        self.assertNotIn("removed", out)
+        self.assertTrue(self.read()["reaped"])
+
+    def test_done_retire_unchecked_kept_and_marked(self):
+        self.set("retire", exc=jw.Unchecked("couldn't check the stack"))
+        self.record(done=True)
+        out, err = self.reap()
+        self.assertIn(f"kept {self.path()}: couldn't check the stack", out)
+        self.assertNotIn("removed", out)
+        self.assertTrue(self.read()["reaped"])
+
+    def test_done_gitlab_workspace_not_retired(self):
+        self.record("gl-ab-12", done=True)
+        self.reap()
+        self.assertNotIn("retire", self.calls)
+        self.m["stop_sessions"].assert_called_once_with(self.path("gl-ab-12"), 600)
+        self.assertTrue(self.read("gl-ab-12")["reaped"])
+
+    def killed_exc(self, cls, *args):
+        e = cls(*args)
+        e.killed = [("s", "sid")]
+        return e
+
+    def test_done_failing_retire_reports_killed(self):
+        for cls in (Fail, jw.Unchecked, OSError):
+            with self.subTest(cls=cls):
+                self.out.seek(0)
+                self.out.truncate()
+                self.set("retire", exc=self.killed_exc(cls, "nope"))
+                self.record(done=True)
+                self.idle = [("s", "/p", "a")]
+                self.runs.clear()
+                out, err = self.reap()
+                self.assertIn(f"stopped s in {self.path()}: AGENT_SESSION=s claude --resume sid\n", out)
+                self.assertEqual(self.kills(), [])
+                self.assertNotIn("stopped s in /p", out)
+                jw.update_record(f"{self.state}/agent-sessions", "w", {}, drop=["reaped"])
+
+    def test_mrs_failing_retire_reports_killed(self):
+        for cls in (Fail, jw.Unchecked, OSError):
+            with self.subTest(cls=cls):
+                self.out.seek(0)
+                self.out.truncate()
+                self.set("retire", exc=self.killed_exc(cls, "nope"))
+                self.record(mrs=["https://x/1"])
+                self.idle = [("s", "/p", "a")]
+                self.runs.clear()
+                out, err = self.reap()
+                self.assertIn(f"stopped s in {self.path()}: AGENT_SESSION=s claude --resume sid\n", out)
+                self.assertEqual(self.kills(), [])
+                self.assertNotIn("stopped s in /p", out)
+                self.assertNotIn("reaped", self.read())
+
+    def test_mrs_retire_kills_reported_and_excluded(self):
+        self.set("retire", [("s1", "sid1")])
+        self.record(mrs=["https://x/1"])
+        self.idle = [("s1", "/p", "a"), ("s2", "/q", "b")]
+        out, err = self.reap()
+        self.assertIn(f"stopped s1 in {self.path()}: AGENT_SESSION=s1 claude --resume sid1\n", out)
+        self.assertEqual(self.kills(), ["s2"])
+        self.assertNotIn("stopped s1 in /p", out)
+
+    # mrs path
+
+    def test_mrs_live_merged_notifies(self):
+        self.live_session()
+        self.record(mrs=["https://x/1"])
+        out, err = self.reap()
+        self.assertIsNone(self.exc)
+        self.m["deliver"].assert_called_once_with("w", jw.WRAP_UP, "jw-reap", wait=0)
+        self.assertTrue(self.read()["notified"])
+        self.assertNotIn("reaped", self.read())
+        self.assertIn("notified w\n", out)
+        for c in ("retire", "stop_sessions"):
+            self.assertNotIn(c, self.calls)
+
+    def test_mrs_live_merged_deliver_fail_still_notified(self):
+        self.live_session()
+        self.set("deliver", exc=Fail("no running session"))
+        self.record(mrs=["https://x/1"])
+        self.reap()
+        self.assertTrue(self.read()["notified"])
+        self.assertNotIn("retire", self.calls)
+
+    def test_mrs_live_unmerged_nothing(self):
+        self.live_session()
+        self.set("stack_merged", False)
+        self.record(mrs=["https://x/1"])
+        self.reap()
+        for c in ("deliver", "retire", "stop_sessions"):
+            self.assertNotIn(c, self.calls)
+        self.assertNotIn("notified", self.read())
+        self.assertNotIn("reaped", self.read())
+
+    def test_mrs_live_unknown_stderr_nothing(self):
+        self.live_session()
+        self.set("stack_merged", None)
+        self.record(mrs=["https://x/1"])
+        out, err = self.reap()
+        self.assertNotEqual(err, "")
+        for c in ("deliver", "retire", "stop_sessions"):
+            self.assertNotIn(c, self.calls)
+        self.assertNotIn("notified", self.read())
+
+    def test_mrs_dead_retires_and_marks(self):
+        self.record(mrs=["https://x/1"])
+        out, err = self.reap()
+        self.m["retire"].assert_called_once_with(self.home, "w", yes=True, idle=600)
+        self.assertNotIn("deliver", self.calls)
+        self.assertTrue(self.read()["reaped"])
+        self.assertIn("removed r.agents/w", out)
+
+    def test_mrs_notified_retires_even_if_live(self):
+        self.live_session()
+        self.record(mrs=["https://x/1"], notified=True)
+        self.reap()
+        self.m["retire"].assert_called_once_with(self.home, "w", yes=True, idle=600)
+        self.assertNotIn("deliver", self.calls)
+        self.assertTrue(self.read()["reaped"])
+
+    def test_mrs_retire_unchecked_stderr_no_mark(self):
+        self.set("retire", exc=jw.Unchecked("couldn't check the stack"))
+        self.record(mrs=["https://x/1"])
+        out, err = self.reap()
+        self.assertNotEqual(err, "")
+        self.assertNotIn("reaped", self.read())
+
+    def test_mrs_retire_oserror_stderr_no_mark(self):
+        self.set("retire", exc=OSError("disk"))
+        self.record(mrs=["https://x/1"])
+        out, err = self.reap()
+        self.assertIn("disk", err)
+        self.assertNotIn("reaped", self.read())
+        self.assertNotIn("removed", out)
+
+    def test_mrs_retire_fail_no_mark(self):
+        self.set("retire", exc=Fail("unmerged work"))
+        self.record(mrs=["https://x/1"])
+        self.reap()
+        self.assertNotIn("reaped", self.read())
+
+    def test_mrs_gitlab_workspace_skipped(self):
+        self.record("gl-ab-12", mrs=["https://x/1"])
+        self.reap()
+        for c in ("deliver", "retire", "stop_sessions"):
+            self.assertNotIn(c, self.calls)
+        self.assertNotIn("reaped", self.read("gl-ab-12"))
+        self.assertNotIn("notified", self.read("gl-ab-12"))
+
+    def test_several_records_independent(self):
+        self.set("retire", exc=Fail("unmerged work"))
+        self.record("a", done=True)
+        self.record("b", done=True)
+        self.reap()
+        self.assertEqual(self.calls.count("retire"), 2)
+        self.assertTrue(self.read("a")["reaped"])
+        self.assertTrue(self.read("b")["reaped"])
+
+    # lock
+
+    def test_busy_lock_exits_zero_without_work(self):
+        self.record(done=True)
+        with open(f"{self.rt}/jw-reap.lock", "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            out, err = self.reap()
+        if isinstance(self.exc, SystemExit):
+            self.assertIn(self.exc.code, (0, None))
+        else:
+            self.assertIsNone(self.exc)
+        self.assertIn("jw: reap already running", err)
+        self.assertEqual(self.calls, [])
+        self.assertNotIn("reaped", self.read())
+
+    # robustness
+
+    def test_bad_record_isolated(self):
+        def retire(home, name, **k):
+            self.calls.append("retire")
+            if name == "a":
+                raise ValueError("boom")
+            return []
+
+        self.m["retire"].side_effect = retire
+        self.record("a", done=True)
+        self.record("b", done=True)
+        self.idle = [("s2", "/q", "b")]
+        out, err = self.reap()
+        self.assertIsNone(self.exc)
+        self.assertIn("jw: a: ", err)
+        self.assertIn("boom", err)
+        self.assertEqual(self.calls.count("retire"), 2)
+        self.assertTrue(self.read("b")["reaped"])
+        self.assertEqual(self.kills(), ["s2"])
+
+    def test_bad_record_mrs_path_isolated(self):
+        self.set("stack_merged", exc=ValueError("bad"))
+        self.live_session()
+        self.record("a", mrs=["https://x/1"])
+        self.record("b", done=True)
+        self.idle = [("s2", "/q", "b")]
+        out, err = self.reap()
+        self.assertIsNone(self.exc)
+        self.assertIn("jw: a: ", err)
+        self.assertTrue(self.read("b")["reaped"])
+        self.assertEqual(self.kills(), ["s2"])
+
+    def test_deadline_skips_rest_and_runs_idle_pass(self):
+        clock = [1000.0]
+        orig = self.m["retire"].side_effect
+
+        def retire(*a, **k):
+            clock[0] += 700  # the first record takes over 10 min
+            return orig(*a, **k)
+
+        self.m["retire"].side_effect = retire
+        self.record("a", done=True)
+        self.record("b", done=True)
+        self.idle = [("s2", "/q", "b")]
+        with mock.patch.object(jw.time, "monotonic", lambda: clock[0]):
+            out, err = self.reap()
+        self.assertIsNone(self.exc)
+        self.assertEqual(self.calls.count("retire"), 1)
+        self.assertIn("out of time", err)
+        self.assertTrue(self.read("a")["reaped"])
+        self.assertNotIn("reaped", self.read("b"))
+        self.assertEqual(self.kills(), ["s2"])
+
+    def test_no_deadline_message_when_fast(self):
+        self.record("a", done=True)
+        out, err = self.reap()
+        self.assertNotIn("out of time", err)
+
+    # records that need no change are not rewritten
+
+    def assert_untouched(self, name="w"):
+        p = f"{self.state}/agent-sessions/{name}.json"
+        os.utime(p, (1000, 1000))
+        self.reap()
+        self.assertEqual(os.stat(p).st_mtime, 1000)
+
+    def test_skipped_record_not_rewritten(self):
+        self.record(done=True, reaped=True)
+        self.assert_untouched()
+
+    def test_neither_done_nor_mrs_not_rewritten(self):
+        self.record()
+        self.assert_untouched()
+
+    def test_unmerged_not_rewritten(self):
+        self.live_session()
+        self.set("stack_merged", False)
+        self.record(mrs=["https://x/1"])
+        self.assert_untouched()
+
+    def test_mrs_unchecked_not_rewritten(self):
+        self.set("retire", exc=jw.Unchecked("couldn't check the stack"))
+        self.record(mrs=["https://x/1"])
+        self.assert_untouched()
+
+    def test_workspace_path_passed_to_helpers(self):
+        self.live_session()
+        self.record(mrs=["https://x/1"])
+        self.reap()
+        self.m["stack_merged"].assert_called_once_with(self.path())
+        self.assertEqual(self.cs_args, [self.path()])
+
+    def test_lock_released_after_run(self):
+        self.reap()
+        self.assertIsNone(self.exc)
+        with open(f"{self.rt}/jw-reap.lock", "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)  # must not raise
+
+    # tools
+
+    def test_missing_tool_reported_once(self):
+        self.missing = "glab"
+        self.record("a", done=True)
+        self.record("b", done=True)
+        out, err = self.reap()
+        lines = [l for l in err.splitlines() if l.startswith("jw: missing on PATH:")]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("glab", lines[0])
+        self.assertNotIn("jj", lines[0])
+
+    def test_missing_git_reported(self):
+        self.missing = "git"
+        out, err = self.reap()
+        lines = [l for l in err.splitlines() if l.startswith("jw: missing on PATH:")]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("git", lines[0].split())
+
+    def test_no_missing_tool_message_when_present(self):
+        self.record(done=True)
+        out, err = self.reap()
+        self.assertNotIn("missing on PATH", err)
+
+    # the 4 h pass
+
+    def test_idle_pass_after_records_on_fresh_state(self):
+        self.record(done=True)
+        orig = self.m["stop_sessions"].side_effect
+
+        def stop(*a, **k):
+            self.live = ["fresh"]  # changes while the record loop runs
+            return orig(*a, **k)
+
+        self.m["stop_sessions"].side_effect = stop
+        self.reap()
+        self.assertEqual(self.idle_args[0], ["fresh"])
+        last_live = len(self.calls) - 1 - self.calls[::-1].index("live_claudes")
+        self.assertGreater(last_live, self.calls.index("retire"))
+        self.assertGreater(self.calls.index("idle_sessions"), last_live)
+
+    def kills(self):
+        return [c[-1] for c in self.runs if "kill" in c]
+
+    def test_idle_pass_excludes_stopped_names(self):
+        self.set("stop_sessions", [("s1", "sid1")])
+        self.record(done=True)
+        self.idle = [("s1", "/p", "a"), ("s2", "/q", "b")]
+        out, err = self.reap()
+        self.assertEqual(self.kills(), ["s2"])
+        self.assertIn("stopped s2 in /q: AGENT_SESSION=s2 claude --resume b", out)
+        self.assertNotIn("stopped s1 in /p", out)
+
+    def test_idle_pass_without_records_still_runs(self):
+        self.idle = [("s2", "/q", "b")]
+        out, err = self.reap()
+        self.assertEqual(self.kills(), ["s2"])
+        self.assertIn("stopped s2 in /q: AGENT_SESSION=s2 claude --resume b", out)
 
 
 class CmdMsg(unittest.TestCase):
@@ -895,6 +1552,21 @@ class UpdateRecord(RecordsBase):
         self.assertTrue(os.path.exists(self.path("p.json")))
         self.assertTrue(os.path.exists(self.path("new.json")))
 
+    def test_drop_removes_after_merge(self):
+        self.write("s.json", json.dumps({"kind": "task", "done": True, "notified": 1, "reaped": 2}))
+        r = jw.update_record(self.d, "s", {"title": "T"}, drop=("done", "notified", "reaped", "absent"))
+        self.assertEqual(r, {"kind": "task", "title": "T"})
+        self.assertEqual(jw.read_record(self.d, "s"), {"kind": "task", "title": "T"})
+
+    def test_drop_wins_over_fields(self):
+        r = jw.update_record(self.d, "s", {"done": True}, drop=["done"])
+        self.assertNotIn("done", r)
+        self.assertNotIn("done", jw.read_record(self.d, "s"))
+
+    def test_no_drop_keeps_all(self):
+        self.write("s.json", json.dumps({"done": True}))
+        self.assertEqual(jw.update_record(self.d, "s", {"kind": "x"}), {"done": True, "kind": "x"})
+
     def test_lock_busy(self):
         self.write("s.json", '{"kind":"task"}')
         fd = os.open(self.path(".lock"), os.O_RDWR | os.O_CREAT, 0o600)
@@ -1018,6 +1690,24 @@ class CmdSession(RecordsBase):
         self.run_cmd("set", "--title", "ż")
         with open(self.path("s-1.json"), "rb") as f:
             self.assertIn("ż".encode(), f.read())
+
+    FINISHED = {"done": True, "notified": 5, "reaped": 6}
+
+    def test_set_workspace_resets_finished(self):
+        self.write("s-1.json", json.dumps({"kind": "task", "mrs": ["https://g/1"], **self.FINISHED}))
+        self.run_cmd("set", "--workspace", "/w")
+        self.assertEqual(jw.read_record(self.d, "s-1"),
+                         {"kind": "task", "mrs": ["https://g/1"], "workspace": "/w"})
+
+    def test_set_without_workspace_keeps_finished(self):
+        self.write("s-1.json", json.dumps({"kind": "task", **self.FINISHED}))
+        self.run_cmd("set", "--title", "T", "--mr", "https://g/1")
+        self.assertEqual(jw.read_record(self.d, "s-1"),
+                         {"kind": "task", "title": "T", "mrs": ["https://g/1"], **self.FINISHED})
+
+    def test_set_workspace_creates_without_finished(self):
+        self.run_cmd("set", "--workspace", "/w")
+        self.assertEqual(jw.read_record(self.d, "s-1"), {"workspace": "/w"})
 
     def test_set_session_override(self):
         self.run_cmd("set", "-s", "other", "--kind", "k")
