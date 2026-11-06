@@ -48,7 +48,7 @@ spec:
               containerPort: 8000
           volumeMounts:
             - name: beets-config
-              mountPath: /config/config.yaml
+              mountPath: /data/config.yaml
               subPath: config.yaml
             - name: beets-config
               mountPath: /config/server.py
