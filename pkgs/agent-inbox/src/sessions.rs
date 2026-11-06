@@ -1,6 +1,7 @@
 //! Live Claude Code sessions, read from the session registry (`<config dir>/sessions/<pid>.json`,
-//! written by Claude Code) and /proc. Read-only: registry files are never written or deleted,
-//! stale ones are only skipped.
+//! written by Claude Code) and /proc. The registry only tells which processes live; what a session
+//! does (status) is in its session record, see `client::Record`. Read-only: registry files are
+//! never written or deleted, stale ones are only skipped.
 
 use std::env;
 use std::fs;
@@ -15,14 +16,8 @@ pub struct Session {
     pub session_id: String,
     pub cwd: String,
     pub name: String,
-    /// `busy`, `idle`, `waiting`, ...; "" if the registry has none.
-    pub status: String,
-    /// What a `waiting` session waits for (`permission prompt`), "" otherwise.
-    pub waiting_for: String,
     pub kind: String,
     pub started_at: f64,
-    /// When the status last changed.
-    pub status_at: f64,
     /// Start time of the process in clock ticks since boot (`procStart`); None if unknown.
     pub start: Option<u64>,
     /// The shpool session hosting the process (`jw attach <name>`), "" if there is none.
@@ -113,19 +108,13 @@ fn parse(text: &str) -> Option<Session> {
     let v: Value = serde_json::from_str(text).ok()?;
     let text = |key: &str| v.get(key).and_then(Value::as_str).unwrap_or("").to_string();
     let secs = |key: &str| v.get(key).and_then(Value::as_f64).map(|ms| ms / 1000.0);
-    let started_at = secs("startedAt").unwrap_or(0.0);
     Some(Session {
         pid: u32::try_from(v.get("pid")?.as_u64()?).ok()?,
         session_id: text("sessionId"),
         cwd: text("cwd"),
         name: text("name"),
-        status: text("status"),
-        waiting_for: text("waitingFor"),
         kind: text("kind"),
-        started_at,
-        status_at: secs("statusUpdatedAt")
-            .or_else(|| secs("updatedAt"))
-            .unwrap_or(started_at),
+        started_at: secs("startedAt").unwrap_or(0.0),
         // a procStart that cannot be read is a start time that does not match
         start: match v.get("procStart") {
             None => None,
@@ -221,11 +210,8 @@ mod tests {
             session_id: String::new(),
             cwd: cwd.to_string(),
             name: String::new(),
-            status: String::new(),
-            waiting_for: String::new(),
             kind: String::new(),
             started_at: 0.0,
-            status_at: 0.0,
             start: None,
             shpool: String::new(),
             agent_session: String::new(),
@@ -249,11 +235,8 @@ mod tests {
                 session_id: "sid-10".into(),
                 cwd: "/home/u/projects/r.agents/w1".into(),
                 name: "n10".into(),
-                status: "waiting".into(),
-                waiting_for: "permission prompt".into(),
                 kind: "interactive".into(),
                 started_at: 2.0,
-                status_at: 7.0,
                 start: Some(100),
                 shpool: "jw-1".into(),
                 agent_session: "o1".into(),
@@ -291,16 +274,6 @@ mod tests {
         assert_eq!(found.len(), 2);
         assert!(found.iter().all(|s| s.shpool.is_empty()));
         cleanup(&sessions);
-    }
-
-    #[test]
-    fn status_time_falls_back_to_updated_at() {
-        let s = parse(r#"{"pid":1,"startedAt":1000,"updatedAt":3000}"#).unwrap();
-        assert_eq!((s.started_at, s.status_at), (1.0, 3.0));
-        let s = parse(r#"{"pid":1,"startedAt":1000}"#).unwrap();
-        assert_eq!(s.status_at, 1.0);
-        assert_eq!(s.status, "");
-        assert_eq!(s.waiting_for, "");
     }
 
     #[test]

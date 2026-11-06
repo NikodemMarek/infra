@@ -61,7 +61,7 @@ const REPO_MAX_WIDTH: usize = 20;
 const CONTEXT_MAX_WIDTH: usize = 32;
 /// The status of a session that waits for the user.
 const WAITING: &str = "waiting";
-/// The status shown for a session that ran `jw done`, whatever Claude reports.
+/// The status of a session that ran `jw done`.
 const DONE: &str = "done";
 /// Longest multi-line value (a command, ...) shown in the detail pane.
 const MAX_LINES: usize = 40;
@@ -301,12 +301,23 @@ impl App {
         sessions
     }
 
-    /// The status of `session`: `DONE` once its record says so, else what Claude reports.
-    fn session_status<'a>(&self, session: &'a Session) -> &'a str {
-        match self.records.get(&session.agent_session) {
-            Some(record) if record.done => DONE,
-            _ => session.status.as_str(),
-        }
+    /// The status of `session` in its record, "" without one.
+    fn session_status(&self, session: &Session) -> &str {
+        self.record(&session.agent_session)
+            .map_or("", |r| r.status.as_str())
+    }
+
+    /// What `session` waits for according to its record, "" without one.
+    fn session_waiting_for(&self, session: &Session) -> &str {
+        self.record(&session.agent_session)
+            .map_or("", |r| r.waiting_for.as_str())
+    }
+
+    /// When the status of `session` last changed: its record says, else it started.
+    fn session_status_at(&self, session: &Session) -> f64 {
+        self.record(&session.agent_session)
+            .and_then(|r| r.status_at)
+            .unwrap_or(session.started_at)
     }
 
     /// The Sessions tab: after All and the configured tabs.
@@ -1906,17 +1917,13 @@ fn session_row(
     } else {
         format!("{:>2}", pending.min(99))
     };
-    let age = client::age(session.status_at, app.now);
+    let age = client::age(app.session_status_at(session), app.now);
     let head = 2 + 1 + BADGE_WIDTH + 1 + place_width(repo_width, context_width);
     let age_width = age.chars().count();
-    let waiting_for = if status == DONE {
-        String::new()
-    } else {
-        truncate(
-            &clean(&session.waiting_for),
-            width.saturating_sub(head + age_width + 1),
-        )
-    };
+    let waiting_for = truncate(
+        &clean(app.session_waiting_for(session)),
+        width.saturating_sub(head + age_width + 1),
+    );
     let pad = width.saturating_sub(head + waiting_for.chars().count() + age_width);
     let mut spans = vec![
         Span::styled(count, bold()),
@@ -1948,10 +1955,11 @@ fn session_lines(app: &App, session: &Session) -> Vec<Line<'static>> {
         head.push(Span::raw("  "));
         head.push(Span::styled(clean(&repo), repo_style()));
     }
-    if status != DONE && !session.waiting_for.is_empty() {
-        head.push(Span::raw(format!("  {}", clean(&session.waiting_for))));
+    let waiting_for = app.session_waiting_for(session);
+    if !waiting_for.is_empty() {
+        head.push(Span::raw(format!("  {}", clean(waiting_for))));
     }
-    let since = client::age(session.status_at, app.now);
+    let since = client::age(app.session_status_at(session), app.now);
     head.push(Span::styled(format!("  ·  {since}"), dim()));
     let mut lines = vec![Line::from(head)];
     let shpool = if session.shpool.is_empty() {
@@ -2205,7 +2213,7 @@ fn update(
 }
 
 /// Replaces the records with those of the sessions of the items and sessions: read again on
-/// every refresh, as `jw session set` changes them while the session runs. Without a records dir
+/// every refresh, as `jw session set` and the status hooks change them while the session runs. Without a records dir
 /// nothing is read.
 fn load_records(app: &mut App, dir: Option<&Path>) {
     let names = app
@@ -2939,7 +2947,8 @@ mod tests {
         for (w, h) in [(20, 5), (1, 1), (2, 2)] {
             for (items, keys) in &key_sets {
                 let mut a = app(items.clone());
-                a.set_sessions(vec![session(1, "s-a", WAITING)]);
+                a.set_sessions(vec![session(1, "s-a")]);
+                set_status(&mut a, AGENT_SESSION, WAITING);
                 a.area = Rect::new(0, 0, w, h);
                 a.notify("status", true);
                 a.inbox_error = Some("down".into());
@@ -3089,7 +3098,7 @@ mod tests {
         assert_eq!(a.on_key(code(KeyCode::Tab)), Effect::None);
         assert!(matches!(a.mode, Mode::List));
         assert_eq!(current_tab(&a), "Sessions");
-        a.set_sessions(vec![session(1, "s-a", "idle")]);
+        a.set_sessions(vec![session(1, "s-a")]);
         open_session(&mut a);
         assert_eq!(a.on_key(code(KeyCode::Tab)), Effect::None);
         assert!(matches!(a.mode, Mode::List));
@@ -3817,25 +3826,31 @@ mod tests {
 
     // --- sessions view
 
-    fn session(pid: u32, id: &str, status: &str) -> Session {
+    fn session(pid: u32, id: &str) -> Session {
         Session {
             pid,
             session_id: id.into(),
             cwd: "/home/u/projects/r.agents/w1".into(),
             name: String::new(),
-            status: status.into(),
-            waiting_for: if status == WAITING {
-                "permission prompt".into()
-            } else {
-                String::new()
-            },
             kind: "interactive".into(),
             started_at: 900.0,
-            status_at: 990.0,
             start: None,
             shpool: String::new(),
             agent_session: AGENT_SESSION.into(),
         }
+    }
+
+    /// Gives the record `name` the `status` since 990 s; a waiting one waits for a permission
+    /// prompt.
+    fn set_status(a: &mut App, name: &str, status: &str) {
+        let record = a.records.entry(name.into()).or_default();
+        record.status = status.into();
+        record.waiting_for = if status == WAITING {
+            "permission prompt".into()
+        } else {
+            String::new()
+        };
+        record.status_at = Some(990.0);
     }
 
     fn shpooled(mut s: Session, name: &str) -> Session {
@@ -3873,7 +3888,7 @@ mod tests {
     #[test]
     fn capital_s_does_nothing_and_is_not_offered() {
         let mut a = app(vec![question("a", 990.0)]);
-        a.set_sessions(vec![session(1, "s-a", "idle")]);
+        a.set_sessions(vec![session(1, "s-a")]);
         let s = screen(&a);
         assert!(!s.contains("S sessions") && !s.contains("S inbox"), "{s}");
         assert_eq!(a.on_key(key('S')), Effect::None);
@@ -3902,12 +3917,20 @@ mod tests {
                 in_session(question("c", 970.0), "s-b"),
             ],
             vec![
-                shpooled(session(1, "s-a", WAITING), "jw-1"),
-                session(2, "s-b", "idle"),
-                session(3, "s-c", "busy"),
-                session(4, "s-d", "starting"),
+                shpooled(session_from(session(1, "s-a"), "x1"), "jw-1"),
+                session_from(session(2, "s-b"), "x2"),
+                session_from(session(3, "s-c"), "x3"),
+                session_from(session(4, "s-d"), "x4"),
             ],
         );
+        for (name, status) in [
+            ("x1", WAITING),
+            ("x2", "idle"),
+            ("x3", "busy"),
+            ("x4", "starting"),
+        ] {
+            set_status(&mut a, name, status);
+        }
         let s = screen(&a);
         let row = |s: &str, badge: &str| {
             s.lines()
@@ -3975,10 +3998,7 @@ mod tests {
     fn a_attaches_the_shpool_session_or_says_why_not() {
         let mut a = sessions_app(
             vec![],
-            vec![
-                shpooled(session(1, "s-a", "idle"), "jw-1"),
-                session(2, "s-b", "idle"),
-            ],
+            vec![shpooled(session(1, "s-a"), "jw-1"), session(2, "s-b")],
         );
         assert_eq!(a.on_key(key('a')), Effect::Attach("jw-1".into()));
         assert!(screen(&a).contains("a attach"));
@@ -3996,11 +4016,7 @@ mod tests {
     fn session_selection_follows_its_pid_across_refreshes() {
         let mut a = sessions_app(
             vec![],
-            vec![
-                session(1, "s-1", "idle"),
-                session(2, "s-2", "idle"),
-                session(3, "s-3", "idle"),
-            ],
+            vec![session(1, "s-1"), session(2, "s-2"), session(3, "s-3")],
         );
         a.on_key(key('j'));
         a.on_key(code(KeyCode::Down));
@@ -4009,14 +4025,14 @@ mod tests {
         a.on_key(key('k'));
         assert_eq!(selected_pid(&a), Some(2));
         a.set_sessions(vec![
-            session(4, "s-4", "idle"),
-            session(1, "s-1", "idle"),
-            session(2, "s-2", "idle"),
-            session(3, "s-3", "idle"),
+            session(4, "s-4"),
+            session(1, "s-1"),
+            session(2, "s-2"),
+            session(3, "s-3"),
         ]);
         assert_eq!(selected_pid(&a), Some(2));
         // gone: the position stays (within the list)
-        a.set_sessions(vec![session(4, "s-4", "idle"), session(1, "s-1", "idle")]);
+        a.set_sessions(vec![session(4, "s-4"), session(1, "s-1")]);
         assert_eq!(selected_pid(&a), Some(1));
         a.set_sessions(vec![]);
         assert_eq!(selected_pid(&a), None);
@@ -4062,8 +4078,8 @@ mod tests {
     #[test]
     fn x_kills_the_selected_session_at_once() {
         let sessions = vec![
-            started(session(7, "s-a", WAITING), 42),
-            started(session(8, "s-b", "idle"), 43),
+            started(session(7, "s-a"), 42),
+            started(session(8, "s-b"), 43),
         ];
         let mut a = sessions_app(vec![], sessions);
         assert!(screen(&a).contains("x kill"));
@@ -4076,7 +4092,7 @@ mod tests {
 
     #[test]
     fn a_session_without_a_start_time_is_refused_at_once() {
-        let mut a = sessions_app(vec![], vec![session(7, "s-a", "idle")]);
+        let mut a = sessions_app(vec![], vec![session(7, "s-a")]);
         assert!(!screen(&a).contains("x kill"));
         assert_eq!(a.on_key(key('x')), Effect::None);
         assert!(matches!(a.mode, Mode::List));
@@ -4096,7 +4112,7 @@ mod tests {
         assert!(matches!(a.mode, Mode::List));
         // the All tab ignores it
         let mut a = app(vec![question("a", 990.0)]);
-        a.set_sessions(vec![session(7, "s-a", "idle")]);
+        a.set_sessions(vec![session(7, "s-a")]);
         assert_eq!(a.on_key(key('x')), Effect::None);
         assert!(matches!(a.mode, Mode::List));
         assert!(!screen(&a).contains("Kill"));
@@ -4110,11 +4126,7 @@ mod tests {
             in_session(question("c", 990.0), "s-a"),
             question("d", 990.0),
         ];
-        let sessions = vec![
-            session(7, "s-a", "idle"),
-            session(8, "s-b", "idle"),
-            session(9, "", "idle"),
-        ];
+        let sessions = vec![session(7, "s-a"), session(8, "s-b"), session(9, "")];
         let mut a = sessions_app(items, sessions);
         let mut ids = a.session_item_ids(7);
         ids.sort();
@@ -4190,7 +4202,7 @@ mod tests {
 
     #[test]
     fn capital_n_asks_for_a_task_on_every_tab() {
-        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        let mut a = sessions_app(vec![], vec![session(1, "s-a")]);
         assert!(screen(&a).contains("N new"));
         assert_eq!(a.on_key(key('N')), Effect::None);
         assert!(matches!(&a.mode, Mode::Task { buf } if buf.is_empty()));
@@ -4265,7 +4277,7 @@ mod tests {
 
     #[test]
     fn esc_cancels_the_task_and_keeps_the_tab() {
-        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        let mut a = sessions_app(vec![], vec![session(1, "s-a")]);
         a.on_key(key('N'));
         type_text(&mut a, "fix");
         assert_eq!(a.on_key(code(KeyCode::Esc)), Effect::None);
@@ -4603,13 +4615,15 @@ mod tests {
         let row = s.lines().find(|l| l.contains('○')).unwrap();
         assert!(row.contains("infra") && row.contains("!7 T"), "{row}");
         // sessions
-        let a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        let mut a = sessions_app(vec![], vec![session(1, "s-a")]);
+        set_status(&mut a, AGENT_SESSION, "idle");
         let idle_row = |a: &App| {
             let s = screen(a);
             s.lines().find(|l| l.contains("IDLE")).unwrap().to_string()
         };
         assert!(idle_row(&a).contains("r w1 "), "{}", idle_row(&a));
-        let a = with_record(a, MR_URL);
+        let mut a = with_record(a, MR_URL);
+        set_status(&mut a, AGENT_SESSION, "idle");
         let row = idle_row(&a);
         assert!(row.contains("r !7 T") && !row.contains("w1"), "{row}");
     }
@@ -4645,7 +4659,7 @@ mod tests {
         assert!(a.hints().contains(&("o", "open")));
         assert_eq!(a.on_key(key('o')), open);
         assert!(matches!(a.mode, Mode::Answer { .. }));
-        let a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        let a = sessions_app(vec![], vec![session(1, "s-a")]);
         let mut a = with_record(a, MR_URL);
         assert!(a.hints().contains(&("o", "open")));
         assert_eq!(a.on_key(key('o')), open);
@@ -4672,7 +4686,7 @@ mod tests {
             assert!(status.error && status.text.contains(text), "{url:?}");
         }
         // sessions: none selected, or without a record
-        for sessions in [vec![], vec![session(1, "s-a", "idle")]] {
+        for sessions in [vec![], vec![session(1, "s-a")]] {
             let mut a = sessions_app(vec![], sessions);
             assert_eq!(a.on_key(key('o')), Effect::None);
             assert!(a.status().is_some_and(|s| s.error));
@@ -4720,7 +4734,7 @@ mod tests {
         let file = dir.join(format!("{REVIEW_SESSION}.json"));
         std::fs::write(file, r#"{"kind":"review"}"#).unwrap();
         let item = from_session(question("r", 990.0), REVIEW_SESSION);
-        let live = session_from(session(1, "s-r", "idle"), REVIEW_SESSION);
+        let live = session_from(session(1, "s-r"), REVIEW_SESSION);
         let mut a = App {
             tabs: tabs(),
             area: Rect::new(0, 0, 100, 30),
@@ -4830,7 +4844,7 @@ mod tests {
             .join("\n");
         let a = sessions_app(
             vec![in_session(waiting("w", &body), "s-a")],
-            vec![session(1, "s-a", "idle")],
+            vec![session(1, "s-a")],
         );
         let a = with_description(with_record(a, MR_URL), "Fixes the flaky test");
         let s = screen(&a);
@@ -4924,10 +4938,12 @@ mod tests {
     fn tabbed_sessions_app() -> App {
         let mut a = tabbed_app();
         a.set_sessions(vec![
-            session_from(session(1, "s-r", "idle"), REVIEW_SESSION),
-            session_from(session(2, "s-t", "idle"), TASK_SESSION),
-            session(3, "s-u", "idle"),
+            session_from(session(1, "s-r"), REVIEW_SESSION),
+            session_from(session(2, "s-t"), TASK_SESSION),
+            session(3, "s-u"),
         ]);
+        set_status(&mut a, REVIEW_SESSION, "idle");
+        set_status(&mut a, TASK_SESSION, "idle");
         to_sessions_tab(&mut a);
         a
     }
@@ -4944,10 +4960,11 @@ mod tests {
     fn without_tabs_sessions_is_the_second_tab() {
         let mut a = app(vec![question("a", 990.0), question("b", 980.0)]);
         a.set_sessions(vec![
-            session(1, "s-a", "idle"),
-            session(2, "s-b", "idle"),
-            session(3, "s-c", "idle"),
+            session(1, "s-a"),
+            session(2, "s-b"),
+            session(3, "s-c"),
         ]);
+        set_status(&mut a, AGENT_SESSION, "idle");
         assert_eq!(current_tab(&a), "All");
         // the tab bar is the same on both tabs
         let s = screen(&a);
@@ -4972,9 +4989,9 @@ mod tests {
     fn tab_cycles_through_the_tabs_and_back() {
         let mut a = tabbed_app();
         a.set_sessions(vec![
-            session_from(session(1, "s-r", "idle"), REVIEW_SESSION),
-            session_from(session(2, "s-t", "idle"), TASK_SESSION),
-            session(3, "s-u", "idle"),
+            session_from(session(1, "s-r"), REVIEW_SESSION),
+            session_from(session(2, "s-t"), TASK_SESSION),
+            session(3, "s-u"),
         ]);
         assert_eq!(visible_ids(&a), vec!["s", "r", "t", "u"]);
         let s = screen(&a);
@@ -5119,7 +5136,7 @@ mod tests {
             };
             let sessions = |pids: &[u32]| -> Vec<Session> {
                 let name = |pid: u32| if pid == 4 { new } else { old };
-                let make = |pid: u32| session(pid, &format!("s-{pid}"), "idle");
+                let make = |pid: u32| session(pid, &format!("s-{pid}"));
                 pids.iter()
                     .map(|&p| session_from(make(p), name(p)))
                     .collect()
@@ -5169,9 +5186,9 @@ mod tests {
         assert_eq!(selected_pid(&a), Some(3));
         // refreshes follow the pid
         a.set_sessions(vec![
-            session(4, "s-4", "idle"),
-            session_from(session(2, "s-t", "idle"), TASK_SESSION),
-            session(3, "s-u", "idle"),
+            session(4, "s-4"),
+            session_from(session(2, "s-t"), TASK_SESSION),
+            session(3, "s-u"),
         ]);
         assert_eq!(selected_pid(&a), Some(3));
         assert_eq!(visible_pids(&a), vec![4, 2, 3]);
@@ -5306,16 +5323,13 @@ mod tests {
         let items = (0..n)
             .map(|i| in_session(question(&format!("i{i:02}"), 900.0 + i as f64), "s-a"))
             .collect();
-        sessions_app(items, vec![session(1, "s-a", "idle")])
+        sessions_app(items, vec![session(1, "s-a")])
     }
 
     #[test]
     fn enter_and_l_open_the_session_detail() {
         for open in [KeyCode::Enter, KeyCode::Char('l')] {
-            let mut a = sessions_app(
-                vec![],
-                vec![session(1, "s-a", "idle"), session(2, "s-b", "idle")],
-            );
+            let mut a = sessions_app(vec![], vec![session(1, "s-a"), session(2, "s-b")]);
             a.on_key(key('j'));
             assert_eq!(a.on_key(code(open)), Effect::None, "{open:?}");
             assert!(
@@ -5330,7 +5344,7 @@ mod tests {
 
     #[test]
     fn the_session_detail_border_is_focused() {
-        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        let mut a = sessions_app(vec![], vec![session(1, "s-a")]);
         assert!(!cyan_border(&a));
         open_session(&mut a);
         assert!(cyan_border(&a));
@@ -5391,7 +5405,7 @@ mod tests {
 
     #[test]
     fn a_short_session_detail_does_not_scroll() {
-        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        let mut a = sessions_app(vec![], vec![session(1, "s-a")]);
         open_session(&mut a);
         for c in [KeyCode::PageDown, KeyCode::Down, KeyCode::Char('j')] {
             a.on_key(code(c));
@@ -5404,11 +5418,7 @@ mod tests {
         for leave in [KeyCode::Esc, KeyCode::Char('q'), KeyCode::Backspace] {
             let mut a = sessions_app(
                 vec![],
-                vec![
-                    session(1, "s-a", "idle"),
-                    session(2, "s-b", "idle"),
-                    session(3, "s-c", "idle"),
-                ],
+                vec![session(1, "s-a"), session(2, "s-b"), session(3, "s-c")],
             );
             a.on_key(key('j'));
             a.on_key(key('j'));
@@ -5422,10 +5432,10 @@ mod tests {
 
     #[test]
     fn a_in_the_session_detail_attaches_or_says_why_not() {
-        let mut a = sessions_app(vec![], vec![shpooled(session(1, "s-a", "idle"), "jw-1")]);
+        let mut a = sessions_app(vec![], vec![shpooled(session(1, "s-a"), "jw-1")]);
         open_session(&mut a);
         assert_eq!(a.on_key(key('a')), Effect::Attach("jw-1".into()));
-        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        let mut a = sessions_app(vec![], vec![session(1, "s-a")]);
         open_session(&mut a);
         assert_eq!(a.on_key(key('a')), Effect::None);
         assert!(matches!(a.mode, Mode::SessionDetail { pid: 1, .. }));
@@ -5435,11 +5445,11 @@ mod tests {
 
     #[test]
     fn o_in_the_session_detail_opens_the_link_or_says_why_not() {
-        let a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        let a = sessions_app(vec![], vec![session(1, "s-a")]);
         let mut a = with_record(a, MR_URL);
         open_session(&mut a);
         assert_eq!(a.on_key(key('o')), Effect::Open(MR_URL.into()));
-        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        let mut a = sessions_app(vec![], vec![session(1, "s-a")]);
         open_session(&mut a);
         assert_eq!(a.on_key(key('o')), Effect::None);
         assert!(matches!(a.mode, Mode::SessionDetail { pid: 1, .. }));
@@ -5451,15 +5461,15 @@ mod tests {
         let mut a = sessions_app(
             vec![],
             vec![
-                started(session(7, "s-a", WAITING), 42),
-                started(session(8, "s-b", "idle"), 43),
+                started(session(7, "s-a"), 42),
+                started(session(8, "s-b"), 43),
             ],
         );
         a.on_key(key('j'));
         open_session(&mut a);
         assert_eq!(a.on_key(key('x')), Effect::Kill { pid: 8, start: 43 });
         // no start time: refused, like from the list
-        let mut a = sessions_app(vec![], vec![session(7, "s-a", "idle")]);
+        let mut a = sessions_app(vec![], vec![session(7, "s-a")]);
         open_session(&mut a);
         assert_eq!(a.on_key(key('x')), Effect::None);
         let status = a.status().expect("a status message");
@@ -5496,13 +5506,10 @@ mod tests {
     #[test]
     fn a_session_that_is_gone_says_so_and_only_esc_and_q_leave() {
         let gone = || {
-            let mut a = sessions_app(
-                vec![],
-                vec![session(1, "s-a", "idle"), session(2, "s-b", "idle")],
-            );
+            let mut a = sessions_app(vec![], vec![session(1, "s-a"), session(2, "s-b")]);
             a.on_key(key('j'));
             open_session(&mut a);
-            a.set_sessions(vec![session(1, "s-a", "idle")]);
+            a.set_sessions(vec![session(1, "s-a")]);
             a
         };
         let mut a = gone();
@@ -5545,7 +5552,7 @@ mod tests {
         // everything on offer, and no j/k
         let a = sessions_app(
             vec![in_session(question("a", 960.0), "s-a")],
-            vec![started(shpooled(session(1, "s-a", "idle"), "jw-1"), 42)],
+            vec![started(shpooled(session(1, "s-a"), "jw-1"), 42)],
         );
         let a = with_record(a, MR_URL);
         assert_eq!(
@@ -5563,7 +5570,7 @@ mod tests {
         let s = screen(&a);
         assert!(s.contains("enter open") && !s.contains("s items"), "{s}");
         // the bare minimum: nothing to attach, open or kill
-        let a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        let a = sessions_app(vec![], vec![session(1, "s-a")]);
         assert_eq!(
             a.hints(),
             vec![
@@ -5582,7 +5589,7 @@ mod tests {
     fn session_detail_hints() {
         let a = sessions_app(
             vec![],
-            vec![started(shpooled(session(1, "s-a", "idle"), "jw-1"), 42)],
+            vec![started(shpooled(session(1, "s-a"), "jw-1"), 42)],
         );
         let mut a = with_record(a, MR_URL);
         open_session(&mut a);
@@ -5599,7 +5606,7 @@ mod tests {
         );
         let s = screen(&a);
         assert!(s.contains("j/k scroll") && s.contains("esc back"), "{s}");
-        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        let mut a = sessions_app(vec![], vec![session(1, "s-a")]);
         open_session(&mut a);
         assert_eq!(
             a.hints(),
@@ -5666,11 +5673,7 @@ mod tests {
     fn g_and_capital_g_jump_in_the_sessions_list() {
         let mut a = sessions_app(
             vec![],
-            vec![
-                session(1, "s-a", "idle"),
-                session(2, "s-b", "idle"),
-                session(3, "s-c", "idle"),
-            ],
+            vec![session(1, "s-a"), session(2, "s-b"), session(3, "s-c")],
         );
         let pids: Vec<u32> = visible_pids(&a);
         let (first, last) = (pids[0], pids[pids.len() - 1]);
@@ -5688,7 +5691,7 @@ mod tests {
         assert_eq!(a.on_key(key('l')), Effect::None);
         assert!(matches!(&a.mode, Mode::Detail { id, .. } if id == "a"));
         // sessions list: the session detail
-        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        let mut a = sessions_app(vec![], vec![session(1, "s-a")]);
         assert_eq!(a.on_key(key('l')), Effect::None);
         assert!(matches!(a.mode, Mode::SessionDetail { pid: 1, .. }));
     }
@@ -5720,10 +5723,7 @@ mod tests {
         assert!(matches!(a.mode, Mode::List));
         assert_eq!(selected_id(&a), Some("mid"));
         // on the Sessions tab it stays there
-        let mut a = sessions_app(
-            vec![],
-            vec![session(1, "s-a", "idle"), session(2, "s-b", "idle")],
-        );
+        let mut a = sessions_app(vec![], vec![session(1, "s-a"), session(2, "s-b")]);
         a.on_key(key('j'));
         let pid = selected_pid(&a);
         assert_eq!(a.on_key(key('h')), Effect::None);
@@ -5804,7 +5804,7 @@ mod tests {
         assert_eq!(a.on_key(key('g')), Effect::None);
         assert_eq!(scroll_of(&a), 0);
         // a short detail has nothing to scroll
-        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        let mut a = sessions_app(vec![], vec![session(1, "s-a")]);
         open_session(&mut a);
         a.on_key(key('G'));
         assert_eq!(scroll_of(&a), 0);
@@ -5816,11 +5816,7 @@ mod tests {
     fn h_leaves_the_session_detail_with_the_session_selected() {
         let mut a = sessions_app(
             vec![],
-            vec![
-                session(1, "s-a", "idle"),
-                session(2, "s-b", "idle"),
-                session(3, "s-c", "idle"),
-            ],
+            vec![session(1, "s-a"), session(2, "s-b"), session(3, "s-c")],
         );
         a.on_key(key('j'));
         a.on_key(key('j'));
@@ -5897,8 +5893,9 @@ mod tests {
                 in_session(question("a", 960.0), "s-a"),
                 in_session(question("b", 970.0), "s-b"),
             ],
-            vec![session(1, "s-a", "idle"), session(2, "s-b", "idle")],
+            vec![session(1, "s-a"), session(2, "s-b")],
         );
+        set_status(&mut a, AGENT_SESSION, "idle");
         a.on_key(key('j'));
         let before = screen(&a);
         assert_eq!(a.on_key(key('s')), Effect::None);
@@ -5909,7 +5906,7 @@ mod tests {
         assert_eq!(screen(&a), before);
         assert!(screen(&a).contains("IDLE"));
         // also with nothing to show or no sessions at all
-        let mut a = sessions_app(vec![], vec![session(1, "s-a", "idle")]);
+        let mut a = sessions_app(vec![], vec![session(1, "s-a")]);
         assert_eq!(a.on_key(key('s')), Effect::None);
         assert!(a.status().is_none());
         let mut a = sessions_app(vec![], vec![]);
@@ -5937,8 +5934,9 @@ mod tests {
     fn s_does_nothing_in_the_session_detail() {
         let mut a = sessions_app(
             vec![in_session(question("a", 960.0), "s-a")],
-            vec![session(1, "s-a", "idle")],
+            vec![session(1, "s-a")],
         );
+        set_status(&mut a, AGENT_SESSION, "idle");
         open_session(&mut a);
         assert_eq!(a.on_key(key('s')), Effect::None);
         assert!(matches!(a.mode, Mode::SessionDetail { pid: 1, scroll: 0 }));
@@ -5958,7 +5956,7 @@ mod tests {
         // sessions list, session with pending items
         let a = sessions_app(
             vec![in_session(question("a", 960.0), "s-a")],
-            vec![session(1, "s-a", "idle")],
+            vec![session(1, "s-a")],
         );
         assert!(a.hints().iter().all(|(k, _)| *k != "s"), "{:?}", a.hints());
         assert!(!screen(&a).contains("s items"));
@@ -5970,7 +5968,7 @@ mod tests {
         // session detail
         let mut a = sessions_app(
             vec![in_session(question("a", 960.0), "s-a")],
-            vec![session(1, "s-a", "idle")],
+            vec![session(1, "s-a")],
         );
         open_session(&mut a);
         assert!(a.hints().iter().all(|(k, _)| *k != "s"), "{:?}", a.hints());
@@ -5985,7 +5983,7 @@ mod tests {
             assert_eq!(current_tab(&a), name);
         }
         // from a detail: back to the list, on the previous tab
-        a.set_sessions(vec![session(1, "s-a", "idle")]);
+        a.set_sessions(vec![session(1, "s-a")]);
         open_session(&mut a);
         assert_eq!(a.on_key(back), Effect::None);
         assert!(matches!(a.mode, Mode::List));
@@ -6212,13 +6210,14 @@ mod tests {
 
     #[test]
     fn session_row_shows_repo_then_the_workspace() {
-        let a = sessions_app(
+        let mut a = sessions_app(
             vec![],
             vec![session_in_cwd(
-                session(1, "s-a", WAITING),
+                session(1, "s-a"),
                 "/p/home-infra.agents/s-2",
             )],
         );
+        set_status(&mut a, AGENT_SESSION, WAITING);
         let buf = buffer_at(&a, 200, 30);
         let (y, row) = list_row(&buf, "home-infra s-2");
         assert!(row.contains("WAIT  home-infra s-2"), "{row}");
@@ -6233,11 +6232,12 @@ mod tests {
         let a = sessions_app(
             vec![],
             vec![session_in_cwd(
-                session(1, "s-a", WAITING),
+                session(1, "s-a"),
                 "/p/home-infra.agents/s-2",
             )],
         );
-        let a = with_mr_12(a);
+        let mut a = with_mr_12(a);
+        set_status(&mut a, AGENT_SESSION, WAITING);
         let s = screen_at(&a, 200, 30);
         let row = s
             .lines()
@@ -6249,13 +6249,14 @@ mod tests {
 
     #[test]
     fn session_row_drops_the_context_column_when_every_context_is_empty() {
-        let a = sessions_app(
+        let mut a = sessions_app(
             vec![],
             vec![
-                session_in_cwd(session(1, "s-a", WAITING), "/p/dotfiles"),
-                session_in_cwd(session(2, "s-b", WAITING), "/p/dotfiles"),
+                session_in_cwd(session(1, "s-a"), "/p/dotfiles"),
+                session_in_cwd(session(2, "s-b"), "/p/dotfiles"),
             ],
         );
+        set_status(&mut a, AGENT_SESSION, WAITING);
         let s = screen_at(&a, 200, 30);
         let rows: Vec<&str> = s
             .lines()
@@ -6269,13 +6270,14 @@ mod tests {
 
     #[test]
     fn session_detail_starts_with_badge_repo_and_status() {
-        let a = sessions_app(
+        let mut a = sessions_app(
             vec![],
             vec![session_in_cwd(
-                session(1, "s-a", WAITING),
+                session(1, "s-a"),
                 "/p/home-infra.agents/s-2",
             )],
         );
+        set_status(&mut a, AGENT_SESSION, WAITING);
         let buf = buffer_at(&a, 200, 30);
         let head = "WAIT  home-infra  permission prompt  ·  10s";
         let (x, y) = find_text(&buf, head);
@@ -6288,7 +6290,8 @@ mod tests {
 
     #[test]
     fn session_detail_leaves_out_an_empty_repo() {
-        let a = sessions_app(vec![], vec![session_in_cwd(session(1, "s-a", WAITING), "")]);
+        let mut a = sessions_app(vec![], vec![session_in_cwd(session(1, "s-a"), "")]);
+        set_status(&mut a, AGENT_SESSION, WAITING);
         let s = screen_at(&a, 200, 30);
         assert!(s.contains("WAIT  permission prompt  ·  10s"), "{s}");
     }
@@ -6305,45 +6308,92 @@ mod tests {
         }
     }
 
-    fn done_record() -> Record {
-        Record {
-            done: true,
-            ..Record::default()
-        }
-    }
-
-    fn with_agent_session(mut s: Session, name: &str) -> Session {
-        s.agent_session = name.into();
-        s
-    }
-
     #[test]
-    fn done_status_badge_is_done_text() {
-        assert_eq!(DONE, "done");
-        assert_eq!(status_badge(DONE).0, "DONE");
-    }
-
-    #[test]
-    fn session_status_is_done_only_for_a_done_record() {
+    fn session_status_is_the_status_of_its_record() {
         let mut a = app(vec![]);
-        let s = session(1, "s-a", WAITING);
-        assert_eq!(a.session_status(&s), WAITING);
+        let s = session(1, "s-a");
+        assert_eq!(a.session_status(&s), "");
         a.records.insert(AGENT_SESSION.into(), Record::default());
-        assert_eq!(a.session_status(&s), WAITING);
-        a.records.insert(AGENT_SESSION.into(), done_record());
+        assert_eq!(a.session_status(&s), "");
+        set_status(&mut a, AGENT_SESSION, DONE);
         assert_eq!(a.session_status(&s), DONE);
-        let idle = session(2, "s-b", "idle");
-        assert_eq!(a.session_status(&idle), DONE);
-        let other = with_agent_session(session(3, "s-c", "busy"), "other");
+        let other = session_from(session(3, "s-c"), "other");
+        assert_eq!(a.session_status(&other), "");
+        set_status(&mut a, "other", "busy");
         assert_eq!(a.session_status(&other), "busy");
+        assert_eq!(a.session_status(&s), DONE);
     }
 
     #[test]
-    fn done_session_row_and_detail_show_done_without_waiting_for() {
-        let mut a = sessions_app(vec![], vec![session(1, "s-a", WAITING)]);
+    fn session_status_waiting_for_and_age_come_from_the_record() {
+        let mut a = sessions_app(vec![], vec![session(1, "s-a")]);
+        let record = Record {
+            status: "busy".into(),
+            waiting_for: "a question".into(),
+            status_at: Some(970.0),
+            ..Record::default()
+        };
+        a.records.insert(AGENT_SESSION.into(), record);
+        let s = session(1, "s-a");
+        assert_eq!(a.session_status(&s), "busy");
+        assert_eq!(a.session_waiting_for(&s), "a question");
+        assert_eq!(a.session_status_at(&s), 970.0);
+        let screen = screen_at(&a, 200, 30);
+        let row = screen.lines().find(|l| l.contains("BUSY")).unwrap();
+        assert!(row.contains("a question") && row.contains("30s"), "{row}");
+        assert!(screen.contains("BUSY  r  a question  ·  30s"), "{screen}");
+    }
+
+    #[test]
+    fn session_without_a_record_has_no_status_and_is_aged_from_its_start() {
+        let a = sessions_app(vec![], vec![session(1, "s-a")]);
+        let s = session(1, "s-a");
+        assert_eq!(a.session_status(&s), "");
+        assert_eq!(a.session_waiting_for(&s), "");
+        assert_eq!(a.session_status_at(&s), s.started_at);
+        assert_eq!(status_badge("").0, "");
+        let screen = screen_at(&a, 200, 30);
+        for badge in ["WAIT", "IDLE", "BUSY", "DONE"] {
+            assert!(!screen.contains(badge), "{badge}: {screen}");
+        }
+        let row = screen.lines().find(|l| l.contains("r w1")).unwrap();
+        assert!(row.contains("1m"), "{row}");
+    }
+
+    #[test]
+    fn a_record_without_a_status_time_is_aged_from_the_session_start() {
+        let mut a = sessions_app(vec![], vec![session(1, "s-a")]);
+        let record = Record {
+            status: "idle".into(),
+            ..Record::default()
+        };
+        a.records.insert(AGENT_SESSION.into(), record);
+        assert_eq!(a.session_status_at(&session(1, "s-a")), 900.0);
+    }
+
+    #[test]
+    fn the_done_key_of_a_record_is_ignored() {
+        let dir = records_dir("done-key");
+        std::fs::write(
+            dir.join(format!("{AGENT_SESSION}.json")),
+            r#"{"done":true,"status":"busy"}"#,
+        )
+        .unwrap();
+        let mut a = app(vec![]);
+        update(&mut a, vec![session(1, "s-a")], Ok(vec![]), Some(&dir));
+        to_sessions_tab(&mut a);
+        let s = screen_at(&a, 200, 30);
+        assert!(s.contains("BUSY") && !s.contains("DONE"), "{s}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn done_session_row_and_detail_show_the_done_badge() {
+        let mut a = sessions_app(vec![], vec![session(1, "s-a")]);
+        set_status(&mut a, AGENT_SESSION, WAITING);
         let s = screen_at(&a, 200, 30);
         assert!(s.contains("WAIT") && s.contains("permission prompt"), "{s}");
-        a.records.insert(AGENT_SESSION.into(), done_record());
+        set_status(&mut a, AGENT_SESSION, DONE);
         let s = screen_at(&a, 200, 30);
         assert!(s.contains("DONE"), "{s}");
         assert!(!s.contains("WAIT"), "{s}");
@@ -6354,14 +6404,16 @@ mod tests {
     fn header_waiting_count_excludes_done_sessions() {
         let mut a = app(vec![]);
         a.set_sessions(vec![
-            with_agent_session(session(1, "s-a", WAITING), "x1"),
-            with_agent_session(session(2, "s-b", WAITING), "x2"),
+            session_from(session(1, "s-a"), "x1"),
+            session_from(session(2, "s-b"), "x2"),
         ]);
+        set_status(&mut a, "x1", WAITING);
+        set_status(&mut a, "x2", WAITING);
         assert!(screen(&a).contains("2 sessions (2 waiting)"));
-        a.records.insert("x1".into(), done_record());
+        set_status(&mut a, "x1", DONE);
         let s = screen(&a);
         assert!(s.contains("2 sessions (1 waiting)"), "{s}");
-        a.records.insert("x2".into(), done_record());
+        set_status(&mut a, "x2", DONE);
         let s = screen(&a);
         assert!(s.contains("2 sessions") && !s.contains("waiting)"), "{s}");
     }
@@ -6370,15 +6422,17 @@ mod tests {
     fn visible_sessions_puts_done_last_and_keeps_the_order() {
         let mut a = app(vec![]);
         a.set_sessions(vec![
-            with_agent_session(session(1, "s-1", "idle"), "x1"),
-            with_agent_session(session(2, "s-2", "idle"), "x2"),
-            with_agent_session(session(3, "s-3", "busy"), "x3"),
-            with_agent_session(session(4, "s-4", WAITING), "x4"),
-            with_agent_session(session(5, "s-5", "idle"), "x5"),
+            session_from(session(1, "s-1"), "x1"),
+            session_from(session(2, "s-2"), "x2"),
+            session_from(session(3, "s-3"), "x3"),
+            session_from(session(4, "s-4"), "x4"),
+            session_from(session(5, "s-5"), "x5"),
         ]);
+        set_status(&mut a, "x3", "busy");
+        set_status(&mut a, "x4", WAITING);
         assert_eq!(visible_pids(&a), vec![1, 2, 3, 4, 5]);
-        a.records.insert("x1".into(), done_record());
-        a.records.insert("x4".into(), done_record());
+        set_status(&mut a, "x1", DONE);
+        set_status(&mut a, "x4", DONE);
         assert_eq!(visible_pids(&a), vec![2, 3, 5, 1, 4]);
     }
 
@@ -6387,16 +6441,16 @@ mod tests {
         let dir = records_dir("done-selection");
         let sessions = || {
             vec![
-                with_agent_session(session(1, "s-1", "idle"), "x1"),
-                with_agent_session(session(2, "s-2", "idle"), "x2"),
-                with_agent_session(session(3, "s-3", "idle"), "x3"),
+                session_from(session(1, "s-1"), "x1"),
+                session_from(session(2, "s-2"), "x2"),
+                session_from(session(3, "s-3"), "x3"),
             ]
         };
         let mut a = app(vec![]);
         a.set_sessions(sessions());
         update(&mut a, sessions(), Ok(vec![]), Some(&dir));
         assert_eq!(selected_pid(&a), Some(1));
-        std::fs::write(dir.join("x1.json"), r#"{"done":true}"#).unwrap();
+        std::fs::write(dir.join("x1.json"), r#"{"status":"done"}"#).unwrap();
         update(&mut a, sessions(), Ok(vec![]), Some(&dir));
         assert_eq!(visible_pids(&a), vec![2, 3, 1]);
         assert_eq!(selected_pid(&a), Some(1));
