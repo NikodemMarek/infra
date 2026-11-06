@@ -55,6 +55,7 @@
   event-bus = pkgs.callPackage ./event-bus {};
   tm = pkgs.callPackage ./tm {};
   tm-image = pkgs.callPackage ./tm/image.nix {};
+  shani-image = pkgs.callPackage ./shani/image.nix {};
 
   event-handlers = pkgs.callPackage ./event-handlers {};
 }
