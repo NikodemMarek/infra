@@ -17,6 +17,7 @@ fetch-tags = "v*"
 
 [snapshot]
 auto-update-stale = true
+auto-track = 'all() & ~glob:"**/.claude/scheduled_tasks.lock"'
 
 [aliases]
 upload = ["util", "exec", "--", "@jjUpload@"]
