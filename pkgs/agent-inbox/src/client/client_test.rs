@@ -551,8 +551,27 @@ fn record_loads_all_fields_and_skips_non_string_mrs() {
             description: "d".into(),
             url: "https://g/7".into(),
             mrs: vec!["https://g/8".into()],
+            done: false,
         })
     );
+}
+
+#[test]
+fn record_done_is_true_only_for_the_bool_true() {
+    let dir = tmp("rec-done");
+    let cases = [
+        ("t", r#"{"done":true}"#, true),
+        ("f", r#"{"done":false}"#, false),
+        ("absent", r#"{"kind":"x"}"#, false),
+        ("str", r#"{"done":"true"}"#, false),
+        ("one", r#"{"done":1}"#, false),
+        ("null", r#"{"done":null}"#, false),
+    ];
+    for (name, json, want) in cases {
+        put(&dir, &format!("{name}.json"), json);
+        let rec = Record::load(&dir, name).expect(name);
+        assert_eq!(rec.done, want, "{json}");
+    }
 }
 
 #[test]
