@@ -31,6 +31,10 @@ spec:
       leafnodes:
         enabled: true
         port: 7422
+        # the chart sets no_advertise, and 2.14 leafs (yenn) reject an INFO without leafnode_urls
+        merge:
+          no_advertise: false
+          advertise: nats.nats.svc.cluster.local:7422
     service:
       ports:
         leafnodes:
