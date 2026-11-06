@@ -27,7 +27,9 @@ complete -c jw -n '__fish_seen_subcommand_from resume r' -s l -l last -d 'resume
 complete -c jw -n '__fish_seen_subcommand_from resume r' -a '(__jw_repos)'
 complete -c jw -n '__fish_seen_subcommand_from cd c rm' -a '(__jw_workspaces)'
 complete -c jw -n '__fish_seen_subcommand_from attach at' -a '(__jw_shpool_sessions)'
-complete -c jw -n '__fish_seen_subcommand_from session; and not __fish_seen_subcommand_from get set' -a 'get set'
+complete -c jw -n '__fish_seen_subcommand_from session; and not __fish_seen_subcommand_from get set status' -a 'get set status'
+complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from status; and not __fish_seen_subcommand_from busy idle waiting ended' -a 'busy idle waiting ended'
+complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from status' -l waiting-for -r -d 'what the session waits for (with waiting)'
 complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from get set' -s s -l session -r -d 'session name (default: $AGENT_SESSION)'
 complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from set' -l kind -r -d 'what started the session'
 complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from set' -l title -r

@@ -125,10 +125,11 @@ class CmdAgent(unittest.TestCase):
 
     def test_initial_record_resets_finished(self):
         jw.update_record(os.path.join(self.state, "agent-sessions"), "s-1",
-                         {"kind": "old", "done": True, "notified": 1, "reaped": 2})
+                         {"kind": "old", "status": "done", "status_at": 1, "waiting_for": "q",
+                          "notified": 1, "reaped": 2})
         self.agent()
         r = json.loads(self.at_attach)
-        for k in ("done", "notified", "reaped"):
+        for k in ("status", "status_at", "waiting_for", "notified", "reaped", "done"):
             self.assertNotIn(k, r)
         self.assertEqual(r["workspace"], self.work)
 
@@ -723,16 +724,16 @@ class CmdReapRecords(unittest.TestCase):
         self.assertEqual(self.helpers(), [])
 
     def test_reaped_skipped_without_calls(self):
-        self.record(done=True, reaped=True)
+        self.record(status="done", reaped=True)
         self.record("m", mrs=["https://x/1"], reaped=True)
         self.reap()
         self.assertIsNone(self.exc)
         self.assertEqual(self.helpers(), [])
 
     def test_bad_workspace_skipped(self):
-        self.record("a", ws=f"{self.root}/nowhere", done=True)
-        self.record("b", ws=False, done=True)
-        self.record("c", ws=self.ws("c", jj=False), done=True)
+        self.record("a", ws=f"{self.root}/nowhere", status="done")
+        self.record("b", ws=False, status="done")
+        self.record("c", ws=self.ws("c", jj=False), status="done")
         self.record("d", ws="rel/path", mrs=["https://x/1"])
         self.reap()
         self.assertIsNone(self.exc)
@@ -742,9 +743,9 @@ class CmdReapRecords(unittest.TestCase):
 
     def test_neither_done_nor_mrs_skipped(self):
         self.record("a")
-        self.record("b", done=False)
+        self.record("b", status="busy")
         self.record("c", mrs=[])
-        self.record("d", done="yes")
+        self.record("d", done=True)
         self.reap()
         self.assertEqual(self.helpers(), [])
 
@@ -752,7 +753,7 @@ class CmdReapRecords(unittest.TestCase):
 
     def test_done_stops_then_retires_and_marks(self):
         self.set("stop_sessions", [("sh", "sid1")])
-        self.record(done=True)
+        self.record(status="done")
         out, err = self.reap()
         self.assertIsNone(self.exc)
         self.assertEqual(self.helpers(), ["stop_sessions", "retire"])
@@ -764,14 +765,14 @@ class CmdReapRecords(unittest.TestCase):
 
     def test_done_stop_fail_no_retire_no_mark(self):
         self.set("stop_sessions", exc=Fail("busy"))
-        self.record(done=True)
+        self.record(status="done")
         self.reap()
         self.assertEqual(self.helpers(), ["stop_sessions"])
         self.assertNotIn("reaped", self.read())
 
     def test_done_retire_fail_kept_and_marked(self):
         self.set("retire", exc=Fail("unmerged work"))
-        self.record(done=True)
+        self.record(status="done")
         out, err = self.reap()
         self.assertIn(f"kept {self.path()}: unmerged work", out)
         self.assertNotIn("removed", out)
@@ -779,14 +780,14 @@ class CmdReapRecords(unittest.TestCase):
 
     def test_done_retire_unchecked_kept_and_marked(self):
         self.set("retire", exc=jw.Unchecked("couldn't check the stack"))
-        self.record(done=True)
+        self.record(status="done")
         out, err = self.reap()
         self.assertIn(f"kept {self.path()}: couldn't check the stack", out)
         self.assertNotIn("removed", out)
         self.assertTrue(self.read()["reaped"])
 
     def test_done_gitlab_workspace_not_retired(self):
-        self.record("gl-ab-12", done=True)
+        self.record("gl-ab-12", status="done")
         self.reap()
         self.assertNotIn("retire", self.calls)
         self.m["stop_sessions"].assert_called_once_with(self.path("gl-ab-12"), 600)
@@ -803,7 +804,7 @@ class CmdReapRecords(unittest.TestCase):
                 self.out.seek(0)
                 self.out.truncate()
                 self.set("retire", exc=self.killed_exc(cls, "nope"))
-                self.record(done=True)
+                self.record(status="done")
                 self.idle = [("s", "/p", "a")]
                 self.runs.clear()
                 out, err = self.reap()
@@ -925,8 +926,8 @@ class CmdReapRecords(unittest.TestCase):
 
     def test_several_records_independent(self):
         self.set("retire", exc=Fail("unmerged work"))
-        self.record("a", done=True)
-        self.record("b", done=True)
+        self.record("a", status="done")
+        self.record("b", status="done")
         self.reap()
         self.assertEqual(self.calls.count("retire"), 2)
         self.assertTrue(self.read("a")["reaped"])
@@ -935,7 +936,7 @@ class CmdReapRecords(unittest.TestCase):
     # lock
 
     def test_busy_lock_exits_zero_without_work(self):
-        self.record(done=True)
+        self.record(status="done")
         with open(f"{self.rt}/jw-reap.lock", "w") as f:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
             out, err = self.reap()
@@ -957,8 +958,8 @@ class CmdReapRecords(unittest.TestCase):
             return []
 
         self.m["retire"].side_effect = retire
-        self.record("a", done=True)
-        self.record("b", done=True)
+        self.record("a", status="done")
+        self.record("b", status="done")
         self.idle = [("s2", "/q", "b")]
         out, err = self.reap()
         self.assertIsNone(self.exc)
@@ -972,7 +973,7 @@ class CmdReapRecords(unittest.TestCase):
         self.set("stack_merged", exc=ValueError("bad"))
         self.live_session()
         self.record("a", mrs=["https://x/1"])
-        self.record("b", done=True)
+        self.record("b", status="done")
         self.idle = [("s2", "/q", "b")]
         out, err = self.reap()
         self.assertIsNone(self.exc)
@@ -989,8 +990,8 @@ class CmdReapRecords(unittest.TestCase):
             return orig(*a, **k)
 
         self.m["retire"].side_effect = retire
-        self.record("a", done=True)
-        self.record("b", done=True)
+        self.record("a", status="done")
+        self.record("b", status="done")
         self.idle = [("s2", "/q", "b")]
         with mock.patch.object(jw.time, "monotonic", lambda: clock[0]):
             out, err = self.reap()
@@ -1002,7 +1003,7 @@ class CmdReapRecords(unittest.TestCase):
         self.assertEqual(self.kills(), ["s2"])
 
     def test_no_deadline_message_when_fast(self):
-        self.record("a", done=True)
+        self.record("a", status="done")
         out, err = self.reap()
         self.assertNotIn("out of time", err)
 
@@ -1015,7 +1016,7 @@ class CmdReapRecords(unittest.TestCase):
         self.assertEqual(os.stat(p).st_mtime, 1000)
 
     def test_skipped_record_not_rewritten(self):
-        self.record(done=True, reaped=True)
+        self.record(status="done", reaped=True)
         self.assert_untouched()
 
     def test_neither_done_nor_mrs_not_rewritten(self):
@@ -1050,8 +1051,8 @@ class CmdReapRecords(unittest.TestCase):
 
     def test_missing_tool_reported_once(self):
         self.missing = "glab"
-        self.record("a", done=True)
-        self.record("b", done=True)
+        self.record("a", status="done")
+        self.record("b", status="done")
         out, err = self.reap()
         lines = [l for l in err.splitlines() if l.startswith("jw: missing on PATH:")]
         self.assertEqual(len(lines), 1)
@@ -1066,14 +1067,14 @@ class CmdReapRecords(unittest.TestCase):
         self.assertIn("git", lines[0].split())
 
     def test_no_missing_tool_message_when_present(self):
-        self.record(done=True)
+        self.record(status="done")
         out, err = self.reap()
         self.assertNotIn("missing on PATH", err)
 
     # the 4 h pass
 
     def test_idle_pass_after_records_on_fresh_state(self):
-        self.record(done=True)
+        self.record(status="done")
         orig = self.m["stop_sessions"].side_effect
 
         def stop(*a, **k):
@@ -1092,7 +1093,7 @@ class CmdReapRecords(unittest.TestCase):
 
     def test_idle_pass_excludes_stopped_names(self):
         self.set("stop_sessions", [("s1", "sid1")])
-        self.record(done=True)
+        self.record(status="done")
         self.idle = [("s1", "/p", "a"), ("s2", "/q", "b")]
         out, err = self.reap()
         self.assertEqual(self.kills(), ["s2"])
@@ -1691,7 +1692,21 @@ class CmdSession(RecordsBase):
         with open(self.path("s-1.json"), "rb") as f:
             self.assertIn("ż".encode(), f.read())
 
-    FINISHED = {"done": True, "notified": 5, "reaped": 6}
+    FINISHED = {"status": "done", "status_at": 4, "notified": 5, "reaped": 6}
+
+    def test_finish_marks(self):
+        self.assertEqual(tuple(jw.FINISH_MARKS), ("status", "status_at", "waiting_for", "notified", "reaped"))
+
+    def test_set_workspace_drops_all_marks(self):
+        self.write("s-1.json", json.dumps({"status": "done", "status_at": 1, "notified": 2, "reaped": 3,
+                                           "title": "T"}))
+        self.run_cmd("set", "--workspace", "/w")
+        self.assertEqual(jw.read_record(self.d, "s-1"), {"title": "T", "workspace": "/w"})
+
+    def test_set_workspace_drops_waiting_for(self):
+        self.write("s-1.json", json.dumps({"status": "waiting", "waiting_for": "x", "status_at": 1}))
+        self.run_cmd("set", "--workspace", "/w")
+        self.assertEqual(jw.read_record(self.d, "s-1"), {"workspace": "/w"})
 
     def test_set_workspace_resets_finished(self):
         self.write("s-1.json", json.dumps({"kind": "task", "mrs": ["https://g/1"], **self.FINISHED}))
@@ -2186,6 +2201,17 @@ class Launch(unittest.TestCase):
         self.assertEqual(r["workspace"], self.tmp)
         self.assertEqual(r["title"], "orig")
 
+    def test_resume_drops_finish_marks(self):
+        self.seed()
+        with self.state():
+            jw.update_record(jw.records_dir(), "w1", {"status": "done", "status_at": 1, "waiting_for": "q",
+                                                      "notified": 2, "reaped": 3})
+        self.go([], "w1", resume=True)
+        r = self.record()
+        for k in ("status", "status_at", "waiting_for", "notified", "reaped"):
+            self.assertNotIn(k, r)
+        self.assertEqual(r["title"], "orig")
+
     def test_resume_without_record_writes_full_record(self):
         self.go([], "w1", resume=True)
         r = self.record()
@@ -2240,21 +2266,50 @@ class CmdDone(RecordsBase):
             a.func(a)
         return err.getvalue()
 
+    def done_record(self, **extra):
+        r = jw.read_record(self.d, "s-1")
+        self.assertIsInstance(r["status_at"], (int, float))
+        self.assertNotIsInstance(r["status_at"], bool)
+        self.assertNotIn("done", r)
+        return {**r, "status_at": "T"} | extra
+
     def test_writes_done(self):
         err = self.run_cmd()
-        self.assertEqual(jw.read_record(self.d, "s-1"), {"done": True})
+        self.assertEqual(self.done_record(), {"status": "done", "status_at": "T"})
         self.assertIn("jw: s-1 is done; it is stopped once it is idle and detached", err)
+
+    def test_status_at_uses_time(self):
+        with mock.patch.object(jw.time, "time", return_value=1234.5):
+            self.run_cmd()
+        self.assertEqual(jw.read_record(self.d, "s-1"), {"status": "done", "status_at": 1234.5})
 
     def test_keeps_other_keys(self):
         self.write("s-1.json", json.dumps({"title": "T", "mrs": ["https://g/1"]}))
         self.run_cmd()
-        self.assertEqual(jw.read_record(self.d, "s-1"), {"title": "T", "mrs": ["https://g/1"], "done": True})
+        self.assertEqual(self.done_record(), {"title": "T", "mrs": ["https://g/1"], "status": "done",
+                                              "status_at": "T"})
+
+    def test_replaces_waiting(self):
+        self.write("s-1.json", json.dumps({"status": "waiting", "waiting_for": "question", "title": "T",
+                                           "mrs": ["https://g/1"]}))
+        self.run_cmd()
+        self.assertEqual(self.done_record(), {"status": "done", "status_at": "T", "title": "T",
+                                              "mrs": ["https://g/1"]})
+
+    def test_rerun_rewrites_status_at(self):
+        with mock.patch.object(jw.time, "time", return_value=10):
+            self.run_cmd()
+        with mock.patch.object(jw.time, "time", return_value=20):
+            self.run_cmd()
+        self.assertEqual(jw.read_record(self.d, "s-1"), {"status": "done", "status_at": 20})
 
     def test_creates_missing_record_and_dir(self):
         self.assertFalse(os.path.exists(self.d))
         self.run_cmd()
         with open(self.path("s-1.json")) as f:
-            self.assertEqual(json.load(f), {"done": True})
+            r = json.load(f)
+        self.assertEqual(r["status"], "done")
+        self.assertEqual(set(r), {"status", "status_at"})
 
     def test_no_session(self):
         with mock.patch.dict(os.environ):
@@ -2281,7 +2336,186 @@ class CmdDone(RecordsBase):
     def test_event_origin_allowed(self):
         with mock.patch.dict(os.environ, {"KNOWLEDGE_ORIGIN": "event:x"}):
             self.run_cmd()
-        self.assertEqual(jw.read_record(self.d, "s-1"), {"done": True})
+        self.assertEqual(jw.read_record(self.d, "s-1")["status"], "done")
+
+
+class SetStatus(RecordsBase):
+    def mtime(self, name="s.json"):
+        return os.stat(self.path(name)).st_mtime_ns
+
+    def test_creates_dir_and_record(self):
+        r = jw.set_status(self.d, "s", "busy", now=5)
+        self.assertEqual(r, {"status": "busy", "status_at": 5})
+        self.assertEqual(jw.read_record(self.d, "s"), {"status": "busy", "status_at": 5})
+
+    def test_now_defaults_to_time(self):
+        with mock.patch.object(jw.time, "time", return_value=77.5):
+            r = jw.set_status(self.d, "s", "idle")
+        self.assertEqual(r, {"status": "idle", "status_at": 77.5})
+
+    def test_same_status_no_write(self):
+        self.write("s.json", json.dumps({"status": "busy", "status_at": 1}))
+        self.age("s.json", 1)
+        m = self.mtime()
+        r = jw.set_status(self.d, "s", "busy", now=9)
+        self.assertEqual(r, {"status": "busy", "status_at": 1})
+        self.assertEqual(jw.read_record(self.d, "s"), {"status": "busy", "status_at": 1})
+        self.assertEqual(self.mtime(), m)
+
+    def test_same_waiting_for_no_write(self):
+        self.write("s.json", json.dumps({"status": "waiting", "waiting_for": "a", "status_at": 1}))
+        self.age("s.json", 1)
+        m = self.mtime()
+        jw.set_status(self.d, "s", "waiting", "a", now=9)
+        self.assertEqual(jw.read_record(self.d, "s")["status_at"], 1)
+        self.assertEqual(self.mtime(), m)
+
+    def test_busy_to_waiting(self):
+        jw.set_status(self.d, "s", "busy", now=1)
+        r = jw.set_status(self.d, "s", "waiting", "permission: Bash", now=2)
+        self.assertEqual(r, {"status": "waiting", "waiting_for": "permission: Bash", "status_at": 2})
+        self.assertEqual(jw.read_record(self.d, "s"), r)
+
+    def test_waiting_to_busy_removes_waiting_for(self):
+        jw.set_status(self.d, "s", "waiting", "q", now=1)
+        r = jw.set_status(self.d, "s", "busy", now=2)
+        self.assertEqual(r, {"status": "busy", "status_at": 2})
+        self.assertEqual(jw.read_record(self.d, "s"), r)
+
+    def test_waiting_text_change_rewrites(self):
+        jw.set_status(self.d, "s", "waiting", "a", now=1)
+        r = jw.set_status(self.d, "s", "waiting", "b", now=2)
+        self.assertEqual(r, {"status": "waiting", "waiting_for": "b", "status_at": 2})
+        self.assertEqual(jw.read_record(self.d, "s"), r)
+
+    def test_waiting_without_text_after_text_rewrites(self):
+        jw.set_status(self.d, "s", "waiting", "a", now=1)
+        r = jw.set_status(self.d, "s", "waiting", now=2)
+        self.assertEqual(r, {"status": "waiting", "status_at": 2})
+
+    def test_keeps_other_keys(self):
+        self.write("s.json", json.dumps({"title": "T", "mrs": ["https://g/1"]}))
+        r = jw.set_status(self.d, "s", "idle", now=3)
+        self.assertEqual(r, {"title": "T", "mrs": ["https://g/1"], "status": "idle", "status_at": 3})
+        self.assertEqual(jw.read_record(self.d, "s"), r)
+
+    def test_done_never_overwritten(self):
+        rec = {"status": "done", "status_at": 1, "title": "T"}
+        for state, wf in (("busy", None), ("idle", None), ("waiting", "x"), ("ended", None)):
+            with self.subTest(state=state):
+                self.write("s.json", json.dumps(rec))
+                self.age("s.json", 1)
+                m = self.mtime()
+                jw.set_status(self.d, "s", state, wf, now=9)
+                self.assertEqual(jw.read_record(self.d, "s"), rec)
+                self.assertEqual(self.mtime(), m)
+
+
+class CmdSessionStatus(RecordsBase):
+    def setUp(self):
+        super().setUp()
+        self.d = os.path.join(self.tmp, "state", "agent-sessions")
+        env = mock.patch.dict(os.environ, {"XDG_STATE_HOME": os.path.join(self.tmp, "state"),
+                                           "AGENT_SESSION": "s-1", "KNOWLEDGE_ORIGIN": ""})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def run_cmd(self, *args):
+        with mock.patch.object(sys, "argv", ["jw", "session", "status", *args]):
+            a = jw.parse_args()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            a.func(a)
+        return out.getvalue()
+
+    def rec(self):
+        return jw.read_record(self.d, "s-1")
+
+    def test_states(self):
+        for state in ("busy", "idle", "ended"):
+            with self.subTest(state=state):
+                self.assertEqual(self.run_cmd(state), "")
+                r = self.rec()
+                self.assertEqual(r["status"], state)
+                self.assertIsInstance(r["status_at"], (int, float))
+                self.assertNotIn("waiting_for", r)
+
+    def test_waiting_with_text(self):
+        self.assertEqual(self.run_cmd("waiting", "--waiting-for", "permission: Bash"), "")
+        r = self.rec()
+        self.assertEqual((r["status"], r["waiting_for"]), ("waiting", "permission: Bash"))
+
+    def test_waiting_without_text(self):
+        self.run_cmd("waiting")
+        self.assertNotIn("waiting_for", self.rec())
+
+    def test_waiting_then_busy_clears(self):
+        self.run_cmd("waiting", "--waiting-for", "x")
+        self.run_cmd("busy")
+        self.assertNotIn("waiting_for", self.rec())
+
+    def test_invalid_state_exits_2(self):
+        for state in ("done", "bogus"):
+            with self.subTest(state=state), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as c:
+                    self.run_cmd(state)
+                self.assertEqual(c.exception.code, 2)
+                self.assertFalse(os.path.exists(self.d))
+
+    def test_no_session(self):
+        with mock.patch.dict(os.environ):
+            del os.environ["AGENT_SESSION"]
+            with self.assertRaises(Fail) as c:
+                self.run_cmd("busy")
+        self.assertEqual(str(c.exception), "not in an agent session")
+        self.assertFalse(os.path.exists(self.d))
+
+    def test_empty_session(self):
+        with mock.patch.dict(os.environ, {"AGENT_SESSION": ""}):
+            with self.assertRaises(Fail) as c:
+                self.run_cmd("busy")
+        self.assertEqual(str(c.exception), "not in an agent session")
+
+    def test_invalid_name(self):
+        for name in ["../x", "a b", "-x"]:
+            with self.subTest(name=name), mock.patch.dict(os.environ, {"AGENT_SESSION": name}):
+                with self.assertRaises(Fail) as c:
+                    self.run_cmd("busy")
+                self.assertEqual(str(c.exception), f"invalid session name: {name}")
+                self.assertFalse(os.path.exists(self.d))
+
+    def test_event_origin_allowed(self):
+        with mock.patch.dict(os.environ, {"KNOWLEDGE_ORIGIN": "event:x"}):
+            self.run_cmd("busy")
+        self.assertEqual(self.rec()["status"], "busy")
+
+    def test_waiting_for_needs_waiting(self):
+        for state in ("busy", "idle", "ended"):
+            with self.subTest(state=state):
+                with self.assertRaises(Fail) as c:
+                    self.run_cmd(state, "--waiting-for", "x")
+                self.assertEqual(str(c.exception), "--waiting-for needs waiting")
+                self.assertFalse(os.path.exists(self.d))
+
+    def test_text_sanitised(self):
+        self.run_cmd("waiting", "--waiting-for", "x\ny\x1b")
+        self.assertEqual(self.rec()["waiting_for"], "x y")
+
+    def test_text_truncated(self):
+        self.run_cmd("waiting", "--waiting-for", "a" * 300)
+        self.assertEqual(self.rec()["waiting_for"], "a" * 200)
+
+    def test_empty_text_no_key(self):
+        for text in ("", "  \n "):
+            with self.subTest(text=text):
+                self.run_cmd("waiting", "--waiting-for", text)
+                self.assertEqual(self.rec()["status"], "waiting")
+                self.assertNotIn("waiting_for", self.rec())
+
+    def test_done_record_untouched(self):
+        self.write("s-1.json", json.dumps({"status": "done", "status_at": 1}))
+        self.run_cmd("busy")
+        self.assertEqual(self.rec(), {"status": "done", "status_at": 1})
 
 
 class Deliver(unittest.TestCase):
