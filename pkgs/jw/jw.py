@@ -5,6 +5,7 @@ new, cd, rm and clone print the directory to go to on stdout; the `jw` fish func
 pick prints the chosen repo's name on stdout. Everything else goes to stderr.
 
 agent always starts Claude in a new workspace (s-*, like `jw new`) in a shpool session of the same name.
+resume continues one of the repo's earlier Claude sessions the same way, in the workspace it ran in.
 """
 
 import argparse
@@ -27,6 +28,7 @@ ROOT = os.path.expanduser("~/projects")
 FZF = "fzf"  # the nix package pins the store paths
 SHPOOL = "shpool"
 BASH = "bash"
+CKSUM = "cksum"
 KNOWLEDGE = "knowledge"  # the nix package pins it
 SESSION_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")  # fullmatch
 GITLAB = re.compile(r"^gl-[a-z]+-[0-9]+(-[0-9]+)?$")  # gitlab-context's workspaces: it reuses and cleans them
@@ -338,9 +340,13 @@ def stat_fields(pid, proc="/proc"):
         return f.read().rpartition(")")[2].split()
 
 
+def claude_dir():
+    return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.local/share/claude")
+
+
 def live_claudes():
     """[(pid, session file contents, working directory, shpool session or None)] of the live Claude sessions."""
-    base = f"{os.environ.get('CLAUDE_CONFIG_DIR') or os.path.expanduser('~/.local/share/claude')}/sessions"
+    base = f"{claude_dir()}/sessions"
     try:
         files = os.listdir(base)
     except OSError:
@@ -644,18 +650,32 @@ def cmd_agent(a):
     # the default trunk() is resolved in home without a snapshot
     resolve_in = resolve_dir(home) if a.revision else None
     fetch(home)
+    # one argument: claude takes a single prompt, and a first word like `update` is no subcommand then
+    launch(home, a.detach, ["claude", " ".join(prompt)] if prompt else ["claude"], " ".join(prompt),
+           lambda name: add_workspace(home, a.revision or "trunk()", name, resolve_in))
+
+
+def launch(home, detach, argv, text, make_dir, preferred=None, resume=False):
+    """Run argv in a new shpool session of the repo at home, with a record titled after text, and attach to it unless
+    detach. The session is called preferred if no shpool session has that name, else s-<time>. make_dir(name) returns the
+    directory to run in; it is called under the lock, once the name is chosen. With resume an existing record of the
+    name only gets its workspace updated."""
     rundir = runtime_dir()
     with open(f"{rundir}/jw-agent.lock", "w") as lock:  # names are picked and taken (session started) under it
         fcntl.flock(lock, fcntl.LOCK_EX)
         taken = set(shpool_status())
-        base = time.strftime("s-%m%d-%H%M%S")
-        name, i = base, 2
-        while name in taken or os.path.exists(f"{home}.agents/{name}"):
-            name, i = f"{base}-{i}", i + 1
-        d = add_workspace(home, a.revision or "trunk()", name, resolve_in)
+        if preferred and SESSION_NAME.fullmatch(preferred) and preferred not in taken:
+            name = preferred
+        else:
+            base = time.strftime("s-%m%d-%H%M%S")
+            name, i = base, 2
+            while name in taken or os.path.exists(f"{home}.agents/{name}"):
+                name, i = f"{base}-{i}", i + 1
+        d = make_dir(name)
         env = agent_env(os.environ) | {"AGENT_SESSION": name}
+        fields = {"workspace": d} if resume and read_record(records_dir(), name) is not None else task_record(text, d)
         try:  # the inbox shows the session from its record; a failure must not stop the session
-            update_record(records_dir(), name, task_record(" ".join(prompt), d))
+            update_record(records_dir(), name, fields)
         except (Fail, OSError, ValueError) as e:
             sys.stderr.write(f"jw: cannot write the session record: {e}\n")
         # started from a service (task.new) there is no terminal env, and claude falls back to no colors
@@ -671,8 +691,7 @@ def cmd_agent(a):
                     f.write(f"export {k}={shlex.quote(v)}\n")
             f.write('rm -f -- "$0"\n')  # after the exports: PATH is set now
             f.write(f"cd -- {shlex.quote(d)} || exit 1\n")
-            # one argument: claude takes a single prompt, and a first word like `update` is no subcommand then
-            f.write(f"exec {shlex.join(['claude', ' '.join(prompt)] if prompt else ['claude'])}\n")
+            f.write(f"exec {shlex.join(argv)}\n")
         try:
             status = subprocess.run([SHPOOL, "--no-daemonize", "attach", "-b", "--ttl", "1d", "-d", d,
                                      "-c", shlex.join([BASH, job]), name]).returncode
@@ -683,7 +702,7 @@ def cmd_agent(a):
             if os.path.exists(job):
                 os.unlink(job)
             raise Fail(f"shpool attach failed for session {name}" if status is not None else "")
-    if a.detach:
+    if detach:
         sys.stderr.write(f"jw: started {name} in {os.path.basename(home)}\n")
         sys.stderr.write(f"jw attach {name}\n")  # agent-inbox parses this line (its `N`)
         return
@@ -696,6 +715,104 @@ def cmd_agent(a):
     if state is None:
         raise Fail(f"session {name} ended before attaching")
     attach(name)
+
+
+def project_key(home):
+    """The directory name under projects/ that the claude wrapper (__claude_project) gives the repo at home."""
+    key = re.sub(r"[^A-Za-z0-9]", "-", home)
+    if len(key) > 64:
+        crc = subprocess.run([CKSUM], input=home.encode(), stdout=subprocess.PIPE).stdout.split()[0].decode()
+        key = f"{key[-50:]}-{crc}"
+    return key
+
+
+def user_text(entry):
+    """The text of a transcript's user entry (whitespace collapsed), empty for tool results."""
+    message = entry.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, list):
+        content = " ".join(b["text"] for b in content if isinstance(b, dict) and isinstance(b.get("text"), str))
+    return " ".join(content.split()) if isinstance(content, str) else ""
+
+
+def workspace_root(cwd, home):
+    """The root of the workspace of the repo at home that directory cwd is in, by string so that deleted directories
+    work; None outside the repo."""
+    agents = f"{home}.agents/"
+    if cwd.startswith(agents):
+        name = cwd[len(agents):].split("/")[0]
+        return agents + name if name else None
+    if cwd == home or cwd.startswith(home + "/"):
+        return home
+    return None
+
+
+def transcript(path, home):
+    """(root of the last workspace of the repo at home it worked in, title) of the transcript, None if it has no user
+    message or workspace."""
+    root = ai = custom = first = None
+    with open(path, errors="replace") as f:
+        for line in f:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(e, dict):
+                continue
+            if isinstance(e.get("cwd"), str):
+                root = workspace_root(e["cwd"], home) or root
+            if e.get("type") == "ai-title":
+                ai = e.get("aiTitle") or ai
+            elif e.get("type") == "custom-title":
+                custom = e.get("customTitle") or custom
+            elif e.get("type") == "user" and not e.get("isMeta"):
+                first = first or user_text(e)
+    if not (first and root):
+        return None
+    return root, " ".join(str(custom or ai or first)[:100].split())
+
+
+def cmd_resume(a):
+    if os.environ.get("KNOWLEDGE_ORIGIN", "").startswith("event:"):  # untrusted comment text must not hand off
+        raise Fail("event sessions cannot resume sessions")
+    home = None
+    if not a.repo:
+        with contextlib.suppress(Fail):
+            home = locate()[1]
+    home = home or repo_home(a.repo)
+    base = f"{claude_dir()}/projects/{project_key(home)}"
+    try:
+        files = sorted(((os.path.getmtime(f"{base}/{n}"), n.removesuffix(".jsonl"))
+                        for n in os.listdir(base) if n.endswith(".jsonl")), reverse=True)
+    except OSError:
+        files = []
+    live = {s.get("sessionId") for _, s, _, _ in live_claudes()}
+    rows = {}
+    for mtime, sid in files:
+        if sid in live:
+            continue
+        try:
+            found = transcript(f"{base}/{sid}.jsonl", home)
+        except OSError:
+            continue
+        if found and not GITLAB.match(os.path.basename(found[0])):
+            when = time.strftime("%m-%d %H:%M", time.localtime(mtime))
+            rows[f"{when}\t{os.path.basename(found[0])}\t{found[1]}\t{sid[:8]}"] = (sid, *found)
+            if a.last:
+                break
+    if not rows:
+        raise Fail(f"no sessions to resume in {os.path.basename(home)}")
+    sid, root, title = rows[next(iter(rows)) if a.last else pick(list(rows))]
+
+    def make_dir(name):
+        if os.path.isdir(root):
+            return root
+        fetch(home)
+        d = add_workspace(home, "trunk()", name, None)
+        sys.stderr.write(f"jw: {root} is gone, recreated it as {d} on trunk\n")
+        return d
+
+    launch(home, a.detach, ["claude", "--resume", sid], title, make_dir, os.path.basename(root), True)
 
 
 def match_session(names, prefix):
@@ -1005,6 +1122,11 @@ def parse_args():
     s.add_argument("-r", "--revision", help="revision, bookmark or bookmark@origin to start the new workspace from (default: trunk()); when given in this repo, it is resolved in the current workspace")
     s.add_argument("args", nargs=argparse.REMAINDER, help=f"[repo under {ROOT}] [prompt...]; after a leading -- everything is the prompt")
     s.set_defaults(func=cmd_agent)
+    s = sub.add_parser("resume", aliases=["r"], help="resume a Claude session of a repo (any of its workspaces; default: this one) in a shpool session, in its workspace (recreated on trunk() if it is gone)")
+    s.add_argument("-d", "--detach", action="store_true", help="start the session in the background")
+    s.add_argument("-l", "--last", action="store_true", help="resume the newest session without asking")
+    s.add_argument("repo", nargs="?", help=f"repo under {ROOT} (default: this one, else pick one)")
+    s.set_defaults(func=cmd_resume)
     s = sub.add_parser("attach", aliases=["at"], help="attach to a Claude shpool session (default: pick one, this repo's first); a unique prefix of the name is enough")
     s.add_argument("name", nargs="?")
     s.set_defaults(func=cmd_attach)
