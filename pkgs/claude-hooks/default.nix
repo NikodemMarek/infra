@@ -57,6 +57,16 @@ let
     ];
   };
 
+  sudoGuard = shellHook {
+    name = "claude-sudo-guard";
+    src = ./sudo-guard.sh;
+    runtimeInputs = [
+      jq
+      coreutils
+      gnugrep
+    ];
+  };
+
   # Deliberately without errexit: a failing git call must never fail the hook.
   architectAutocommit = shellHook {
     name = "claude-architect-autocommit";
@@ -227,6 +237,7 @@ symlinkJoin {
   paths = [
     guardWrites
     verifierGuard
+    sudoGuard
     architectAutocommit
     routeEvent
     askpass
