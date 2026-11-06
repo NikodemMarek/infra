@@ -1605,5 +1605,551 @@ class Deliver(unittest.TestCase):
         sl.assert_not_called()
 
 
+def cp(rc, out=""):
+    return subprocess.CompletedProcess([], rc, stdout=out)
+
+
+class StackMerged(unittest.TestCase):
+    def run_with(self, **kw):
+        with mock.patch.object(subprocess, "run", **kw) as m:
+            return jw.stack_merged("/d"), m
+
+    def test_call(self):
+        _, m = self.run_with(return_value=cp(0, "merged\n"))
+        args, kwargs = m.call_args
+        self.assertEqual(args[0], ["jj", "stack", "status"])
+        self.assertEqual(kwargs["cwd"], "/d")
+        self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(kwargs["stdout"], subprocess.PIPE)
+        self.assertNotIn("stderr", kwargs)
+        self.assertEqual(kwargs["timeout"], 300)
+
+    def test_merged(self):
+        self.assertIs(self.run_with(return_value=cp(0, "x\nmerged\n\n"))[0], True)
+
+    def test_merged_not_last_line(self):
+        self.assertIsNone(self.run_with(return_value=cp(0, "merged\nother\n"))[0])
+
+    def test_plain_log_output(self):
+        self.assertIsNone(self.run_with(return_value=cp(0, "@  abc 1 file\n"))[0])
+
+    def test_rc1(self):
+        self.assertIs(self.run_with(return_value=cp(1, "unmerged\n"))[0], False)
+
+    def test_rc2(self):
+        self.assertIsNone(self.run_with(return_value=cp(2, "merged\n"))[0])
+
+    def test_other_rc(self):
+        self.assertIsNone(self.run_with(return_value=cp(127))[0])
+
+    def test_oserror(self):
+        self.assertIsNone(self.run_with(side_effect=OSError("no jj"))[0])
+
+    def test_timeout(self):
+        self.assertIsNone(self.run_with(side_effect=subprocess.TimeoutExpired("jj", 300))[0])
+
+    def test_unicode_error(self):
+        err = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+        self.assertIsNone(self.run_with(side_effect=err)[0])
+
+    def test_unchecked_is_fail(self):
+        self.assertTrue(issubclass(jw.Unchecked, Fail))
+
+
+class Confirm(unittest.TestCase):
+    def test_yes_skips_tty(self):
+        err = io.StringIO()
+        with mock.patch("builtins.open", side_effect=AssertionError("opened")) as op, \
+                mock.patch.object(sys, "stderr", err):
+            jw.confirm("Delete? [y/N] ", yes=True)
+        op.assert_not_called()
+        self.assertIn("Delete? [y/N] ", err.getvalue())
+        self.assertIn("y (--yes)", err.getvalue())
+
+    def test_ask_lost_passes_yes(self):
+        with mock.patch.object(jw, "jj", return_value=""), \
+                mock.patch.object(jw, "untracked", return_value=["a", "b"]), \
+                mock.patch.object(jw, "confirm") as c:
+            jw.ask_lost("/d", yes=True)
+        c.assert_called_once()
+        a, k = c.call_args
+        self.assertTrue(k.get("yes", a[1] if len(a) > 1 else False))
+
+
+class AskLostReal(unittest.TestCase):
+    """ask_lost with the real confirm and a real directory; only jj is mocked."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.d = tmp.name
+        os.makedirs(f"{self.d}/.jj")
+
+    def ask(self):
+        err = io.StringIO()
+        with mock.patch.object(jw, "jj", return_value=""), mock.patch.object(sys, "stderr", err):
+            jw.ask_lost(self.d, yes=True)
+        return err.getvalue()
+
+    def touch(self, rel):
+        os.makedirs(os.path.dirname(f"{self.d}/{rel}"), exist_ok=True)
+        open(f"{self.d}/{rel}", "w").close()
+
+    def test_yes_lists_every_file(self):
+        names = [f"file{i}.txt" for i in range(12)]
+        for n in names:
+            self.touch(n)
+        out = self.ask()
+        for n in names:
+            self.assertIn(n, out)
+        self.assertNotIn("more", out)
+        self.assertIn("y (--yes)", out)
+
+    def test_yes_collapses_big_directory(self):
+        for i in range(30):
+            self.touch(f"big/f{i}")
+        for i in range(8):
+            self.touch(f"top{i}")
+        out = self.ask()
+        for i in range(8):
+            self.assertIn(f"top{i}", out)
+        self.assertIn("big", out)
+        self.assertIn("30", out)
+        self.assertNotIn("big/f7", out)
+        self.assertNotIn("big/f29", out)
+
+
+class CheckClaudes(unittest.TestCase):
+    NOW = 1_000_000.0
+
+    def check(self, sessions, idle=3600, state=None, top=True):
+        state = {"s": "disconnected"} if state is None else state
+        with mock.patch.object(jw, "descendants", return_value={1}), \
+                mock.patch.object(jw, "in_use", return_value=False), \
+                mock.patch.object(jw, "session_top", return_value=top) as st, \
+                mock.patch.object(jw, "shpool_status", return_value=state) as ss, \
+                mock.patch.object(time, "time", return_value=self.NOW):
+            r = jw.check_claudes("/d", sessions, idle)
+        return r, st, ss
+
+    def sess(self, status="idle", age=7200, name="s"):
+        return {10: (status, name, (self.NOW - age) * 1000, "sid")}
+
+    def test_idle_passes(self):
+        r, st, ss = self.check(self.sess())
+        self.assertEqual(r, ["s"])
+        st.assert_called()
+        ss.assert_called()
+
+    def test_waiting_fails(self):
+        with self.assertRaises(Fail):
+            self.check(self.sess(status="waiting"))
+
+    def test_attached_fails(self):
+        with self.assertRaises(Fail):
+            self.check(self.sess(), state={"s": "attached"})
+
+    def test_event_launcher_parent_passes(self):
+        # real session_top over a fake /proc: Claude -> event-claude-la -> shpool
+        proc = tempfile.TemporaryDirectory()
+        self.addCleanup(proc.cleanup)
+        for pid, ppid, comm in [(10, 20, "claude"), (20, 1, "event-claude-la"), (1, 0, "shpool")]:
+            os.makedirs(f"{proc.name}/{pid}")
+            with open(f"{proc.name}/{pid}/stat", "w") as f:
+                f.write(f"{pid} (x) S {ppid} 1 1")
+            with open(f"{proc.name}/{pid}/comm", "w") as f:
+                f.write(comm + "\n")
+        real = jw.session_top
+        with mock.patch.object(jw, "session_top", side_effect=lambda pid: real(pid, proc.name)) as st, \
+                mock.patch.object(jw, "descendants", return_value={10}), \
+                mock.patch.object(jw, "in_use", return_value=False), \
+                mock.patch.object(jw, "shpool_status", return_value={"s": "disconnected"}), \
+                mock.patch.object(time, "time", return_value=self.NOW):
+            self.assertEqual(jw.check_claudes("/d", self.sess(), 3600), ["s"])
+        st.assert_called()
+
+    def test_not_session_top_fails(self):
+        with self.assertRaises(Fail):
+            self.check(self.sess(), top=False)
+
+    def test_idle_threshold(self):
+        self.assertEqual(self.check(self.sess(age=600), idle=300)[0], ["s"])
+        with self.assertRaises(Fail):
+            self.check(self.sess(age=600), idle=1200)
+        with self.assertRaises(Fail):
+            self.check(self.sess(age=7200), idle=14400)
+
+    def test_no_shpool_session_fails(self):
+        with self.assertRaises(Fail):
+            self.check(self.sess(name=None))
+
+
+class ClaudeSessions(unittest.TestCase):
+    def test_four_tuples(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        d = os.path.realpath(tmp.name)
+        os.makedirs(f"{d}/sub")
+        live = [(10, {"status": "idle", "statusUpdatedAt": 5, "sessionId": "sid1"}, d, "s1"),
+                (11, {"status": "busy", "statusUpdatedAt": 6, "sessionId": "sid2"}, f"{d}/sub", None),
+                (12, {"status": "idle", "statusUpdatedAt": 7, "sessionId": "sid3"}, "/elsewhere", "s3")]
+        with mock.patch.object(jw, "live_claudes", return_value=live):
+            r = jw.claude_sessions(d)
+        self.assertEqual(r, {10: ("idle", "s1", 5, "sid1"), 11: ("busy", None, 6, "sid2")})
+
+
+class StopSessions(unittest.TestCase):
+    def test_none_not_in_use(self):
+        with mock.patch.object(jw, "claude_sessions", return_value={}), \
+                mock.patch.object(jw, "in_use", return_value=False), \
+                mock.patch.object(jw, "kill_shpool") as k:
+            self.assertEqual(jw.stop_sessions("/d", 3600), [])
+        k.assert_not_called()
+
+    def test_none_in_use_fails(self):
+        with mock.patch.object(jw, "claude_sessions", return_value={}), \
+                mock.patch.object(jw, "in_use", return_value=True):
+            with self.assertRaises(Fail):
+                jw.stop_sessions("/d", 3600)
+
+    def test_kills_and_returns(self):
+        sessions = {10: ("idle", "s1", 1, "sid1"), 11: ("idle", "s2", 1, "sid2")}
+        with mock.patch.object(jw, "claude_sessions", return_value=sessions), \
+                mock.patch.object(jw, "check_claudes", return_value=["s1", "s2"]) as c, \
+                mock.patch.object(jw, "kill_shpool") as k:
+            r = jw.stop_sessions("/d", 99)
+        self.assertEqual(sorted(r), [("s1", "sid1"), ("s2", "sid2")])
+        self.assertEqual(c.call_args[0][:2], ("/d", sessions))
+        self.assertIn(99, list(c.call_args[0][2:]) + list(c.call_args[1].values()))
+        k.assert_called()
+
+    def test_check_failure_kills_nothing(self):
+        sessions = {10: ("waiting", "s1", 1, "sid1")}
+        with mock.patch.object(jw, "claude_sessions", return_value=sessions), \
+                mock.patch.object(jw, "check_claudes", side_effect=Fail("busy")), \
+                mock.patch.object(jw, "kill_shpool") as k:
+            with self.assertRaises(Fail):
+                jw.stop_sessions("/d", 3600)
+        k.assert_not_called()
+
+
+class Retire(unittest.TestCase):
+    D = "/h.agents/w"
+    HEADS = "heads(trunk().. ~ ::(working_copies() | remote_bookmarks()))"
+
+    def setUp(self):
+        self.calls = []
+        self.at = "aaa\n"
+        self.merged = True
+        self.sessions = {10: ("idle", "s", 1, "sid")}
+
+        def merged(d):
+            self.calls.append("stack_merged")
+            return self.merged
+
+        def kill(*a, **k):
+            self.calls.append("stop_sessions")
+            return [("s", "sid")]
+
+        def ask(*a, **k):
+            self.calls.append("ask_lost")
+
+        def rm(*a, **k):
+            self.calls.append("remove")
+
+        self.heads = ""
+        self.heads_fail = False
+        self.jj_calls = []
+
+        def jjfn(*a, **k):
+            self.jj_calls.append((a, k))
+            if self.HEADS in a:
+                self.calls.append("heads")
+                if self.heads_fail:
+                    raise Fail("jj failed")
+                return self.heads
+            return self.at
+
+        self.m = {}
+        for n, kw in [("in_use", {"return_value": False}),
+                      ("claude_sessions", {"side_effect": lambda d: self.sessions}),
+                      ("check_claudes", {"return_value": ["s"]}),
+                      ("stack_merged", {"side_effect": merged}),
+                      ("stop_sessions", {"side_effect": kill}),
+                      ("ask_lost", {"side_effect": ask}),
+                      ("jj", {"side_effect": jjfn}),
+                      ("remove", {"side_effect": rm})]:
+            p = mock.patch.object(jw, n, **kw)
+            self.m[n] = p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(sys, "stderr", io.StringIO())
+        p.start()
+        self.addCleanup(p.stop)
+
+    def retire(self, yes=False):
+        return jw.retire("/h", "w", yes=yes, idle=3600)
+
+    def test_happy(self):
+        r = self.retire()
+        self.assertEqual(r, [("s", "sid")])
+        self.assertEqual([c for c in self.calls if c in ("stack_merged", "stop_sessions", "ask_lost", "remove")],
+                         ["stack_merged", "ask_lost", "stop_sessions", "ask_lost", "remove"])
+        self.m["remove"].assert_called_once_with("/h", "w")
+        self.m["stop_sessions"].assert_called_once_with(self.D, 3600)
+
+    def test_ask_lost_gets_yes(self):
+        self.retire(yes=True)
+        a, k = self.m["ask_lost"].call_args
+        self.assertEqual(a[0], self.D)
+        self.assertTrue(k.get("yes", a[1] if len(a) > 1 else False))
+
+    def test_unmerged(self):
+        self.merged = False
+        with self.assertRaises(Fail) as c:
+            self.retire()
+        self.assertEqual(str(c.exception), "unmerged work")
+        self.assertNotIsInstance(c.exception, jw.Unchecked)
+        self.m["stop_sessions"].assert_not_called()
+        self.m["remove"].assert_not_called()
+
+    def test_unchecked_before_kill(self):
+        self.merged = None
+        with self.assertRaises(jw.Unchecked):
+            self.retire()
+        self.m["stop_sessions"].assert_not_called()
+        self.m["ask_lost"].assert_not_called()
+        self.m["remove"].assert_not_called()
+
+    def test_in_use_needs_sessions(self):
+        self.m["in_use"].return_value = True
+        self.sessions = {}
+        with self.assertRaises(Fail):
+            self.retire()
+        self.m["stop_sessions"].assert_not_called()
+        self.m["remove"].assert_not_called()
+
+    def test_in_use_check_claudes_fails(self):
+        self.m["in_use"].return_value = True
+        self.m["check_claudes"].side_effect = Fail("busy")
+        with self.assertRaises(Fail):
+            self.retire()
+        self.m["stack_merged"].assert_not_called()
+        self.m["stop_sessions"].assert_not_called()
+
+    def test_in_use_passing_continues(self):
+        self.m["in_use"].return_value = True
+        self.assertEqual(self.retire(), [("s", "sid")])
+        self.m["remove"].assert_called_once()
+
+    def test_changed_at_after_ask_keeps_workspace(self):
+        def ask(*a, **k):
+            self.at = "bbb\n"
+        self.m["ask_lost"].side_effect = ask
+        with self.assertRaises(Fail):
+            self.retire()
+        self.m["remove"].assert_not_called()
+
+    def test_changed_at_after_kill_keeps_workspace(self):
+        def kill(*a, **k):
+            self.at = "ccc\n"
+            return [("s", "sid")]
+        self.m["stop_sessions"].side_effect = kill
+        with self.assertRaises(Fail):
+            self.retire()
+        self.m["remove"].assert_not_called()
+
+    def order(self):
+        return [c for c in self.calls if c in ("stack_merged", "stop_sessions", "ask_lost", "heads", "remove")]
+
+    def test_yes_order(self):
+        self.retire(yes=True)
+        self.assertEqual(self.order(), ["stack_merged", "stop_sessions", "ask_lost", "heads", "remove"])
+
+    def test_no_yes_asks_before_kill(self):
+        self.retire(yes=False)
+        o = self.order()
+        self.assertLess(o.index("ask_lost"), o.index("stop_sessions"))
+        self.assertLess(o.index("stop_sessions"), o.index("remove"))
+
+    def test_no_yes_answer_no_kills_nothing(self):
+        self.m["ask_lost"].side_effect = Fail("nothing removed")
+        with self.assertRaises(Fail):
+            self.retire(yes=False)
+        self.m["stop_sessions"].assert_not_called()
+        self.m["remove"].assert_not_called()
+
+    def test_no_yes_change_after_kill_keeps_workspace(self):
+        def kill(*a, **k):
+            self.at = "ccc\n"
+            return [("s", "sid")]
+        self.m["stop_sessions"].side_effect = kill
+        with self.assertRaises(Fail) as c:
+            self.retire(yes=False)
+        self.assertIn("changed while removing", str(c.exception))
+        self.m["remove"].assert_not_called()
+
+    def test_at_recorded_before_stack_merged(self):
+        def merged(d):
+            self.at = "bbb\n"  # changes while the stack check runs
+            return True
+        self.m["stack_merged"].side_effect = merged
+        for yes in (True, False):
+            with self.subTest(yes=yes):
+                self.at = "aaa\n"
+                with self.assertRaises(Fail) as c:
+                    self.retire(yes=yes)
+                self.assertIn("changed while removing", str(c.exception))
+                self.m["remove"].assert_not_called()
+
+    def test_failure_carries_killed(self):
+        def ask(*a, **k):
+            self.at = "bbb\n"
+        self.m["ask_lost"].side_effect = ask
+        with self.assertRaises(Fail) as c:
+            self.retire(yes=True)
+        self.assertEqual(c.exception.killed, [("s", "sid")])
+
+    def test_oserror_carries_killed(self):
+        self.m["remove"].side_effect = OSError("busy")
+        with self.assertRaises(OSError) as c:
+            self.retire(yes=True)
+        self.assertEqual(c.exception.killed, [("s", "sid")])
+
+    def test_ask_lost_failure_after_kill_carries_killed(self):
+        self.m["ask_lost"].side_effect = Fail("nothing removed")
+        with self.assertRaises(Fail) as c:
+            self.retire(yes=True)
+        self.assertEqual(c.exception.killed, [("s", "sid")])
+
+    def test_heads_log_before_remove(self):
+        self.heads = "abc something\n"
+        self.retire()
+        o = self.order()
+        self.assertLess(o.index("heads"), o.index("remove"))
+        self.assertIn("abc something", sys.stderr.getvalue())
+
+    def test_heads_failure_does_not_block_removal(self):
+        self.heads_fail = True
+        self.assertEqual(self.retire(), [("s", "sid")])
+        self.m["remove"].assert_called_once_with("/h", "w")
+
+    def test_jj_calls_use_workspace_cwd(self):
+        self.retire(yes=True)
+        self.assertTrue(self.jj_calls)
+        for a, k in self.jj_calls:
+            self.assertEqual(k.get("cwd"), self.D, a)
+
+
+class CmdPrune(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = tmp.name
+        os.makedirs(f"{self.root}/r.agents/ws/.jj")
+        self.m = {}
+        for n, kw in [("ROOT", {"new": self.root}),
+                      ("repos", {"return_value": ["r"]}),
+                      ("jj", {"return_value": "main\n"}),
+                      ("recent", {"return_value": False}),
+                      ("in_use", {"return_value": False}),
+                      ("loads", {"return_value": True})]:
+            p = mock.patch.object(jw, n, **kw)
+            self.m[n] = p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(shutil, "which", return_value=None)
+        p.start()
+        self.addCleanup(p.stop)
+        self.err = io.StringIO()
+        p = mock.patch.object(sys, "stderr", self.err)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def prune(self, yes):
+        jw.cmd_prune(type("A", (), {"yes": yes})())
+
+    def test_yes_reaches_retire(self):
+        with mock.patch.object(jw, "retire", return_value=[]) as r:
+            self.prune(True)
+        r.assert_called_once()
+        a, k = r.call_args
+        self.assertEqual(a[:2], (f"{self.root}/r", "ws"))
+        self.assertIs(k["yes"], True)
+        self.assertEqual(k["idle"], 3600)
+
+    def test_no_yes(self):
+        with mock.patch.object(jw, "retire", return_value=[]) as r:
+            self.prune(False)
+        self.assertIs(r.call_args[1]["yes"], False)
+
+    def test_fail_prints_kept(self):
+        with mock.patch.object(jw, "retire", side_effect=Fail("unmerged work")):
+            self.prune(True)
+        self.assertIn("kept", self.err.getvalue())
+        self.assertIn("unmerged work", self.err.getvalue())
+
+    def test_yes_keeps_broken(self):
+        self.m["loads"].return_value = False
+        with mock.patch.object(jw, "retire", return_value=[]) as r, \
+                mock.patch.object(jw, "remove_broken") as rb, \
+                mock.patch.object(jw, "confirm") as c:
+            self.prune(True)
+        rb.assert_not_called()
+        c.assert_not_called()
+        r.assert_not_called()
+        self.assertIn("jw: kept ", self.err.getvalue())
+        self.assertIn("r.agents/ws", self.err.getvalue())
+
+    def test_no_yes_confirms_and_deletes_broken(self):
+        self.m["loads"].return_value = False
+        with mock.patch.object(jw, "remove_broken") as rb, \
+                mock.patch.object(jw, "confirm") as c:
+            self.prune(False)
+        c.assert_called_once()
+        rb.assert_called_once()
+
+    def test_no_yes_declined_keeps_broken(self):
+        self.m["loads"].return_value = False
+        with mock.patch.object(jw, "remove_broken") as rb, \
+                mock.patch.object(jw, "confirm", side_effect=Fail("nothing removed")):
+            self.prune(False)
+        rb.assert_not_called()
+
+    def test_no_fetch(self):
+        with mock.patch.object(jw, "retire", return_value=[]):
+            self.prune(True)
+        for a, k in self.m["jj"].call_args_list:
+            self.assertNotIn("fetch", a)
+
+    def test_killed_printed_on_success(self):
+        with mock.patch.object(jw, "retire", return_value=[("shp1", "sid")]):
+            self.prune(True)
+        self.assertIn("removed", self.err.getvalue())
+        self.assertIn("shp1", self.err.getvalue())
+
+    def test_killed_printed_on_failure(self):
+        e = Fail("changed while removing")
+        e.killed = [("shp1", "sid")]
+        with mock.patch.object(jw, "retire", side_effect=e):
+            self.prune(True)
+        self.assertIn("kept", self.err.getvalue())
+        self.assertIn("changed while removing", self.err.getvalue())
+        self.assertIn("shp1", self.err.getvalue())
+
+    def test_killed_printed_on_oserror(self):
+        e = OSError("busy")
+        e.killed = [("shp1", "sid")]
+        with mock.patch.object(jw, "retire", side_effect=e):
+            self.prune(True)
+        self.assertIn("kept", self.err.getvalue())
+        self.assertIn("shp1", self.err.getvalue())
+
+    def test_unchecked_is_kept(self):
+        with mock.patch.object(jw, "retire", side_effect=jw.Unchecked("couldn't check the stack")):
+            self.prune(True)
+        self.assertIn("kept", self.err.getvalue())
+        self.assertIn("couldn't check the stack", self.err.getvalue())
+        self.assertNotIn("removed", self.err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
