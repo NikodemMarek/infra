@@ -2154,7 +2154,7 @@ class Launch(unittest.TestCase):
         name, err = self.go([], "w1")
         self.assertEqual(name, "w1")
         self.assertIn("export SHPOOL_SESSION_NAME=w1\n", self.job)
-        self.assertIn("exec claude --resume sid\n", self.job)
+        self.assertIn("exec direnv exec . claude --resume sid\n", self.job)
         self.assertEqual(self.argv[-1], "w1")
         self.assertIn("jw attach w1", err)
 
