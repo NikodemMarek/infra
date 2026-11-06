@@ -39,7 +39,7 @@ pub struct Question {
 }
 
 /// What a session started by `jw agent` or the event handlers works on (the JSON record
-/// `<records dir>/<name>.json` that `jw session set` writes); fields the record does not have
+/// `<records dir>/<name>.json` that `jw session` and the status hooks write); fields the record does not have
 /// are empty.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Record {
@@ -50,8 +50,13 @@ pub struct Record {
     pub description: String,
     pub url: String,
     pub mrs: Vec<String>,
-    /// Set by `jw done`: the session finished its work.
-    pub done: bool,
+    /// What the session does, written by the Claude hooks and `jw done`: `busy`, `idle`,
+    /// `waiting`, `ended` or `done`.
+    pub status: String,
+    /// What a `waiting` session waits for (`permission prompt`).
+    pub waiting_for: String,
+    /// When the status last changed (seconds since the epoch).
+    pub status_at: Option<f64>,
 }
 
 impl Record {
@@ -79,7 +84,9 @@ impl Record {
                 .filter_map(Value::as_str)
                 .map(String::from)
                 .collect(),
-            done: v.get("done").and_then(Value::as_bool) == Some(true),
+            status: text("status"),
+            waiting_for: text("waiting_for"),
+            status_at: v.get("status_at").and_then(Value::as_f64),
         })
     }
 

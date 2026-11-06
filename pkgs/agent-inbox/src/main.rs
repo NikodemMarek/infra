@@ -16,8 +16,8 @@
 //!                            {"behavior":"allow"}, see ADR-025)
 //!   agent-inbox dismiss <id>
 //!   agent-inbox sessions     live Claude sessions with AGENT_SESSION: pid, status, age of the status,
-//!                            shpool session, place, session id (TSV, newest first; read from the
-//!                            session registry)
+//!                            shpool session, place, session id (TSV, newest first; the sessions come
+//!                            from the session registry, the status from their session record)
 
 mod client;
 mod reply;
@@ -127,15 +127,21 @@ fn list() -> Result<()> {
 
 fn sessions() -> Result<()> {
     let dir = sessions::config_dir().join("sessions");
+    let records = client::records_dir();
     let now = client::now();
     let mut out = io::stdout().lock();
     for s in sessions::load(&dir, Path::new("/proc")) {
+        let record = records
+            .as_deref()
+            .and_then(|d| client::Record::load(d, &s.agent_session));
+        let status = record.as_ref().map_or("", |r| r.status.as_str());
+        let status_at = record.as_ref().and_then(|r| r.status_at);
         writeln!(
             out,
             "{}\t{}\t{}\t{}\t{}\t{}",
             s.pid,
-            clean(&s.status),
-            client::age(s.status_at, now),
+            clean(status),
+            client::age(status_at.unwrap_or(s.started_at), now),
             clean(&s.shpool),
             clean(&s.place()),
             clean(&s.session_id)

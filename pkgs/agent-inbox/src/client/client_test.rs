@@ -551,33 +551,38 @@ fn record_loads_all_fields_and_skips_non_string_mrs() {
             description: "d".into(),
             url: "https://g/7".into(),
             mrs: vec!["https://g/8".into()],
-            done: false,
+            ..Record::default()
         })
     );
 }
 
 #[test]
-fn record_done_is_true_only_for_the_bool_true() {
-    let dir = tmp("rec-done");
-    let cases = [
-        ("t", r#"{"done":true}"#, true),
-        ("f", r#"{"done":false}"#, false),
-        ("absent", r#"{"kind":"x"}"#, false),
-        ("str", r#"{"done":"true"}"#, false),
-        ("one", r#"{"done":1}"#, false),
-        ("null", r#"{"done":null}"#, false),
-    ];
-    for (name, json, want) in cases {
-        put(&dir, &format!("{name}.json"), json);
-        let rec = Record::load(&dir, name).expect(name);
-        assert_eq!(rec.done, want, "{json}");
-    }
+fn record_loads_the_status_fields() {
+    let dir = tmp("rec-status");
+    put(
+        &dir,
+        "s.json",
+        r#"{"status":"waiting","waiting_for":"permission prompt","status_at":1700000000.5}"#,
+    );
+    assert_eq!(
+        Record::load(&dir, "s"),
+        Some(Record {
+            status: "waiting".into(),
+            waiting_for: "permission prompt".into(),
+            status_at: Some(1700000000.5),
+            ..Record::default()
+        })
+    );
 }
 
 #[test]
 fn record_with_wrong_types_reads_as_empty() {
     let dir = tmp("rec-types");
-    put(&dir, "s.json", r#"{"kind":1,"mrs":"x"}"#);
+    put(
+        &dir,
+        "s.json",
+        r#"{"kind":1,"mrs":"x","status":2,"waiting_for":true,"status_at":"now"}"#,
+    );
     assert_eq!(Record::load(&dir, "s"), Some(Record::default()));
 }
 
