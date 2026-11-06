@@ -160,8 +160,23 @@ let
     ];
   };
 
+  # Sets the status of the session record (busy, idle, waiting, ended); never fails.
+  statusHook = shellHook {
+    name = "claude-status-hook";
+    src = ./status-hook.sh;
+    runtimeInputs = [
+      jq
+      coreutils
+      jw
+    ];
+    bashOptions = [
+      "nounset"
+      "pipefail"
+    ];
+  };
+
   # Stop hook: points an event-started session at queued follow-up prompts (blocks the stop), else tells
-  # the user it waits for them (claude.waiting).
+  # the user it waits for them (claude.waiting) and sets the status to idle.
   stopHook = shellHook {
     name = "claude-stop-hook";
     src = ./stop-hook.sh;
@@ -170,6 +185,7 @@ let
       coreutils
       routeEvent
       eventQueue
+      statusHook
     ];
     bashOptions = [
       "nounset"
@@ -243,6 +259,7 @@ symlinkJoin {
     askpass
     permissionHook
     eventQueue
+    statusHook
     stopHook
     promptHook
     mcpDefaults
@@ -250,7 +267,7 @@ symlinkJoin {
   ];
 
   meta = {
-    description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop and UserPromptSubmit hooks (queued follow-up prompts of event-started sessions, waiting notification), jj workspaces for isolated agents, project MCP servers seeded as disabled";
+    description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop and UserPromptSubmit hooks (queued follow-up prompts of event-started sessions, waiting notification), the status hook (session record status), jj workspaces for isolated agents, project MCP servers seeded as disabled";
     platforms = lib.platforms.unix;
   };
 }
