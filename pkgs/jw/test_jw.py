@@ -1338,7 +1338,9 @@ class CmdMsg(unittest.TestCase):
 
     def test_session_appearing_during_wait(self):
         sock = self.listen()
-        threading.Timer(0.6, self.register, (os.getpid(), "late", sock)).start()
+        # start time computed here: under qemu-user it differs per thread
+        start = jw.stat_fields(os.getpid())[19]
+        threading.Timer(0.6, self.register, (os.getpid(), "late", sock, None, start)).start()
         with mock.patch.object(jw, "MSG_WAIT", 3):
             self.msg("late", "hi")
         self.assertEqual(self.sent(), "Message from me:\n\n> hi")
@@ -1842,9 +1844,12 @@ class ProjectKey(unittest.TestCase):
 
     def test_uses_cksum_constant(self):
         p = "/home/nm1/projects/" + "x" * 80
-        with mock.patch.object(jw, "CKSUM", "/nonexistent/cksum"):
-            with self.assertRaises(OSError):
-                jw.project_key(p)
+        # a nonexistent binary raises OSError natively but exits 127 under qemu-user, so mock run
+        done = subprocess.CompletedProcess([], 0, stdout=b"1 2\n")
+        with mock.patch.object(jw, "CKSUM", "/nonexistent/cksum"), \
+                mock.patch.object(jw.subprocess, "run", return_value=done) as run:
+            jw.project_key(p)
+        self.assertEqual(run.call_args.args[0][0], "/nonexistent/cksum")
 
     def test_long_gets_tail_and_cksum(self):
         p = "/home/nm1/projects/some-really-long-repository-name-that-goes-beyond-sixty-four-chars"
