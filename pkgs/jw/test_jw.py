@@ -1533,5 +1533,77 @@ class CliResume(unittest.TestCase):
             self.assertEqual(a.repo, "foo")
 
 
+class CmdDone(RecordsBase):
+    def setUp(self):
+        super().setUp()
+        self.d = os.path.join(self.tmp, "state", "agent-sessions")
+        env = mock.patch.dict(os.environ, {"XDG_STATE_HOME": os.path.join(self.tmp, "state"),
+                                           "AGENT_SESSION": "s-1", "KNOWLEDGE_ORIGIN": ""})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def run_cmd(self):
+        with mock.patch.object(sys, "argv", ["jw", "done"]):
+            a = jw.parse_args()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            a.func(a)
+        return err.getvalue()
+
+    def test_writes_done(self):
+        err = self.run_cmd()
+        self.assertEqual(jw.read_record(self.d, "s-1"), {"done": True})
+        self.assertIn("jw: s-1 is done; it is stopped once it is idle and detached", err)
+
+    def test_keeps_other_keys(self):
+        self.write("s-1.json", json.dumps({"title": "T", "mrs": ["https://g/1"]}))
+        self.run_cmd()
+        self.assertEqual(jw.read_record(self.d, "s-1"), {"title": "T", "mrs": ["https://g/1"], "done": True})
+
+    def test_creates_missing_record_and_dir(self):
+        self.assertFalse(os.path.exists(self.d))
+        self.run_cmd()
+        with open(self.path("s-1.json")) as f:
+            self.assertEqual(json.load(f), {"done": True})
+
+    def test_no_session(self):
+        with mock.patch.dict(os.environ):
+            del os.environ["AGENT_SESSION"]
+            with self.assertRaises(Fail) as c:
+                self.run_cmd()
+        self.assertEqual(str(c.exception), "not in an agent session")
+        self.assertFalse(os.path.exists(self.d))
+
+    def test_empty_session(self):
+        with mock.patch.dict(os.environ, {"AGENT_SESSION": ""}):
+            with self.assertRaises(Fail) as c:
+                self.run_cmd()
+        self.assertEqual(str(c.exception), "not in an agent session")
+
+    def test_invalid_name(self):
+        for name in ["../x", "a b", "-x"]:
+            with self.subTest(name=name), mock.patch.dict(os.environ, {"AGENT_SESSION": name}):
+                with self.assertRaises(Fail) as c:
+                    self.run_cmd()
+                self.assertEqual(str(c.exception), f"invalid session name: {name}")
+                self.assertFalse(os.path.exists(self.d))
+
+    def test_event_origin_allowed(self):
+        with mock.patch.dict(os.environ, {"KNOWLEDGE_ORIGIN": "event:x"}):
+            self.run_cmd()
+        self.assertEqual(jw.read_record(self.d, "s-1"), {"done": True})
+
+
+class Deliver(unittest.TestCase):
+    def test_wait_zero_single_attempt(self):
+        with mock.patch.object(jw, "message_sessions", return_value=[]) as m, \
+                mock.patch.object(time, "sleep") as sl:
+            with self.assertRaises(Fail) as c:
+                jw.deliver("ghost", "hi", "me", wait=0)
+        self.assertEqual(str(c.exception), "no running session ghost")
+        self.assertEqual(m.call_count, 1)
+        sl.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

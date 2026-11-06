@@ -909,6 +909,31 @@ def message_content(text, origin):
     return content if len(content) <= MSG_MAX else content[:MSG_MAX] + "\n[truncated]"
 
 
+def deliver(name, text, origin, wait=MSG_WAIT):
+    """Send text from origin to the running session name, retrying for wait seconds; return the session's label."""
+    content = message_content(text, origin)
+    line = (json.dumps({"type": "user", "message": {"role": "user", "content": content}}) + "\n").encode()
+    deadline = time.monotonic() + wait
+    while True:  # a session just started may not have registered or opened its socket yet
+        matches = message_sessions(name)
+        if len(matches) > 1:
+            raise Fail(f"several sessions match {name}: {', '.join(f'{n} (pid {p})' for p, n, _ in matches)}")
+        error = Fail(f"no running session {name}")
+        if matches:
+            _, session, sock = matches[0]
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.settimeout(5)
+                    s.connect(sock)
+                    s.sendall(line)
+                return session
+            except OSError as e:
+                error = Fail(f"cannot reach session {name}: {e}")
+        if time.monotonic() >= deadline:
+            raise error
+        time.sleep(0.5)
+
+
 def cmd_msg(a):
     # event sessions run on untrusted text (GitLab); their messages would become instructions elsewhere
     if os.environ.get("KNOWLEDGE_ORIGIN", "").startswith("event:"):
@@ -917,27 +942,7 @@ def cmd_msg(a):
     text = " ".join(words) if words else sys.stdin.read()
     if not text.strip():
         raise Fail("empty message")
-    content = message_content(text, a.sender or sender())
-    line = (json.dumps({"type": "user", "message": {"role": "user", "content": content}}) + "\n").encode()
-    deadline = time.monotonic() + MSG_WAIT
-    while True:  # a session just started may not have registered or opened its socket yet
-        matches = message_sessions(a.name)
-        if len(matches) > 1:
-            raise Fail(f"several sessions match {a.name}: {', '.join(f'{n} (pid {p})' for p, n, _ in matches)}")
-        error = Fail(f"no running session {a.name}")
-        if matches:
-            _, session, sock = matches[0]
-            try:
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                    s.settimeout(5)
-                    s.connect(sock)
-                    s.sendall(line)
-                break
-            except OSError as e:
-                error = Fail(f"cannot reach session {a.name}: {e}")
-        if time.monotonic() >= deadline:
-            raise error
-        time.sleep(0.5)
+    session = deliver(a.name, text, a.sender or sender(), MSG_WAIT)
     sys.stderr.write(f"jw: sent to {session}\n")
 
 
@@ -1059,6 +1064,20 @@ def cmd_session(a):
         raise Fail(f"cannot write the session record: {e}")
 
 
+def cmd_done(a):
+    # allowed in event sessions: it only lets the session be stopped
+    name = os.environ.get("AGENT_SESSION")
+    if not name:
+        raise Fail("not in an agent session")
+    if not SESSION_NAME.fullmatch(name):
+        raise Fail(f"invalid session name: {name}")
+    try:
+        update_record(records_dir(), name, {"done": True})
+    except (OSError, ValueError) as e:
+        raise Fail(f"cannot write the session record: {e}")
+    sys.stderr.write(f"jw: {name} is done; it is stopped once it is idle and detached\n")
+
+
 def cmd_info(a):
     """Print the workspace and stack of the current directory as JSON (the prompt runs this, so keep it fast)."""
     root = os.getcwd()
@@ -1148,6 +1167,8 @@ def parse_args():
     s.add_argument("--workspace", help="the session's workspace directory")
     s.add_argument("--url", help="https link to the work item")
     s.add_argument("--mr", action="append", help="https url of a merge request to add (repeatable)")
+    s = sub.add_parser("done", help="mark this agent session finished: it is stopped once it is idle and detached")
+    s.set_defaults(func=cmd_done)
     sub.add_parser("ls", help="list the workspaces")
     return p.parse_args()
 
