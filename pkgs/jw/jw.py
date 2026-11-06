@@ -36,7 +36,7 @@ GITLAB = re.compile(r"^gl-[a-z]+-[0-9]+(-[0-9]+)?$")  # gitlab-context's workspa
 IDLE_LIMIT = 4 * 3600  # seconds a detached Claude session must have been idle to be reaped
 FINISHED_IDLE = 600  # seconds a finished session must have been idle and detached to be stopped
 REAP_DEADLINE = 600  # seconds the reaper works through the session records, so the run ends within its timeout
-FINISH_MARKS = ("done", "notified", "reaped")  # record keys of a finished session; a new session start drops them
+FINISH_MARKS = ("status", "status_at", "waiting_for", "notified", "reaped")  # record keys of the state of a session (done or not) and its reaping; a new session start drops them
 WRAP_UP = ("The merge requests of this session are merged. Finish what is left of this work "
            "(e.g. record the outcome), then run `jw done`. The session is stopped once it is idle "
            "and nobody is attached.")
@@ -570,7 +570,7 @@ def mark_record(name, **fields):
 def reap_record(name, r, now, seen):
     """Stop and remove the workspace of the session record r if its work is finished; see cmd_reap."""
     ws = agent_workspace(r.get("workspace"))
-    done = r.get("done") is True
+    done = r.get("status") == "done"
     if "reaped" in r or ws is None or not (done or isinstance(r.get("mrs"), list) and r["mrs"]):
         return
     home, ws_name, path = ws
@@ -1194,9 +1194,9 @@ def prune_records(d, now):
     return gone
 
 
-def update_record(d, name, fields, mrs=(), drop=()):
-    """Merge fields (the ones that are not None) and the MR urls into the record of session name, remove the keys in
-    drop and return it."""
+def locked_update(d, name, change):
+    """Under the records lock call change(record) on the record of session name ({} if there is none) and write it
+    unless that returns False; return the record."""
     if not SESSION_NAME.fullmatch(name):
         raise Fail(f"invalid session name: {name!r}")
     os.makedirs(d, mode=0o700, exist_ok=True)
@@ -1214,13 +1214,8 @@ def update_record(d, name, fields, mrs=(), drop=()):
                 time.sleep(0.05)
         existed = os.path.lexists(path)
         record = read_record(d, name) or {}
-        record.update({k: v for k, v in fields.items() if v is not None})
-        for k in drop:
-            record.pop(k, None)
-        if mrs:
-            urls = record["mrs"] if isinstance(record.get("mrs"), list) else []
-            urls += [u for u in dict.fromkeys(mrs) if u not in urls]
-            record["mrs"] = urls
+        if change(record) is False:
+            return record
         fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=d)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -1233,6 +1228,33 @@ def update_record(d, name, fields, mrs=(), drop=()):
         if not existed:
             prune_records(d, time.time())
     return record
+
+
+def update_record(d, name, fields, mrs=(), drop=()):
+    """Merge fields (the ones that are not None) and the MR urls into the record of session name, remove the keys in
+    drop and return it."""
+    def change(record):
+        record.update({k: v for k, v in fields.items() if v is not None})
+        for k in drop:
+            record.pop(k, None)
+        if mrs:
+            urls = record["mrs"] if isinstance(record.get("mrs"), list) else []
+            urls += [u for u in dict.fromkeys(mrs) if u not in urls]
+            record["mrs"] = urls
+    return locked_update(d, name, change)
+
+
+def set_status(d, name, state, waiting_for=None, now=None):
+    """Record the state of session name; a done session keeps its status, and an unchanged one is not rewritten."""
+    def change(record):
+        if record.get("status") == "done" or (record.get("status") == state and record.get("waiting_for") == waiting_for):
+            return False
+        record["status"] = state
+        record["status_at"] = now or time.time()
+        record.pop("waiting_for", None)
+        if waiting_for:
+            record["waiting_for"] = waiting_for
+    return locked_update(d, name, change)
 
 
 def cmd_session(a):
@@ -1259,15 +1281,32 @@ def cmd_session(a):
         raise Fail(f"cannot write the session record: {e}")
 
 
-def cmd_done(a):
-    # allowed in event sessions: it only lets the session be stopped
+def agent_session_name():
     name = os.environ.get("AGENT_SESSION")
     if not name:
         raise Fail("not in an agent session")
     if not SESSION_NAME.fullmatch(name):
         raise Fail(f"invalid session name: {name}")
+    return name
+
+
+def cmd_status(a):
+    # allowed in event sessions: it only says what the session is doing
+    name = agent_session_name()
+    if a.waiting_for is not None and a.state != "waiting":
+        raise Fail("--waiting-for needs waiting")
+    text = "".join(" " if unicodedata.category(c) == "Cc" else c for c in a.waiting_for or "").strip()[:200]
     try:
-        update_record(records_dir(), name, {"done": True})
+        set_status(records_dir(), name, a.state, text or None)
+    except (OSError, ValueError) as e:
+        raise Fail(f"cannot write the session record: {e}")
+
+
+def cmd_done(a):
+    # allowed in event sessions: it only lets the session be stopped
+    name = agent_session_name()
+    try:
+        update_record(records_dir(), name, {"status": "done", "status_at": time.time()}, drop=("waiting_for",))
     except (OSError, ValueError) as e:
         raise Fail(f"cannot write the session record: {e}")
     sys.stderr.write(f"jw: {name} is done; it is stopped once it is idle and detached\n")
@@ -1363,6 +1402,10 @@ def parse_args():
     s.add_argument("--workspace", help="the session's workspace directory")
     s.add_argument("--url", help="https link to the work item")
     s.add_argument("--mr", action="append", help="https url of a merge request to add (repeatable)")
+    s = ss.add_parser("status", help="set the status of this session's record (hooks run this); not for done, see jw done; allowed in GitLab event sessions")
+    s.add_argument("state", choices=["busy", "idle", "waiting", "ended"])
+    s.add_argument("--waiting-for", help="what the session waits for (with waiting)")
+    s.set_defaults(func=cmd_status)
     s = sub.add_parser("done", help="mark this agent session finished: it is stopped once it is idle and detached")
     s.set_defaults(func=cmd_done)
     sub.add_parser("ls", help="list the workspaces")
