@@ -20,11 +20,18 @@ Before pushing, it syncs: fetch, rebase onto trunk, and pull commits that exist 
 on a change's remote branch into the change (or, if both sides changed, into a
 "remote changes on <branch>" change after it, and stop).  `jj sync` alone also
 pulls the MR titles and descriptions.
+`jj stack status` fetches and prints one line per change of the stack, bottom first:
+<change8> TAB state TAB MR url (or -) TAB title, where state is no-mr, open, closed, changed,
+elsewhere or merged.  The last line is `merged` (exit 0; every change is merged into trunk, or
+there are none), `not merged` (exit 1) or `unknown` (exit 2; the error goes to stderr).
+It must run from inside the workspace: jj's global flags such as `-R` don't reach it, because
+it goes through `util exec`.
 In a Claude Code session (CLAUDE_CODE_SESSION_ID), the branch of a created MR is recorded at
 ${XDG_STATE_HOME:-~/.local/state}/jj-upload/<repo>/<branch>.json with the workspace and session id.
 
 Usage:  jj upload [-r REVSET]... [--draft] [--dry-run]
         jj upload sync                              (alias: jj sync)
+        jj upload stack [status | <jj log args>]    (alias: jj stack)
 
 Config (all optional, set with `jj config set --user <key> <value>`):
   upload.remote          git remote to push to             (default: origin)
@@ -229,7 +236,7 @@ def choose_bookmark(c, prefix):
 #
 # A backend turns forge API objects into plain dicts:
 #   {"id", "ref" (e.g. "!12" / "#12"), "url", "state": open|closed|merged,
-#    "draft": bool, "title" (without draft marker), "target", "description",
+#    "draft": bool, "title" (without draft marker), "target", "source" (source branch), "description",
 #    "head" (commit id of the source branch tip),
 #    "landed" (commit ids the merge put on the target branch; may be empty)}
 
@@ -239,10 +246,17 @@ class Forge:
 
     def __init__(self, host, project):
         self.host, self.project = host, project
+        self._recent = None
 
     def find(self, branch):
         """Newest MR whose source branch is `branch`, or None."""
         raise NotImplementedError
+
+    def recent(self) -> list[dict]:
+        """The 100 most recently updated MRs (state all), normalised, cached per instance."""
+        if self._recent is None:
+            self._recent = [self.norm(m) for m in self.api("GET", self.recent_path) or []]
+        return self._recent
 
     def create(self, source, target, title, description, draft):
         raise NotImplementedError
@@ -262,7 +276,10 @@ class Forge:
 
 def cli_api(cmd):
     out = run(cmd).stdout
-    return json.loads(out) if out.strip() else None
+    try:
+        return json.loads(out) if out.strip() else None
+    except ValueError as e:
+        die(f"`{' '.join(cmd)}` returned invalid JSON: {e}")
 
 
 class GitLab(Forge):
@@ -273,6 +290,7 @@ class GitLab(Forge):
         super().__init__(host, project)
         self.prefix = f"projects/{urllib.parse.quote(project, safe='')}"
         self.base = f"{self.prefix}/merge_requests"
+        self.recent_path = f"{self.base}?state=all&order_by=updated_at&sort=desc&per_page=100"
         self.bin = os.environ.get("JJ_UPLOAD_GLAB", "glab")
 
     def api(self, method, path, **fields):
@@ -288,7 +306,7 @@ class GitLab(Forge):
         return {"id": mr["iid"], "ref": f"!{mr['iid']}", "url": mr["web_url"],
                 "state": {"opened": "open"}.get(mr["state"], mr["state"]), "draft": draft,
                 "title": self.DRAFT.sub("", mr["title"]) if draft else mr["title"],
-                "target": mr["target_branch"],
+                "target": mr["target_branch"], "source": mr["source_branch"],
                 "description": mr.get("description") or "", "head": mr.get("sha"),
                 "landed": [s for s in (mr.get("merge_commit_sha"), mr.get("squash_commit_sha")) if s]}
 
@@ -337,6 +355,7 @@ class GitHub(Forge):
     def __init__(self, host, project):
         super().__init__(host, project)
         self.base = f"repos/{project}/pulls"
+        self.recent_path = f"{self.base}?state=all&sort=updated&direction=desc&per_page=100"
         self.owner = project.split("/")[0]
         self.bin = os.environ.get("JJ_UPLOAD_GH", "gh")
 
@@ -353,7 +372,7 @@ class GitHub(Forge):
         state = "merged" if pr.get("merged_at") else pr["state"]  # open | closed
         return {"id": pr["number"], "ref": f"#{pr['number']}", "url": pr["html_url"],
                 "state": state, "draft": bool(pr.get("draft")), "title": pr["title"],
-                "target": pr["base"]["ref"], "description": pr.get("body") or "",
+                "target": pr["base"]["ref"], "source": pr["head"]["ref"], "description": pr.get("body") or "",
                 "head": pr["head"]["sha"],
                 "landed": [pr["merge_commit_sha"]] if pr.get("merge_commit_sha") else []}
 
@@ -534,39 +553,101 @@ def merged_bottom(remote, prefix, commits, names, branch):
     Squash-merging a stack leaves changes that `rebase --skip-emptied` cannot drop:
     a later change edited the same lines, so they conflict instead of becoming empty.
     The forge usually deletes the source branch on merge, so the branch name comes from
-    the bookmark (`names`, read before the fetch) and the pushed commit from the MR.
+    the bookmark (`names`, read before the fetch) or the forge's recent MRs, and the pushed commit from the MR.
     """
     merged = []
     try:
         fg = make_forge(remote)
         for c in commits:
-            b = branch[c["change"]][0] if c["change"] in branch else names.get(c["change"])
-            if not b and c["description"]:
-                b = choose_bookmark(c, prefix)[0]  # the fetch may have deleted the local bookmark
-            if not b:
-                info(f"warning: no branch name for {c['change'][:8]}; keeping it")
-                break
-            mr = fg.find(b)
-            if not mr or mr["state"] != "merged":
-                break
-            head = mr["head"]
-            # the interdiff survives a plain rebase, which changes the commit id
-            unchanged = head and log_ids(f"present({head})") and (
-                head == c["commit"]
-                or not jj("interdiff", "--from", head, "--to", c["commit"], "--summary").strip())
-            if not unchanged:
+            mr = find_mr(fg, c, branch[c["change"]][0] if c["change"] in branch else names.get(c["change"]),
+                         prefix)
+            state = change_state(c, mr)
+            if state == "changed":
                 info(f"warning: {mr['ref']} is merged but {c['change'][:8]} has changes since its "
                      "last push (or the pushed commit is unknown here); keeping it")
-                break
-            # a PR merged into its parent's branch is not in trunk; the head counts for fast-forwards
-            if not any(log_ids(f"present({s}) & ::trunk()") for s in (*mr["landed"], head)):
+            elif state == "elsewhere":
                 info(f"warning: {mr['ref']} is merged but not into {trunk_branch(remote)} here; keeping it")
+            if state != "merged":
                 break
             merged.append(c)
     except Fatal as e:
         info(f"warning: cannot look up merged MRs, not dropping any: {' '.join(str(e).split())}")
         return []
     return merged
+
+
+def find_mr(fg, c, branch, prefix):
+    """MR for the change: by branch, by source-branch suffix `-<change8>` with `prefix`, by computed name; dict or None."""
+    mr = fg.find(branch) if branch else None
+    if mr:
+        return mr
+    # the bookmark is gone and the title may have been edited, so the slug is unreliable
+    mr = next((m for m in fg.recent()
+               if m["source"].startswith(prefix) and m["source"].endswith("-" + c["change"][:8])), None)
+    if mr:
+        return mr
+    # recent() sees only the newest 100 MRs; the computed name still finds older ones
+    # (it ends in the change id, so it can't match a wrong change)
+    slug = choose_bookmark(c, prefix)[0] if c["description"] or c["bookmarks"] else None
+    return fg.find(slug) if slug and slug != branch else None
+
+
+def change_state(c, mr):
+    """One of no-mr/open/closed/changed/elsewhere/merged."""
+    if not mr:
+        return "no-mr"
+    if mr["state"] != "merged":
+        return mr["state"]
+    head = mr["head"]
+    # the interdiff survives a plain rebase, which changes the commit id
+    unchanged = head and log_ids(f"present({head})") and (
+        head == c["commit"]
+        or not jj("interdiff", "--from", head, "--to", c["commit"], "--summary").strip())
+    if not unchanged:
+        return "changed"
+    # a PR merged into its parent's branch is not in trunk; the head counts for fast-forwards
+    if not any(log_ids(f"present({s}) & ::trunk()") for s in (*mr["landed"], head)):
+        return "elsewhere"
+    return "merged"
+
+
+def stack_status(remote, prefix):
+    """Print the per-change lines and a final merged/not merged/unknown line; return 0/1/2."""
+    try:
+        before = load_commits(DEFAULT_REVSET)
+        if not before:
+            print("merged")
+            return 0
+        names = {c["change"]: choose_bookmark(c, prefix)[0] for c in before if c["bookmarks"]}
+        jj("git", "fetch")
+        commits = load_commits(DEFAULT_REVSET)
+        fg = make_forge(remote)
+        lines, states = [], []
+        for c in commits:
+            mr = find_mr(fg, c, names.get(c["change"]), prefix)
+            state = change_state(c, mr)
+            states.append(state)
+            title = re.sub(r"[\t\r\n]", " ", c["description"].partition("\n")[0])
+            lines.append(f"{c['change'][:8]}\t{state}\t{mr['url'] if mr else '-'}\t{title}")
+    except Exception as e:  # the last line must always be merged / not merged / unknown
+        print("unknown")
+        info(f"error: {e}" if isinstance(e, Fatal) else f"error: {type(e).__name__}: {e}")
+        return 2
+    for line in lines:
+        print(line)
+    if all(s == "merged" for s in states):
+        print("merged")
+        return 0
+    print("not merged")
+    return 1
+
+
+def stack_main(args):
+    if args[:1] != ["status"]:
+        os.execvp("jj", ["jj", "log", "-r", "stack()", *args])
+    remote = jj_config("upload.remote") or "origin"
+    prefix = jj_config("upload.bookmark-prefix") or default_prefix()
+    sys.exit(stack_status(remote, prefix))
 
 
 def sync(remote, prefix, revset):
@@ -676,6 +757,8 @@ def sync(remote, prefix, revset):
 
 
 def main():
+    if sys.argv[1:2] == ["stack"]:
+        stack_main(sys.argv[2:])
     remote = jj_config("upload.remote") or "origin"
     prefix = jj_config("upload.bookmark-prefix") or default_prefix()
     if sys.argv[1:2] == ["sync"]:

@@ -22,7 +22,7 @@ auto-track = 'all() & ~glob:"**/.claude/scheduled_tasks.lock"'
 [aliases]
 upload = ["util", "exec", "--", "@jjUpload@"]
 sync = ["util", "exec", "--", "@jjUpload@", "sync"]
-stack = ["log", "-r", "stack()"]
+stack = ["util", "exec", "--", "@jjUpload@", "stack"]
 
 [revset-aliases]
 "stack()" = "trunk() | trunk()..(@::)"

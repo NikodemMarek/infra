@@ -23,6 +23,7 @@
     "Bash(jj commit:*)"
     "Bash(jj rebase:*)"
     "Bash(jj upload:*)"
+    "Bash(jj stack:*)"
     "Bash(jw agent -d:*)"
     "Bash(jw msg:*)"
     "Bash(jw session:*)"

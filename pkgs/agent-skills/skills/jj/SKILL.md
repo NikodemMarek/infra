@@ -38,7 +38,7 @@ Multi-line message: `jj describe -m "$(printf 'feat: title\n\nBody line')"`, or 
 | Task | Command |
 |---|---|
 | Status / what's in `@` | `jj st` |
-| History of current stack | `jj stack` (alias: `trunk() \| trunk()..(@::)`) or `jj log -r '<revset>'` |
+| History of current stack | `jj stack` (alias: `trunk() \| trunk()..(@::)`) or `jj log -r '<revset>'`; `jj stack status` fetches and prints the MR state of each change, ending in `merged`, `not merged` or `unknown` (exit 0/1/2); run it from inside the workspace, global flags such as `-R` don't reach it (it goes through `util exec`) |
 | Diff | `jj diff` (of `@`), `jj diff -r <rev> --git`, `jj diff --stat`, `jj show <rev>` |
 | Finish current change, start a new one on top | `jj commit -m "msg"` (= describe + new) |
 | Name the current change | `jj describe -m "msg"` |
