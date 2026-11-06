@@ -5,6 +5,8 @@ metadata:
   namespace: shani
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: shani
@@ -13,6 +15,7 @@ spec:
       labels:
         app: shani
     spec:
+      hostname: shani
       nodeSelector:
         kubernetes.io/hostname: triss
       securityContext:
@@ -32,16 +35,14 @@ spec:
         - name: projects
           persistentVolumeClaim:
             claimName: projects-pvc
-        - name: host-ssh-key
+        - name: secrets
           secret:
             secretName: secrets
             defaultMode: 0400
       containers:
         - name: shani
-          image: shani:zvhkjgv7jhi404sc7d3b8l4l6f877nxk
+          image: shani:6psv59gbrx3gfnb5a2i559fr9jnvjs36
           imagePullPolicy: Never
-          ports:
-            - containerPort: 2222
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
@@ -55,13 +56,15 @@ spec:
               mountPath: /home/shani
             - name: projects
               mountPath: /projects
-            - name: host-ssh-key
+            - name: secrets
               mountPath: /secrets
               readOnly: true
           resources:
             requests:
-              memory: "512Mi"
-              cpu: "200m"
-            limits:
+              cpu: "500m"
               memory: "2Gi"
-              cpu: "1000m"
+              ephemeral-storage: "1Gi"
+            limits:
+              cpu: "3"
+              memory: "6Gi"
+              ephemeral-storage: "4Gi"
