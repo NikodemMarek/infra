@@ -584,10 +584,13 @@ def cmd_prune(a):
 
 
 def agent_env(env):
-    """env without the variables that tie a session to the caller's own (repo key, event queue, nested-claude marker)."""
-    drop = {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_PROJECT_DIR_NAME", "CLAUDE_EVENT_SESSION_DIR",
+    """env without the variables that tie a session to the caller's own (repo key, event queue, nested-claude marker).
+
+    CLAUDE_CODE_* from a calling Claude (session id, child marker, messaging socket) would make the new Claude a child
+    of the caller: it writes into the caller's transcript and never registers, so jw msg cannot reach it."""
+    drop = {"CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT", "AI_AGENT", "CLAUDE_EVENT_SESSION_DIR",
             "KNOWLEDGE_ORIGIN", "CLAUDE_WORKSPACE_BASE", "AGENT_SESSION"}
-    return {k: v for k, v in env.items() if k not in drop}
+    return {k: v for k, v in env.items() if k not in drop and not k.startswith("CLAUDE_CODE_")}
 
 
 def runtime_dir():

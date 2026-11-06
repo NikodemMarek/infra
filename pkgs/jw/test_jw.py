@@ -57,6 +57,13 @@ class AgentEnv(unittest.TestCase):
         env = jw.agent_env({"AGENT_SESSION": "s", "CLAUDECODE": "1", "KEEP": "1"})
         self.assertEqual(env, {"KEEP": "1"})
 
+    def test_drops_calling_claude_session(self):
+        env = jw.agent_env({"CLAUDE_CODE_SESSION_ID": "x", "CLAUDE_CODE_CHILD_SESSION": "1", "CLAUDE_PID": "7",
+                            "CLAUDE_CODE_MESSAGING_SOCKET": "/s", "CLAUDE_CODE_MESSAGING_TOKEN": "t",
+                            "CLAUDE_CODE_PROJECT_DIR_NAME": "p", "CLAUDE_EFFORT": "medium", "AI_AGENT": "a",
+                            "CLAUDE_CONFIG_DIR": "/c", "KEEP": "1"})
+        self.assertEqual(env, {"CLAUDE_CONFIG_DIR": "/c", "KEEP": "1"})
+
     def test_origin_file_no_longer_special(self):
         self.assertEqual(jw.agent_env({"CLAUDE_ORIGIN_FILE": "/o"}), {"CLAUDE_ORIGIN_FILE": "/o"})
 
