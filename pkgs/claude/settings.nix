@@ -27,6 +27,16 @@
           }
         ];
       }
+      {
+        matcher = "startup|resume|clear";
+        hooks = [
+          {
+            type = "command";
+            command = "claude-status-hook idle || true";
+            timeout = 10;
+          }
+        ];
+      }
     ];
     PreToolUse = [
       {
@@ -55,8 +65,65 @@
           }
         ];
       }
+      {
+        hooks = [
+          {
+            type = "command";
+            command = "claude-status-hook waiting || true";
+            timeout = 10;
+          }
+        ];
+      }
     ];
-    # With CLAUDE_EVENT_SESSION_DIR set it delivers queued event prompts (paths) by blocking the stop; for sessions with a record (AGENT_SESSION) it otherwise posts claude.waiting (tells the user
+    # The session record status (jw session status) follows the hooks: busy on UserPromptSubmit and
+    # PostToolUse/PostToolUseFailure (back to work after a permission prompt), waiting on PermissionRequest, idle on Stop,
+    # SessionStart and the idle_prompt notification, ended on SessionEnd.
+    PostToolUse = [
+      {
+        hooks = [
+          {
+            type = "command";
+            command = "claude-status-hook busy || true";
+            timeout = 10;
+          }
+        ];
+      }
+    ];
+    PostToolUseFailure = [
+      {
+        hooks = [
+          {
+            type = "command";
+            command = "claude-status-hook busy || true";
+            timeout = 10;
+          }
+        ];
+      }
+    ];
+    Notification = [
+      {
+        matcher = "idle_prompt";
+        hooks = [
+          {
+            type = "command";
+            command = "claude-status-hook idle || true";
+            timeout = 10;
+          }
+        ];
+      }
+    ];
+    SessionEnd = [
+      {
+        hooks = [
+          {
+            type = "command";
+            command = "claude-status-hook ended || true";
+            timeout = 10;
+          }
+        ];
+      }
+    ];
+    # With CLAUDE_EVENT_SESSION_DIR set it delivers queued event prompts (paths) by blocking the stop; for sessions with a record (AGENT_SESSION) it otherwise sets the status to idle and posts claude.waiting (tells the user
     # the session waits, titled with the first line of the last message).
     # Permission prompts and questions are already routed by PermissionRequest.
     Stop = [
@@ -77,6 +144,15 @@
           {
             type = "command";
             command = "claude-prompt-hook || true";
+            timeout = 10;
+          }
+        ];
+      }
+      {
+        hooks = [
+          {
+            type = "command";
+            command = "claude-status-hook busy || true";
             timeout = 10;
           }
         ];
