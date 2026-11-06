@@ -24,6 +24,7 @@ complete -c jw -n '__fish_seen_subcommand_from agent a' -s d -l detach -d 'start
 complete -c jw -n '__fish_seen_subcommand_from agent a' -a '(__jw_repos)'
 complete -c jw -n '__fish_seen_subcommand_from resume r' -s d -l detach -d 'start the session in the background'
 complete -c jw -n '__fish_seen_subcommand_from resume r' -s l -l last -d 'resume the newest session without asking'
+complete -c jw -n '__fish_seen_subcommand_from resume r' -l session -r -d 'resume the last session of the agent session NAME'
 complete -c jw -n '__fish_seen_subcommand_from resume r' -a '(__jw_repos)'
 complete -c jw -n '__fish_seen_subcommand_from cd c rm' -a '(__jw_workspaces)'
 complete -c jw -n '__fish_seen_subcommand_from attach at' -a '(__jw_shpool_sessions)'

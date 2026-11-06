@@ -5,7 +5,8 @@ new, cd, rm and clone print the directory to go to on stdout; the `jw` fish func
 pick prints the chosen repo's name on stdout. Everything else goes to stderr.
 
 agent always starts Claude in a new workspace (s-*, like `jw new`) in a shpool session of the same name.
-resume continues one of the repo's earlier Claude sessions the same way, in the workspace it ran in.
+resume continues one of the repo's earlier Claude sessions the same way, in the workspace it ran in; resume --session NAME
+continues the last Claude session of the agent session NAME under that name.
 """
 
 import argparse
@@ -964,21 +965,16 @@ def transcript(path, home):
     return root, " ".join(str(custom or ai or first)[:100].split())
 
 
-def cmd_resume(a):
-    if os.environ.get("KNOWLEDGE_ORIGIN", "").startswith("event:"):  # untrusted comment text must not hand off
-        raise Fail("event sessions cannot resume sessions")
-    home = None
-    if not a.repo:
-        with contextlib.suppress(Fail):
-            home = locate()[1]
-    home = home or repo_home(a.repo)
+def resume_rows(home, newest_only, workspace=None, skip_live=True):
+    """{picker row: (session id, workspace root, title)} of the repo's transcripts newest first, without the live ones
+    if skip_live; only those whose last workspace is workspace if given, only the newest one if newest_only."""
     base = f"{claude_dir()}/projects/{project_key(home)}"
     try:
         files = sorted(((os.path.getmtime(f"{base}/{n}"), n.removesuffix(".jsonl"))
                         for n in os.listdir(base) if n.endswith(".jsonl")), reverse=True)
     except OSError:
         files = []
-    live = {s.get("sessionId") for _, s, _, _ in live_claudes()}
+    live = {s.get("sessionId") for _, s, _, _ in live_claudes()} if skip_live else set()
     rows = {}
     for mtime, sid in files:
         if sid in live:
@@ -987,14 +983,59 @@ def cmd_resume(a):
             found = transcript(f"{base}/{sid}.jsonl", home)
         except OSError:
             continue
-        if found and not GITLAB.match(os.path.basename(found[0])):
+        if found and not GITLAB.match(os.path.basename(found[0])) and workspace in (None, found[0]):
             when = time.strftime("%m-%d %H:%M", time.localtime(mtime))
             rows[f"{when}\t{os.path.basename(found[0])}\t{found[1]}\t{sid[:8]}"] = (sid, *found)
-            if a.last:
+            if newest_only:
                 break
-    if not rows:
-        raise Fail(f"no sessions to resume in {os.path.basename(home)}")
-    sid, root, title = rows[next(iter(rows)) if a.last else pick(list(rows))]
+    return rows
+
+
+def session_repo(name):
+    """(home, workspace) of the record of session name; the repo comes from the workspace path if it is gone."""
+    record = read_record(records_dir(), name)
+    if record is None:
+        raise Fail(f"no session record {name}")
+    ws = record.get("workspace")
+    if found := agent_workspace(ws):
+        return found[0], found[2]
+    if isinstance(ws, str) and "\0" not in ws and os.path.isabs(ws):
+        parent, wname = os.path.split(os.path.normpath(ws))
+        agents = os.path.basename(parent)
+        repo = agents.removesuffix(".agents")
+        if (os.path.realpath(os.path.dirname(parent)) == os.path.realpath(ROOT) and agents.endswith(".agents")
+                and repo and SESSION_NAME.fullmatch(wname) and os.path.isdir(f"{ROOT}/{repo}/.jj")):
+            return f"{ROOT}/{repo}", f"{ROOT}/{agents}/{wname}"
+    raise Fail(f"no repo for session {name}")
+
+
+def cmd_resume(a):
+    if os.environ.get("KNOWLEDGE_ORIGIN", "").startswith("event:"):  # untrusted comment text must not hand off
+        raise Fail("event sessions cannot resume sessions")
+    if a.session and a.repo:
+        raise Fail("--session takes no repo")
+    if a.session:
+        name = session_name(a.session)
+        home, workspace = session_repo(name)
+        if name in shpool_status():
+            raise Fail(f"session {name} is running")
+        rows = resume_rows(home, True, workspace, False)
+        if not rows:
+            raise Fail(f"no sessions to resume for {name}")
+        sid, root, title = next(iter(rows.values()))
+        if sid in {s.get("sessionId") for _, s, _, _ in live_claudes()}:
+            raise Fail(f"session {name} is running")
+    else:
+        home = None
+        if not a.repo:
+            with contextlib.suppress(Fail):
+                home = locate()[1]
+        home = home or repo_home(a.repo)
+        rows = resume_rows(home, a.last)
+        if not rows:
+            raise Fail(f"no sessions to resume in {os.path.basename(home)}")
+        sid, root, title = rows[next(iter(rows)) if a.last else pick(list(rows))]
+        name = os.path.basename(root)
 
     def make_dir(name):
         if os.path.isdir(root):
@@ -1004,7 +1045,7 @@ def cmd_resume(a):
         sys.stderr.write(f"jw: {root} is gone, recreated it as {d} on trunk\n")
         return d
 
-    launch(home, a.detach, ["claude", "--resume", sid], title, make_dir, os.path.basename(root), True)
+    launch(home, a.detach, ["claude", "--resume", sid], title, make_dir, name, True)
 
 
 def match_session(names, prefix):
@@ -1378,7 +1419,9 @@ def parse_args():
     s.set_defaults(func=cmd_agent)
     s = sub.add_parser("resume", aliases=["r"], help="resume a Claude session of a repo (any of its workspaces; default: this one) in a shpool session, in its workspace (recreated on trunk() if it is gone)")
     s.add_argument("-d", "--detach", action="store_true", help="start the session in the background")
-    s.add_argument("-l", "--last", action="store_true", help="resume the newest session without asking")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("-l", "--last", action="store_true", help="resume the newest session without asking")
+    g.add_argument("--session", metavar="NAME", help="resume the last Claude session of the agent session NAME under its name (not with a repo; refused while it runs)")
     s.add_argument("repo", nargs="?", help=f"repo under {ROOT} (default: this one, else pick one)")
     s.set_defaults(func=cmd_resume)
     s = sub.add_parser("attach", aliases=["at"], help="attach to a Claude shpool session (default: pick one, this repo's first); a unique prefix of the name is enough")
