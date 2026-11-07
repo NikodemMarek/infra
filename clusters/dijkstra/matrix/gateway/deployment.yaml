@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: matrix-gateway
+  namespace: matrix
+  labels:
+    app: matrix-gateway
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: matrix-gateway
+  template:
+    metadata:
+      labels:
+        app: matrix-gateway
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/hostname: triss
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      volumes:
+        - name: secrets
+          secret:
+            secretName: secrets
+            items:
+              - key: agents_password
+                path: agents_password
+              - key: gateway_signing_key
+                path: gateway_signing_key
+            defaultMode: 0440
+      containers:
+        - name: matrix-gateway
+          image: matrix-gateway:qdyc20vjyy0j31pn6sy0fs6lbbx8cjpf
+          imagePullPolicy: Never
+          env:
+            - name: MATRIX_HOMESERVER
+              value: http://synapse.matrix.svc.cluster.local:8008
+            - name: MATRIX_OWNER
+              value: "@nikodem:nkmrk.com"
+            - name: MATRIX_USER
+              value: agents
+            - name: MATRIX_PASSWORD_FILE
+              value: /secrets/agents_password
+            - name: MATRIX_SIGNING_KEY_FILE
+              value: /secrets/gateway_signing_key
+            - name: NATS_URL
+              value: nats://nats.nats.svc.cluster.local:4222
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: secrets
+              mountPath: /secrets
+              readOnly: true
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "5m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
