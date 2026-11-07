@@ -53,6 +53,7 @@
   agent-inbox = pkgs.callPackage ./agent-inbox {};
   agent-task = pkgs.callPackage ./agent-task {};
   event-bus = pkgs.callPackage ./event-bus {};
+  matrix-gateway = pkgs.callPackage ./matrix-gateway {};
   tm = pkgs.callPackage ./tm {};
   tm-image = pkgs.callPackage ./tm/image.nix {};
   shani-image = pkgs.callPackage ./shani/image.nix {};
