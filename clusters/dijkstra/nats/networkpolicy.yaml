@@ -24,3 +24,13 @@ spec:
       ports:
         - protocol: TCP
           port: 4222
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: matrix
+          podSelector:
+            matchLabels:
+              app: matrix-gateway
+      ports:
+        - protocol: TCP
+          port: 4222
