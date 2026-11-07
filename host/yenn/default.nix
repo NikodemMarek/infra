@@ -7,6 +7,7 @@
     ./hardware-configuration.nix
     ./networking.nix
     ./nikodem.nix
+    ./matrix-inbox.nix
 
     ../features
     ../features/optional/stylix.nix
