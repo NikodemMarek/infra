@@ -11,6 +11,7 @@
 //!                            lists its filter tabs: [{"name":"Review","kinds":["review"]},
 //!                            {"name":"Coding"}], a tab without kinds shows the rest
 //!   agent-inbox list         id, age, type, project, title (TSV, newest first)
+//!   agent-inbox list --json  one JSON object per line, oldest first: {"id","received","event"}
 //!   agent-inbox reply <id>   read one line from stdin, write it to the item's reply FIFO, dismiss
 //!                            (sudo: the password; claude.*: a JSON decision such as
 //!                            {"behavior":"allow"}, see ADR-025)
@@ -34,7 +35,7 @@ use reply::ReplyError;
 use serde_json::Value;
 use tui::Tab;
 
-const USAGE: &str = "usage: agent-inbox [list | reply <id> | dismiss <id> | sessions]";
+const USAGE: &str = "usage: agent-inbox [list [--json] | reply <id> | dismiss <id> | sessions]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -42,6 +43,7 @@ fn main() -> ExitCode {
     let result = match args.as_slice() {
         [] => run_tui(),
         ["list"] => list(),
+        ["list", "--json"] => list_json(),
         ["reply", id] => answer(id),
         ["dismiss", id] => dismiss(id),
         ["sessions"] => sessions(),
@@ -123,6 +125,19 @@ fn list() -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+fn list_json() -> Result<()> {
+    let items = client::list(&client::inbox_dir())?;
+    let mut out = io::stdout().lock();
+    for item in &items {
+        writeln!(out, "{}", item_json(item))?;
+    }
+    Ok(())
+}
+
+fn item_json(item: &client::Item) -> String {
+    serde_json::json!({"id": item.id, "received": item.received, "event": item.event}).to_string()
 }
 
 fn sessions() -> Result<()> {
@@ -217,6 +232,44 @@ mod tests {
                 tab("Rest", None),
             ]
         );
+    }
+
+    fn item(id: &str, received: f64, event: serde_json::Value) -> client::Item {
+        client::Item {
+            id: id.into(),
+            received,
+            event,
+        }
+    }
+
+    #[test]
+    fn item_json_has_id_received_and_event() {
+        let it = item(
+            "abc",
+            1.5,
+            serde_json::json!({"type": "claude.question", "x": 1}),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&item_json(&it)).unwrap();
+        assert_eq!(
+            parsed,
+            serde_json::json!({"id": "abc", "received": 1.5,
+                "event": {"type": "claude.question", "x": 1}})
+        );
+    }
+
+    #[test]
+    fn item_json_is_one_line_even_with_newlines_in_strings() {
+        let it = item(
+            "a\nb",
+            2.0,
+            serde_json::json!({"type": "claude.question", "title": "l1\nl2\r\nl3"}),
+        );
+        let line = item_json(&it);
+        assert!(!line.contains('\n'), "{line:?}");
+        assert!(!line.contains('\r'), "{line:?}");
+        let parsed: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(parsed["id"], "a\nb");
+        assert_eq!(parsed["event"]["title"], "l1\nl2\r\nl3");
     }
 
     #[test]
