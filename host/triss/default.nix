@@ -51,7 +51,7 @@
 
   services.k3s = {
     role = "server";
-    images = [pkgs.tm-image pkgs.shani-image];
+    images = [pkgs.tm-image pkgs.shani-image pkgs.matrix-gateway-image];
     extraFlags = [
       "--disable=traefik"
       "--disable-cloud-controller"
