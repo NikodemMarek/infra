@@ -51,6 +51,7 @@
   claude-statusline = pkgs.callPackage ./claude-statusline {};
   knowledge = pkgs.callPackage ./knowledge {};
   agent-inbox = pkgs.callPackage ./agent-inbox {};
+  matrix-inbox = pkgs.callPackage ./matrix-inbox {};
   agent-task = pkgs.callPackage ./agent-task {};
   event-bus = pkgs.callPackage ./event-bus {};
   tm = pkgs.callPackage ./tm {};
