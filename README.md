@@ -283,6 +283,14 @@ Its database is the CloudNativePG cluster `matrix-postgres`, backed up and resto
 
 Bridges are mautrix appservices in `matrix/<network>`, one per network (`whatsapp`, `meta`, pinned image, SQLite on its own PVC). For WhatsApp, DM `@whatsappbot:nkmrk.com` and send `login qr`; for Messenger, DM `@metabot:nkmrk.com`, send `login` and pick Messenger. Bump the bridge images about monthly: a "client outdated" notice in the bridge room is the cue.
 
+`matrix-inbox` (`host/yenn/matrix-inbox.nix`, a user service of `nikodem` on yenn) mirrors agent-inbox's questions and permission prompts into the room `#agents:nkmrk.com` as the bot `@agents:nkmrk.com`; answer by replying there within 10 minutes: `y`/`n` to a permission, the option number(s) or text to a question. Register `agents` (not an admin) as above, then get its token with a plain login, not from an Element session (logging out of that session revokes it), and no `refresh_token`:
+
+```bash
+curl -s https://matrix.nkmrk.com/_matrix/client/v3/login -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"agents"},"password":"<password>"}'
+```
+
+Save its `access_token` in Bitwarden as `infra/yenn/MATRIX_INBOX_TOKEN` and run `host-switch` on yenn (it runs `secrets-build`) and `systemctl --user start matrix-inbox` (`restart` after updates; a switch doesn't start or restart user services), then accept the room invite as `@nikodem:nkmrk.com`.
+
 ### WireGuard peers
 
 Peers have one of two tiers, set by their address. Limited peers (`10.13.13.2-127`) reach only `*.nkmrk.com`, the cluster DNS server (`10.43.0.53`) and the internet (via Mullvad), never the cluster network. Full peers (`10.13.13.128-254`) also reach the cluster's pod and service networks (`10.42.0.0/15`). The pod's firewall enforces the tiers. Peers' internet leaves through the pod's own Mullvad WireGuard tunnel (relay `de-fra-wg-001`, pinned in `wireguard/deployment.yaml`); without the tunnel peers have no internet. To change the relay, take its IPv4 and public key from Mullvad's relay list (`api.mullvad.net/public/relays/wireguard/v2`).
