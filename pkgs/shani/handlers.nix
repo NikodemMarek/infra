@@ -3,6 +3,7 @@
   writeText,
   forward-notify,
   session-message,
+  matrix-inbox,
 }:
 # `event-handlers` file (see ../event-handlers/handlers); absolute paths for the handlers outside its package
 writeText "shani-handlers" ''
@@ -11,4 +12,5 @@ writeText "shani-handlers" ''
   events.claude.> ${lib.getExe forward-notify}
   events.task.started ${lib.getExe forward-notify}
   events.task.failed ${lib.getExe forward-notify}
+  matrix.command.shani ${lib.getExe' matrix-inbox "matrix-inbox-command"}
 ''
