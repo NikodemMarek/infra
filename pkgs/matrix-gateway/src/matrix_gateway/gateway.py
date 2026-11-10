@@ -5,12 +5,12 @@ from typing import Protocol
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from .data import Obj, get_obj, get_str
-from .logic import Send, content, parse_send, route, seal, strip_fallback
+from .data import Obj, get_int, get_obj, get_str
+from .logic import Send, content, parse_command, parse_send, route, seal, seal_command, strip_fallback
 
 DEVICE_ID = "matrix-gateway"
 
-NOTICE_NOT_A_REPLY = "Reply to a message that asks for an answer."
+NOTICE_NOT_A_REPLY = "Reply to a message that asks for an answer, or send !<host> <task> as a new message."
 NOTICE_BUS = "Failed: message bus unavailable."
 
 log = logging.getLogger("matrix_gateway")
@@ -80,7 +80,10 @@ class Gateway:
         ):
             return
         parent_id = get_str(get_obj(relates, "m.in_reply_to") or {}, "event_id")
-        parent = self._matrix.get_event(self._room, parent_id) if parent_id is not None else None
+        if parent_id is None:
+            self._on_top_level(ev, event_id, get_str(body, "body") or "")
+            return
+        parent = self._matrix.get_event(self._room, parent_id)
         target = route(parent, self._bot) if parent is not None else None
         if parent is None or target is None:
             self._notice(event_id, NOTICE_NOT_A_REPLY)
@@ -92,6 +95,22 @@ class Gateway:
             self._bus.publish("matrix.reply." + to, seal(self._key, to, ref, text, parent_body, event_id))
         except BusError as e:
             log.warning("publishing a reply failed: %s", e)
+            self._notice(event_id, NOTICE_BUS)
+
+    def _on_top_level(self, ev: Obj, event_id: str, body: str) -> None:
+        command = parse_command(body)
+        if command is None:
+            self._notice(event_id, NOTICE_NOT_A_REPLY)
+            return
+        ts = get_int(ev, "origin_server_ts")
+        if ts is None:
+            log.warning("dropping a command without origin_server_ts")
+            return
+        to, text = command
+        try:
+            self._bus.publish("matrix.command." + to, seal_command(self._key, to, text, event_id, ts))
+        except BusError as e:
+            log.warning("publishing a command failed: %s", e)
             self._notice(event_id, NOTICE_BUS)
 
     def on_send(self, line: str, txn: str) -> None:

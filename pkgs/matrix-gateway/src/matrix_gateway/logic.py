@@ -1,4 +1,4 @@
-"""Pure logic: the wire format, what to post for a request and how to seal a reply."""
+"""Pure logic: the wire format, what to post for a request and how to seal a reply or a command."""
 
 import base64
 import re
@@ -11,6 +11,7 @@ from .data import Obj, ParseError, dumps, get_obj, get_str, loads
 
 ROUTE = "com.nkmrk.route"
 TO_RE = r"[a-z0-9][a-z0-9-]{0,62}"
+COMMAND_HOST_RE = r"![A-Za-z0-9][A-Za-z0-9-]{0,62}"
 BODY_MAX = 20000
 REF_MAX = 1024
 
@@ -86,10 +87,26 @@ def content(send: Send) -> Obj:
     return {"msgtype": "m.text", "body": body, ROUTE: {"to": send.to, "ref": send.ref}}
 
 
-def seal(key: Ed25519PrivateKey, to: str, ref: str, text: str, body: str, event_id: str) -> str:
-    msg = dumps({"to": to, "ref": ref, "text": text, "body": body, "event_id": event_id}, sort_keys=True)
+def _seal(key: Ed25519PrivateKey, kind: str, fields: Obj) -> str:
+    msg = dumps(fields, sort_keys=True)
     sig = base64.b64encode(key.sign(msg.encode("utf-8"))).decode()
-    return dumps({"type": "matrix.reply", "msg": msg, "sig": sig})
+    return dumps({"type": kind, "msg": msg, "sig": sig})
+
+
+def seal(key: Ed25519PrivateKey, to: str, ref: str, text: str, body: str, event_id: str) -> str:
+    return _seal(key, "matrix.reply", {"to": to, "ref": ref, "text": text, "body": body, "event_id": event_id})
+
+
+def seal_command(key: Ed25519PrivateKey, to: str, text: str, event_id: str, ts: int) -> str:
+    fields: Obj = {"kind": "matrix.command", "to": to, "text": text, "event_id": event_id, "ts": ts}
+    return _seal(key, "matrix.command", fields)
+
+
+def parse_command(body: str) -> tuple[str, str] | None:
+    parts = body.split(maxsplit=1)
+    if len(parts) != 2 or re.fullmatch(COMMAND_HOST_RE, parts[0]) is None:
+        return None
+    return parts[0][1:].lower(), parts[1].strip()
 
 
 def route(parent: Obj, bot_user: str) -> tuple[str, str] | None:
