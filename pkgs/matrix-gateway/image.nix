@@ -11,4 +11,5 @@ in
     name = "matrix-gateway";
     compressor = "none";
     config.Entrypoint = ["${matrix-gateway'}/bin/matrix-gateway"];
+    config.Env = ["XDG_CONFIG_HOME=/var/empty"];
   }
