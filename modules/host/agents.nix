@@ -43,7 +43,13 @@ in {
         };
       };
 
-      event-handlers.wantedBy = ["default.target"];
+      event-handlers = {
+        wantedBy = ["default.target"];
+        environment = {
+          PATH = lib.mkForce "/run/wrappers/bin:/etc/profiles/per-user/%u/bin:/run/current-system/sw/bin";
+          SSH_AUTH_SOCK = "%t/ssh-agent";
+        };
+      };
 
       knowledge-curate = {
         description = "Merge the pending knowledge notes into the knowledge store";
