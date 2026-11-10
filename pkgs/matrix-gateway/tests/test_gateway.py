@@ -9,7 +9,7 @@ from matrix_gateway.data import Obj
 from matrix_gateway.gateway import DEVICE_ID, Fatal, Gateway, MatrixError
 from matrix_gateway.logic import ROUTE
 
-NOT_ROUTED = "Reply to a message that asks for an answer."
+NOT_ROUTED = "Reply to a message that asks for an answer, or send !<host> <task> as a new message."
 BUS_DOWN = "Failed: message bus unavailable."
 
 
@@ -255,3 +255,122 @@ def test_fatal_propagates() -> None:
         r.gw.step()
     with pytest.raises(Fatal):
         r.gw.on_event(owner_message("$o", "y", parent="$bad"))
+
+
+def verify_command(rig: Rig, data: str) -> Obj:
+    env = json.loads(data)
+    assert env["type"] == "matrix.command"
+    rig.key.public_key().verify(base64.b64decode(env["sig"]), env["msg"].encode("utf-8"))
+    msg = json.loads(env["msg"])
+    assert isinstance(msg, dict)
+    return msg
+
+
+def command_event(
+    event_id: str,
+    body: str,
+    ts: int | None = 1700000000000,
+    parent: str | None = None,
+    sender: str = OWNER,
+    msgtype: str = "m.text",
+    rel_type: str | None = None,
+    event_type: str = "m.room.message",
+) -> Obj:
+    ev = owner_message(event_id, body, parent, sender, msgtype, rel_type, event_type)
+    if ts is not None:
+        ev["origin_server_ts"] = ts
+    return ev
+
+
+def test_command_published_signed() -> None:
+    r = Rig().started()
+    r.gw.on_event(command_event("$c1", "!yenn fix it"))
+    assert len(r.bus.published) == 1
+    subject, data = r.bus.published[0]
+    assert subject == "matrix.command.yenn"
+    assert verify_command(r, data) == {
+        "kind": "matrix.command",
+        "to": "yenn",
+        "text": "fix it",
+        "event_id": "$c1",
+        "ts": 1700000000000,
+    }
+    assert r.matrix.sent == []
+
+
+def test_command_host_lowercased() -> None:
+    r = Rig().started()
+    r.gw.on_event(command_event("$c1", "!Yenn x"))
+    assert [s for s, _ in r.bus.published] == ["matrix.command.yenn"]
+    assert verify_command(r, r.bus.published[0][1])["to"] == "yenn"
+
+
+@pytest.mark.parametrize(
+    "ev",
+    [
+        command_event("$c", "!yenn x", sender="@mallory:nkmrk.com"),
+        command_event("$c", "!yenn x", msgtype="m.notice"),
+        command_event("$c", "!yenn x", rel_type="m.replace"),
+        command_event("$c", "!yenn x", event_type="m.reaction"),
+    ],
+)
+def test_command_ignored_events(ev: Obj) -> None:
+    r = Rig().started()
+    r.gw.on_event(ev)
+    assert r.bus.published == []
+    assert r.matrix.sent == []
+
+
+def test_command_without_timestamp() -> None:
+    r = Rig().started()
+    r.gw.on_event(command_event("$c", "!yenn x", ts=None))
+    assert r.bus.published == []
+    assert r.matrix.sent == []
+
+
+@pytest.mark.parametrize("value", [True, False, "1700000000000", 1.5])
+def test_command_with_non_int_timestamp(value: bool | str | float) -> None:
+    r = Rig().started()
+    ev = command_event("$c", "!yenn x", ts=None)
+    ev["origin_server_ts"] = value
+    r.gw.on_event(ev)
+    assert r.bus.published == []
+    assert r.matrix.sent == []
+
+
+def test_command_bus_error_notice() -> None:
+    r = Rig().started()
+    r.bus.fail()
+    r.gw.on_event(command_event("$c", "!yenn x"))
+    assert len(r.matrix.sent) == 1
+    s = r.matrix.sent[0]
+    assert s.txn == "re-$c"
+    assert s.content == {
+        "msgtype": "m.notice",
+        "body": BUS_DOWN,
+        "m.relates_to": {"m.in_reply_to": {"event_id": "$c"}},
+    }
+
+
+@pytest.mark.parametrize("body", ["hello", "!yenn", "!yenn   "])
+def test_top_level_non_command_notice(body: str) -> None:
+    r = Rig().started()
+    r.gw.on_event(command_event("$o", body))
+    assert_not_routed_notice(r)
+
+
+def test_reply_with_command_body_and_unknown_parent_is_not_a_command() -> None:
+    r = Rig().started()
+    r.gw.on_event(command_event("$o", "!yenn x", parent="$gone"))
+    assert_not_routed_notice(r)
+
+
+def test_reply_starting_with_bang_stays_an_answer() -> None:
+    r = Rig().started()
+    r.routed(to="yenn", ref="r", body="B")
+    r.gw.on_event(command_event("$o1", "!yenn x", parent="$bot1"))
+    assert len(r.bus.published) == 1
+    subject, data = r.bus.published[0]
+    assert subject == "matrix.reply.yenn"
+    assert verify(r, data)["text"] == "!yenn x"
+    assert r.matrix.sent == []

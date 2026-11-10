@@ -31,6 +31,11 @@ def get_str(o: Obj, key: str) -> str | None:
     return v if isinstance(v, str) else None
 
 
+def get_int(o: Obj, key: str) -> int | None:
+    v = o.get(key)
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
 def get_obj(o: Obj, key: str) -> Obj | None:
     v = o.get(key)
     return v if isinstance(v, dict) else None

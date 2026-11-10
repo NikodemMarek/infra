@@ -7,7 +7,19 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from matrix_gateway.data import Obj, ParseError, loads
-from matrix_gateway.logic import ROUTE, TO_RE, Send, content, parse_send, route, sanitize, seal, strip_fallback
+from matrix_gateway.logic import (
+    ROUTE,
+    TO_RE,
+    Send,
+    content,
+    parse_command,
+    parse_send,
+    route,
+    sanitize,
+    seal,
+    seal_command,
+    strip_fallback,
+)
 
 BOT = "@agents:nkmrk.com"
 
@@ -224,3 +236,49 @@ def test_parse_send_lone_surrogate(line: str) -> None:
 
 def test_parse_send_deeply_nested() -> None:
     assert parse_send("[" * 100000) is None
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("!yenn fix the test", ("yenn", "fix the test")),
+        ("!Yenn  fix\nmore ", ("yenn", "fix\nmore")),
+        ("  !shani x", ("shani", "x")),
+        ("!yenn\nx", ("yenn", "x")),
+        ("!a-b1 x", ("a-b1", "x")),
+        ("!" + "a" * 63 + " x", ("a" * 63, "x")),
+    ],
+)
+def test_parse_command(body: str, expected: tuple[str, str]) -> None:
+    assert parse_command(body) == expected
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["!yenn", "!yenn   ", "yenn fix", "! yenn x", "!yenn: x", "!a.b x", "!-x y", "!" + "a" * 64 + " x", "", "!", "!!"],
+)
+def test_parse_command_none(body: str) -> None:
+    assert parse_command(body) is None
+
+
+def test_seal_command_verifies() -> None:
+    key = Ed25519PrivateKey.generate()
+    out = seal_command(key, "yenn", "line1\nline2 é", "$ev", 1700000000000)
+    assert "\n" not in out
+    env = json.loads(out)
+    assert set(env) == {"type", "msg", "sig"}
+    assert env["type"] == "matrix.command"
+    key.public_key().verify(base64.b64decode(env["sig"], validate=True), env["msg"].encode("utf-8"))
+    assert json.loads(env["msg"]) == {
+        "kind": "matrix.command",
+        "to": "yenn",
+        "text": "line1\nline2 é",
+        "event_id": "$ev",
+        "ts": 1700000000000,
+    }
+
+
+def test_seal_command_wrong_key_fails() -> None:
+    env = json.loads(seal_command(Ed25519PrivateKey.generate(), "yenn", "t", "$e", 1))
+    with pytest.raises(InvalidSignature):
+        Ed25519PrivateKey.generate().public_key().verify(base64.b64decode(env["sig"]), env["msg"].encode())
