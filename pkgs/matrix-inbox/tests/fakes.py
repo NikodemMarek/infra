@@ -56,6 +56,36 @@ class FakeLocal:
         return self.reply_results.get(item_id)
 
 
+class FakeSeen:
+    """The `Seen` of the tests: a set of claimed ids, or raises `error` when set."""
+
+    def __init__(self, claimed: set[str] | None = None, error: OSError | None = None) -> None:
+        self.claimed: set[str] = set(claimed) if claimed is not None else set()
+        self.error = error
+        self.calls: list[str] = []
+
+    def claim(self, event_id: str) -> bool:
+        self.calls.append(event_id)
+        if self.error is not None:
+            raise self.error
+        if event_id in self.claimed:
+            return False
+        self.claimed.add(event_id)
+        return True
+
+
+class FakeTasks:
+    """The `Tasks` of the tests: records the prompts, returns `outcome`."""
+
+    def __init__(self, outcome: Obj | None = None) -> None:
+        self.outcome = outcome
+        self.prompts: list[str] = []
+
+    def start(self, prompt: str) -> Obj | None:
+        self.prompts.append(prompt)
+        return self.outcome
+
+
 def item(item_id: str, event: Obj, received: float = 1.0) -> Obj:
     return {"id": item_id, "received": received, "event": event}
 

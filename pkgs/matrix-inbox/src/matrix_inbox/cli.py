@@ -1,14 +1,15 @@
-"""`matrix-inbox-post` and `matrix-inbox-answer`: event-handlers entry points."""
+"""`matrix-inbox-post`, `matrix-inbox-answer` and `matrix-inbox-command`: event-handlers entry points."""
 
 import os
 import socket
 import sys
+import time
 from typing import NoReturn
 
 from .data import ParseError, loads
-from .handlers import BusError, answer as answer_reply, post as post_event
-from .io import NatsBus, ProcessLocal
-from .signed import load_key, open_reply
+from .handlers import BusError, answer as answer_reply, command as run_command, post as post_event
+from .io import NatsBus, ProcessLocal, ProcessTasks, SeenDir
+from .signed import load_key, open_command, open_reply
 
 
 def _fail(message: str, code: int) -> NoReturn:
@@ -61,3 +62,21 @@ def answer() -> None:
         answer_reply(reply, _host(), ProcessLocal(), _bus())
     except BusError as e:
         _fail(f"matrix-inbox-answer: {e}", 1)
+
+
+def command() -> None:
+    _no_args("matrix-inbox-command", "the signed command line")
+    try:
+        key = load_key(os.environ.get("MATRIX_GATEWAY_KEY", ""))
+    except ValueError:
+        _fail("matrix-inbox-command: set MATRIX_GATEWAY_KEY to the gateway's public key", 2)
+    cmd = open_command(_read_stdin().decode("utf-8", errors="replace"), key)
+    if cmd is None:
+        _fail("matrix-inbox-command: dropping an unsigned or invalid command", 1)
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    try:
+        run_command(
+            cmd, _host(), time.time(), SeenDir(runtime_dir + "/matrix-inbox/commands"), ProcessTasks(), _bus()
+        )
+    except (BusError, OSError) as e:
+        _fail(f"matrix-inbox-command: {e}", 1)

@@ -5,13 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "matrix-inbox"
 version = "0.1.0"
-description = "Posts answerable agent-inbox items to Matrix over NATS and answers them from the gateway's signed replies"
+description = "Posts answerable agent-inbox items to Matrix over NATS and runs the gateway's signed replies and commands"
 requires-python = ">=3.12"
 dependencies = ["cryptography"]
 
 [project.scripts]
 matrix-inbox-post = "matrix_inbox.cli:post"
 matrix-inbox-answer = "matrix_inbox.cli:answer"
+matrix-inbox-command = "matrix_inbox.cli:command"
 
 [tool.setuptools.packages.find]
 where = ["src"]

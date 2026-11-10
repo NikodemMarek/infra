@@ -1,11 +1,13 @@
-"""What to publish for an offered event and how to answer a signed reply."""
+"""What to publish for an offered event, how to answer a signed reply and how to run a signed command."""
 
 import sys
 from typing import Protocol
 
 from .data import Obj, dumps, get_obj, get_str
 from .logic import Refusal, claimant, detail, offered, parse_permission, parse_question, render, sanitize
-from .signed import Reply
+from .signed import Command, Reply
+
+MAX_AGE = 300  # seconds
 
 
 class LocalError(Exception):
@@ -38,8 +40,12 @@ def post(event: Obj, host: str, bus: Bus) -> None:
     bus.publish("matrix.send", dumps({"to": host, "ref": get_str(event, "reply"), "body": render(event)}))
 
 
-def _notice(bus: Bus, reply: Reply, text: str) -> None:
-    bus.publish("matrix.send", dumps({"reply_to": reply.event_id, "body": text}))
+def _notice(bus: Bus, event_id: str, text: str) -> None:
+    bus.publish("matrix.send", dumps({"reply_to": event_id, "body": text}))
+
+
+def _failed(reason: str) -> str:
+    return "Failed: " + sanitize(reason, single_line=True)[:300]
 
 
 def _waiting(items: list[Obj], ref: str) -> tuple[str, Obj] | None:
@@ -61,15 +67,15 @@ def answer(reply: Reply, host: str, local: Local, bus: Bus) -> None:
         items = local.items()
     except LocalError as e:
         print(f"matrix-inbox-answer: {e}", file=sys.stderr)
-        _notice(bus, reply, "Failed: cannot read the inbox.")
+        _notice(bus, reply.event_id, "Failed: cannot read the inbox.")
         return
     waiting = _waiting(items, reply.ref)
     if waiting is None:
-        _notice(bus, reply, "No longer waiting: answered elsewhere or expired.")
+        _notice(bus, reply.event_id, "No longer waiting: answered elsewhere or expired.")
         return
     item_id, event = waiting
     if render(event) != reply.body:
-        _notice(bus, reply, "Refusing: the message does not match the waiting request.")
+        _notice(bus, reply.event_id, "Refusing: the message does not match the waiting request.")
         return
     text = reply.text.strip()
     if get_str(event, "type") == "claude.permission_request":
@@ -77,7 +83,41 @@ def answer(reply: Reply, host: str, local: Local, bus: Bus) -> None:
     else:
         line = parse_question(get_obj(event, "tool_input") or {}, text)
     if isinstance(line, Refusal):
-        _notice(bus, reply, line.reason)
+        _notice(bus, reply.event_id, line.reason)
         return
     error = local.reply(item_id, line)
-    _notice(bus, reply, "✅ Answered." if error is None else "Failed: " + sanitize(error, single_line=True)[:300])
+    _notice(bus, reply.event_id, "✅ Answered." if error is None else _failed(error))
+
+
+class Seen(Protocol):
+    def claim(self, event_id: str) -> bool:
+        """True the first time; OSError propagates."""
+        ...
+
+
+class Tasks(Protocol):
+    def start(self, prompt: str) -> Obj | None:
+        """The event event-handler-task printed, None if none."""
+        ...
+
+
+def command(cmd: Command, host: str, now: float, seen: Seen, tasks: Tasks, bus: Bus) -> None:
+    if cmd.to != host:
+        print("matrix-inbox-command: ignoring a command for another host", file=sys.stderr)
+        return
+    if abs(now - cmd.ts / 1000) > MAX_AGE:
+        print("matrix-inbox-command: ignoring a stale or future-dated command", file=sys.stderr)
+        return
+    if not seen.claim(cmd.event_id):
+        print("matrix-inbox-command: ignoring an already handled command", file=sys.stderr)
+        return
+    outcome = tasks.start(cmd.text) or {}
+    kind = get_str(outcome, "type")
+    if kind == "task.started":
+        body = f"Started {get_str(outcome, 'shpool') or ''} in {get_str(outcome, 'project') or ''}."
+    elif kind == "task.failed":
+        reason = get_str(outcome, "reason")
+        body = _failed("unknown" if reason is None else reason)
+    else:
+        body = "Failed: the task starter gave no result."
+    _notice(bus, cmd.event_id, body)
