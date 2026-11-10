@@ -65,6 +65,7 @@ in {
       pkgs.wiremix
       pkgs.yazi
       pkgs.nmap
+      pkgs.openvpn
       pkgs.tcpdump
       pkgs.lsof
       pkgs.devenv
