@@ -2,6 +2,7 @@
   lib,
   python3Packages,
   agent-inbox,
+  event-handlers,
   natscli,
 }:
 python3Packages.buildPythonApplication {
@@ -36,12 +37,16 @@ python3Packages.buildPythonApplication {
     ":"
     (lib.makeBinPath [
       agent-inbox
+      event-handlers.task
       natscli
     ])
+    "--set-default"
+    "MATRIX_GATEWAY_KEY"
+    (lib.fileContents ./gateway.pub)
   ];
 
   meta = {
-    description = "Posts answerable agent-inbox items to Matrix over NATS and answers them from the gateway's signed replies";
+    description = "Posts answerable agent-inbox items to Matrix over NATS and runs the gateway's signed replies and commands";
     mainProgram = "matrix-inbox-answer";
   };
 }
