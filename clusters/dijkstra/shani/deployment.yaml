@@ -41,7 +41,7 @@ spec:
             defaultMode: 0400
       containers:
         - name: shani
-          image: shani:6psv59gbrx3gfnb5a2i559fr9jnvjs36
+          image: shani:rld1zmsjc0h3glmgy8313zy661lc98b5
           imagePullPolicy: Never
           securityContext:
             readOnlyRootFilesystem: true
