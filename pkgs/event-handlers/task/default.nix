@@ -56,6 +56,7 @@ writeShellApplication {
 
     post() {
       local type=$1 body=$2
+      printf '%s\n' "$body"
       if ! event-pub "$type" <<<"$body" >/dev/null; then
         echo "event-handler-task: cannot publish $type: $body" >&2
         exit 1
