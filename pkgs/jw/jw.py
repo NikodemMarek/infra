@@ -843,8 +843,8 @@ def cmd_agent(a):
     # the default trunk() is resolved in home without a snapshot
     resolve_in = resolve_dir(home) if a.revision else None
     fetch(home)
-    # one argument: claude takes a single prompt, and a first word like `update` is no subcommand then
-    launch(home, a.detach, ["claude", " ".join(prompt)] if prompt else ["claude"], " ".join(prompt),
+    # one argument after `--`: claude takes a single prompt, and neither a first word like `update` nor a leading `-` is parsed
+    launch(home, a.detach, ["claude", "--", " ".join(prompt)] if prompt else ["claude"], " ".join(prompt),
            lambda name: add_workspace(home, a.revision or "trunk()", name, resolve_in))
 
 

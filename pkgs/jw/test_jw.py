@@ -112,6 +112,22 @@ class CmdAgent(unittest.TestCase):
             jw.cmd_agent(mock.Mock(args=["--", prompt], revision=None, detach=False))
         return err.getvalue()
 
+    def claude_argv(self, args):
+        with mock.patch.object(jw, "launch") as launch, mock.patch.object(jw, "fetch"), \
+                mock.patch.object(jw, "locate", return_value=("x", self.tmp)), \
+                mock.patch.object(jw, "repos", return_value=[]):
+            jw.cmd_agent(mock.Mock(args=args, revision=None, detach=True))
+        return launch.call_args.args[2]
+
+    def test_prompt_follows_double_dash(self):
+        self.assertEqual(self.claude_argv(["--", "fix x"]), ["claude", "--", "fix x"])
+
+    def test_dash_prompt_is_not_an_option(self):
+        self.assertEqual(self.claude_argv(["--", "--settings={}"]), ["claude", "--", "--settings={}"])
+
+    def test_no_prompt_has_no_double_dash(self):
+        self.assertEqual(self.claude_argv([]), ["claude"])
+
     def test_session_env_and_record(self):
         self.agent()
         self.assertIn("export AGENT_SESSION=s-1\n", self.job)
