@@ -75,7 +75,6 @@
       boot.initrd = {
         supportedFilesystems = lib.optional (!cfg.isZfs) "btrfs";
         systemd = {
-          enable = true;
           services.rollback = {
             description = "Roll the root back to a pristine state";
             wantedBy = ["initrd.target"];
