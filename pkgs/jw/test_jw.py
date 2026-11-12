@@ -1710,14 +1710,14 @@ class CmdSession(RecordsBase):
         with open(self.path("s-1.json"), "rb") as f:
             self.assertIn("ż".encode(), f.read())
 
-    FINISHED = {"status": "done", "status_at": 4, "notified": 5, "reaped": 6}
+    FINISHED = {"status": "done", "status_at": 4, "cache_expires_at": 9, "notified": 5, "reaped": 6}
 
     def test_finish_marks(self):
-        self.assertEqual(tuple(jw.FINISH_MARKS), ("status", "status_at", "waiting_for", "notified", "reaped"))
+        self.assertEqual(tuple(jw.FINISH_MARKS), ("status", "status_at", "waiting_for", "cache_expires_at", "notified", "reaped"))
 
     def test_set_workspace_drops_all_marks(self):
-        self.write("s-1.json", json.dumps({"status": "done", "status_at": 1, "notified": 2, "reaped": 3,
-                                           "title": "T"}))
+        self.write("s-1.json", json.dumps({"status": "done", "status_at": 1, "cache_expires_at": 9,
+                                           "notified": 2, "reaped": 3, "title": "T"}))
         self.run_cmd("set", "--workspace", "/w")
         self.assertEqual(jw.read_record(self.d, "s-1"), {"title": "T", "workspace": "/w"})
 
@@ -2405,10 +2405,10 @@ class Launch(unittest.TestCase):
         self.seed()
         with self.state():
             jw.update_record(jw.records_dir(), "w1", {"status": "done", "status_at": 1, "waiting_for": "q",
-                                                      "notified": 2, "reaped": 3})
+                                                      "cache_expires_at": 9, "notified": 2, "reaped": 3})
         self.go([], "w1", resume=True)
         r = self.record()
-        for k in ("status", "status_at", "waiting_for", "notified", "reaped"):
+        for k in ("status", "status_at", "waiting_for", "cache_expires_at", "notified", "reaped"):
             self.assertNotIn(k, r)
         self.assertEqual(r["title"], "orig")
 
@@ -2610,6 +2610,67 @@ class SetStatus(RecordsBase):
                 self.assertEqual(jw.read_record(self.d, "s"), rec)
                 self.assertEqual(self.mtime(), m)
 
+    def seed(self, rec, aged=False):
+        self.write("s.json", json.dumps(rec))
+        if aged:
+            self.age("s.json", 1)
+
+    def test_cache_set_on_new_record(self):
+        r = jw.set_status(self.d, "s", "idle", now=5, cache_expires_at=100)
+        want = {"status": "idle", "status_at": 5, "cache_expires_at": 100}
+        self.assertEqual(r, want)
+        self.assertEqual(jw.read_record(self.d, "s"), want)
+
+    def test_cache_update_same_status(self):
+        self.seed({"status": "idle", "status_at": 1, "cache_expires_at": 50}, aged=True)
+        m = self.mtime()
+        r = jw.set_status(self.d, "s", "idle", now=9, cache_expires_at=100)
+        want = {"status": "idle", "status_at": 1, "cache_expires_at": 100}
+        self.assertEqual(r, want)
+        self.assertEqual(jw.read_record(self.d, "s"), want)
+        self.assertNotEqual(self.mtime(), m)
+
+    def test_cache_unchanged_no_write(self):
+        rec = {"status": "idle", "status_at": 1, "cache_expires_at": 50}
+        self.seed(rec, aged=True)
+        m = self.mtime()
+        jw.set_status(self.d, "s", "idle", now=9, cache_expires_at=50)
+        self.assertEqual(jw.read_record(self.d, "s"), rec)
+        self.assertEqual(self.mtime(), m)
+
+    def test_cache_removed_on_status_change(self):
+        self.seed({"status": "idle", "status_at": 1, "cache_expires_at": 50})
+        r = jw.set_status(self.d, "s", "busy", now=2)
+        self.assertEqual(r, {"status": "busy", "status_at": 2})
+        self.assertEqual(jw.read_record(self.d, "s"), r)
+
+    def test_cache_removed_same_status(self):
+        self.seed({"status": "busy", "status_at": 1, "cache_expires_at": 50}, aged=True)
+        m = self.mtime()
+        r = jw.set_status(self.d, "s", "busy")
+        self.assertEqual(r, {"status": "busy", "status_at": 1})
+        self.assertEqual(jw.read_record(self.d, "s"), r)
+        self.assertNotEqual(self.mtime(), m)
+
+    def test_cache_set_on_done(self):
+        self.seed({"status": "done", "status_at": 1})
+        jw.set_status(self.d, "s", "idle", now=9, cache_expires_at=100)
+        self.assertEqual(jw.read_record(self.d, "s"),
+                         {"status": "done", "status_at": 1, "cache_expires_at": 100})
+
+    def test_cache_removed_on_done(self):
+        self.seed({"status": "done", "status_at": 1, "cache_expires_at": 100})
+        jw.set_status(self.d, "s", "busy", now=9)
+        self.assertEqual(jw.read_record(self.d, "s"), {"status": "done", "status_at": 1})
+
+    def test_cache_unchanged_on_done_no_write(self):
+        rec = {"status": "done", "status_at": 1, "cache_expires_at": 100}
+        self.seed(rec, aged=True)
+        m = self.mtime()
+        jw.set_status(self.d, "s", "idle", now=9, cache_expires_at=100)
+        self.assertEqual(jw.read_record(self.d, "s"), rec)
+        self.assertEqual(self.mtime(), m)
+
 
 class CmdSessionStatus(RecordsBase):
     def setUp(self):
@@ -2716,6 +2777,31 @@ class CmdSessionStatus(RecordsBase):
         self.write("s-1.json", json.dumps({"status": "done", "status_at": 1}))
         self.run_cmd("busy")
         self.assertEqual(self.rec(), {"status": "done", "status_at": 1})
+
+    def test_cache_expires_at_int(self):
+        self.assertEqual(self.run_cmd("idle", "--cache-expires-at", "1234"), "")
+        r = self.rec()
+        self.assertEqual(r["status"], "idle")
+        self.assertEqual(r["cache_expires_at"], 1234)
+        self.assertIsInstance(r["cache_expires_at"], int)
+
+    def test_cache_expires_at_removed_without_flag(self):
+        self.run_cmd("idle", "--cache-expires-at", "1234")
+        self.run_cmd("idle")
+        self.assertNotIn("cache_expires_at", self.rec())
+
+    def test_cache_expires_at_with_waiting_for(self):
+        self.run_cmd("waiting", "--waiting-for", "x", "--cache-expires-at", "7")
+        r = self.rec()
+        self.assertEqual((r["waiting_for"], r["cache_expires_at"]), ("x", 7))
+
+    def test_cache_expires_at_not_integer_exits_2(self):
+        for v in ("abc", "1.5"):
+            with self.subTest(v=v), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as c:
+                    self.run_cmd("idle", "--cache-expires-at", v)
+                self.assertEqual(c.exception.code, 2)
+                self.assertFalse(os.path.exists(self.d))
 
 
 class Deliver(unittest.TestCase):

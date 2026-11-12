@@ -37,7 +37,7 @@ GITLAB = re.compile(r"^gl-[a-z]+-[0-9]+(-[0-9]+)?$")  # gitlab-context's workspa
 IDLE_LIMIT = 4 * 3600  # seconds a detached Claude session must have been idle to be reaped
 FINISHED_IDLE = 600  # seconds a finished session must have been idle and detached to be stopped
 REAP_DEADLINE = 600  # seconds the reaper works through the session records, so the run ends within its timeout
-FINISH_MARKS = ("status", "status_at", "waiting_for", "notified", "reaped")  # record keys of the state of a session (done or not) and its reaping; a new session start drops them
+FINISH_MARKS = ("status", "status_at", "waiting_for", "cache_expires_at", "notified", "reaped")  # record keys of the state of a session (done or not) and its reaping; a new session start drops them
 WRAP_UP = ("The merge requests of this session are merged. Finish what is left of this work "
            "(e.g. record the outcome), then run `jw done`. The session is stopped once it is idle "
            "and nobody is attached.")
@@ -1285,16 +1285,25 @@ def update_record(d, name, fields, mrs=(), drop=()):
     return locked_update(d, name, change)
 
 
-def set_status(d, name, state, waiting_for=None, now=None):
-    """Record the state of session name; a done session keeps its status, and an unchanged one is not rewritten."""
+def set_status(d, name, state, waiting_for=None, now=None, cache_expires_at=None):
+    """Record the state of session name and when its prompt cache goes cold (None: unknown, removed); a done session
+    keeps its status, and an unchanged record is not rewritten."""
     def change(record):
-        if record.get("status") == "done" or (record.get("status") == state and record.get("waiting_for") == waiting_for):
-            return False
-        record["status"] = state
-        record["status_at"] = now or time.time()
-        record.pop("waiting_for", None)
-        if waiting_for:
-            record["waiting_for"] = waiting_for
+        changed = False
+        if record.get("status") != "done" and not (record.get("status") == state and record.get("waiting_for") == waiting_for):
+            record["status"] = state
+            record["status_at"] = now or time.time()
+            record.pop("waiting_for", None)
+            if waiting_for:
+                record["waiting_for"] = waiting_for
+            changed = True
+        if record.get("cache_expires_at") != cache_expires_at:
+            if cache_expires_at is None:
+                del record["cache_expires_at"]
+            else:
+                record["cache_expires_at"] = cache_expires_at
+            changed = True
+        return changed
     return locked_update(d, name, change)
 
 
@@ -1338,7 +1347,7 @@ def cmd_status(a):
         raise Fail("--waiting-for needs waiting")
     text = "".join(" " if unicodedata.category(c) == "Cc" else c for c in a.waiting_for or "").strip()[:200]
     try:
-        set_status(records_dir(), name, a.state, text or None)
+        set_status(records_dir(), name, a.state, text or None, cache_expires_at=a.cache_expires_at)
     except (OSError, ValueError) as e:
         raise Fail(f"cannot write the session record: {e}")
 
@@ -1448,6 +1457,7 @@ def parse_args():
     s = ss.add_parser("status", help="set the status of this session's record (hooks run this); not for done, see jw done; allowed in GitLab event sessions")
     s.add_argument("state", choices=["busy", "idle", "waiting", "ended"])
     s.add_argument("--waiting-for", help="what the session waits for (with waiting)")
+    s.add_argument("--cache-expires-at", type=int, help="when the prompt cache goes cold, epoch seconds; omitted: removed")
     s.set_defaults(func=cmd_status)
     s = sub.add_parser("done", help="mark this agent session finished: it is stopped once it is idle and detached")
     s.set_defaults(func=cmd_done)
