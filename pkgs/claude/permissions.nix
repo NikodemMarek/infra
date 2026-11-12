@@ -96,7 +96,7 @@
     "Bash(glab api *notes*)"
     "Bash(glab api *discussions*)"
   ];
-  additionalDirectories = ["@memoryDir@" "~/projects"];
+  additionalDirectories = ["@memoryDir@" "@projectsDir@"];
   # every session starts in auto mode, also those jw and the event handlers start
   defaultMode = "auto";
 }
