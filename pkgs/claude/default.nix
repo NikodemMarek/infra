@@ -191,6 +191,20 @@ let
             && echo "claude: moved unmanaged settings.json to $bak" >&2
         }
 
+        # skips the first-run screens; only adds missing keys, never changes claude's values
+        __claude_seed_state() {
+          local f="$CLAUDE_CONFIG_DIR/.claude.json" tmp="$CLAUDE_CONFIG_DIR/.claude.json.seed.$$"
+          local seed='{"hasCompletedOnboarding":true,"hasSeenAutoDefaultNotice":true}'
+          if [ -s "$f" ]; then
+            ${jq}/bin/jq -e --argjson s "$seed" '. as $c | $s | keys | all(. as $k | $c | has($k))' "$f" >/dev/null 2>&1 \
+              && return 0
+            ${jq}/bin/jq --argjson s "$seed" '$s + .' "$f" >"$tmp" 2>/dev/null || { ${coreutils}/bin/rm -f "$tmp"; return 0; }
+          else
+            printf '%s\n' "$seed" >"$tmp" || { ${coreutils}/bin/rm -f "$tmp"; return 0; }
+          fi
+          ${coreutils}/bin/mv -T "$tmp" "$f" || ${coreutils}/bin/rm -f "$tmp"
+        }
+
         __claude_setup() {
           export CLAUDE_CONFIG_DIR="''${CLAUDE_CONFIG_DIR:-${dataDir}}"
           # unconditional: the agents' prose has this path baked in at build time
@@ -205,6 +219,7 @@ let
             echo "claude: $CLAUDE_MEMORY_DIR contains a nested git repository ($nested); memory commits miss files below it" >&2
           fi
           __claude_adopt_settings
+          __claude_seed_state
           ${lib.concatMapStringsSep "\n" (
             e: ''__claude_link ${lib.escapeShellArg e} "${config}/${e}"''
           ) entries}
@@ -212,7 +227,7 @@ let
         }
 
         __claude_setup || true
-        unset -f __claude_link __claude_prune __claude_adopt_settings __claude_setup
+        unset -f __claude_link __claude_prune __claude_adopt_settings __claude_seed_state __claude_setup
       '';
 
       # Sourced after the preamble: a plain interactive `claude [prompt]` in a repo's main jj
