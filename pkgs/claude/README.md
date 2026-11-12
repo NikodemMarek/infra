@@ -102,6 +102,8 @@ On launch the wrapper uses `CLAUDE_CONFIG_DIR` (default: the package's `dataDir`
 ~/.local/state/knowledge/inbox/   the curator's inbox (one file per pending note)
 ```
 
+`.claude.json` (claude's own state) gets `hasCompletedOnboarding` and `hasSeenAutoDefaultNotice` added when missing, so a fresh data dir skips the first-run screens (theme picker, security notes, terminal setup) and the auto mode notice; existing values are kept. Log in with `/login`; the per-project trust prompt still appears.
+
 Managed entries are symlinks refreshed on every launch; stale ones from older builds are pruned. Real files or foreign symlinks are never overwritten (a warning is printed), except `settings.json`, which is moved to `backups/` first.
 
 `dataDir` is shell-expanded at runtime and must start with `$HOME/` (checked at build time; the markdown prose shows it as `~/...`). Variants (e.g. different `extend` results) sharing one `dataDir` re-link each other's entries on every launch; give a variant its own `dataDir` to run them side by side.
