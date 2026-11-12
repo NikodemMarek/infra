@@ -31,6 +31,7 @@ complete -c jw -n '__fish_seen_subcommand_from attach at' -a '(__jw_shpool_sessi
 complete -c jw -n '__fish_seen_subcommand_from session; and not __fish_seen_subcommand_from get set status' -a 'get set status'
 complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from status; and not __fish_seen_subcommand_from busy idle waiting ended' -a 'busy idle waiting ended'
 complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from status' -l waiting-for -r -d 'what the session waits for (with waiting)'
+complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from status' -l cache-expires-at -r -d 'when the prompt cache goes cold (epoch seconds)'
 complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from get set' -s s -l session -r -d 'session name (default: $AGENT_SESSION)'
 complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from set' -l kind -r -d 'what started the session'
 complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from set' -l title -r

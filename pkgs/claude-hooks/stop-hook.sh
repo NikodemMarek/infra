@@ -20,7 +20,7 @@ if [ -n "$pointer" ]; then
   exit 0
 fi
 [ -n "${AGENT_SESSION:-}" ] || exit 0
-claude-status-hook idle </dev/null
+claude-status-hook idle <<<"$input"
 jq -c '([.last_assistant_message | strings | split("\n")[] | select(startswith("```") | not)
       | sub("^[#>*\\s-]+"; "") | gsub("\\*\\*|`"; "") | select(. != "")]
     | first // "waiting for you")[0:120] as $title
