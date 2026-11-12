@@ -59,6 +59,7 @@
   shaniEventHandlers = event-handlers.override {handlers = shaniHandlers;};
 
   shaniClaude = claude.extend {
+    projectsDir = "/projects";
     settings = {
       permissions = {
         deny = ["AskUserQuestion"];

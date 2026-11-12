@@ -102,7 +102,7 @@ On launch the wrapper uses `CLAUDE_CONFIG_DIR` (default: the package's `dataDir`
 ~/.local/state/knowledge/inbox/   the curator's inbox (one file per pending note)
 ```
 
-`.claude.json` (claude's own state) gets `hasCompletedOnboarding` and `hasSeenAutoDefaultNotice` added when missing, so a fresh data dir skips the first-run screens (theme picker, security notes, terminal setup) and the auto mode notice; existing values are kept. Log in with `/login`; the per-project trust prompt still appears.
+`.claude.json` (claude's own state) gets `hasCompletedOnboarding`, `hasSeenAutoDefaultNotice` and `projects.<path>.hasTrustDialogAccepted` for `projectsDir` (default `$HOME/projects`) added when missing, so a fresh data dir skips the first-run screens (theme picker, security notes, terminal setup), the auto mode notice and the trust prompt there; existing values are kept. A repo below `projectsDir` is also trusted on its own when launched in (`--worktree` needs that). Log in with `/login`.
 
 Managed entries are symlinks refreshed on every launch; stale ones from older builds are pruned. Real files or foreign symlinks are never overwritten (a warning is printed), except `settings.json`, which is moved to `backups/` first.
 
@@ -145,7 +145,7 @@ final: prev: {
 }
 ```
 
-`extend` accepts `instructions`, `agents`, `skills`, `settings`, `extraPackages` and `dataDir` (other names fail with an error). It deep-merges `settings`, `agents` and `skills` (attrsets recurse, lists such as `permissions.allow` are concatenated and deduplicated), concatenates `extraPackages`, and replaces `instructions` / `dataDir`. A `null` agent/skill removes it: `claude.extend { skills.atomic-commits = null; }`. The result carries `extend` again, so layers chain, and still supports `.override { ... }`, which replaces `instructions` / `agents` / `skills` / `settings` wholesale instead.
+`extend` accepts `instructions`, `agents`, `skills`, `settings`, `extraPackages`, `dataDir` and `projectsDir` (other names fail with an error). It deep-merges `settings`, `agents` and `skills` (attrsets recurse, lists such as `permissions.allow` are concatenated and deduplicated), concatenates `extraPackages`, and replaces `instructions` / `dataDir` / `projectsDir`. A `null` agent/skill removes it: `claude.extend { skills.atomic-commits = null; }`. The result carries `extend` again, so layers chain, and still supports `.override { ... }`, which replaces `instructions` / `agents` / `skills` / `settings` wholesale instead.
 
 ## Local/private extensions
 
