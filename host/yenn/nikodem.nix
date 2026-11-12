@@ -28,7 +28,7 @@ in {
       pkgs.zellij
       wake-geralt
 
-      pkgs.claude
+      (pkgs.claude.extend {projectsDir = projects;})
       pkgs.agent-inbox
       pkgs.agent-task
       pkgs.tm

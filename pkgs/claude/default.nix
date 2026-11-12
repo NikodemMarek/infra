@@ -27,6 +27,8 @@
   extraPackages ? [ ],
   # where claude keeps its state/config; shell-expanded at runtime
   dataDir ? "$HOME/.local/share/claude",
+  # trusted without the trust prompt, with every repo below it; shell-expanded at runtime
+  projectsDir ? "$HOME/projects",
 }:
 
 let
@@ -72,6 +74,7 @@ let
     "settings"
     "extraPackages"
     "dataDir"
+    "projectsDir"
   ];
 
   # Inner builder: takes fully-resolved config. Wrapped in makeOverridable so
@@ -85,6 +88,7 @@ let
       settings,
       extraPackages,
       dataDir,
+      projectsDir,
     }:
     let
       # "$HOME/.local/share/claude" -> "~/.local/share/claude" (for prose in the markdown files)
@@ -121,6 +125,20 @@ let
       ++ map (n: "skills/${n}") (lib.attrNames skills);
 
       managed = "${builtins.storeDir}/*-claude-config/*";
+
+      # Adds the keys of the JSON object $1 to claude's state file where they are missing
+      # (nested objects merge, claude's own values win). Atomic, never fails.
+      seedState = writeShellScript "claude-seed-state" ''
+        f="$CLAUDE_CONFIG_DIR/.claude.json" tmp="$CLAUDE_CONFIG_DIR/.claude.json.seed.$$"
+        if [ -s "$f" ]; then
+          ${jq}/bin/jq -e --argjson s "$1" '($s * .) == .' "$f" >/dev/null 2>&1 && exit 0
+          ${jq}/bin/jq --argjson s "$1" '$s * .' "$f" >"$tmp" 2>/dev/null || { ${coreutils}/bin/rm -f "$tmp"; exit 0; }
+        else
+          printf '%s\n' "$1" >"$tmp" || { ${coreutils}/bin/rm -f "$tmp"; exit 0; }
+        fi
+        ${coreutils}/bin/mv -T "$tmp" "$f" || ${coreutils}/bin/rm -f "$tmp"
+        exit 0
+      '';
 
       # Sourced from the makeWrapper script, which runs with `bash -e`: all work
       # happens in a function called through `|| true` (this disables -e inside
@@ -191,20 +209,6 @@ let
             && echo "claude: moved unmanaged settings.json to $bak" >&2
         }
 
-        # skips the first-run screens; only adds missing keys, never changes claude's values
-        __claude_seed_state() {
-          local f="$CLAUDE_CONFIG_DIR/.claude.json" tmp="$CLAUDE_CONFIG_DIR/.claude.json.seed.$$"
-          local seed='{"hasCompletedOnboarding":true,"hasSeenAutoDefaultNotice":true}'
-          if [ -s "$f" ]; then
-            ${jq}/bin/jq -e --argjson s "$seed" '. as $c | $s | keys | all(. as $k | $c | has($k))' "$f" >/dev/null 2>&1 \
-              && return 0
-            ${jq}/bin/jq --argjson s "$seed" '$s + .' "$f" >"$tmp" 2>/dev/null || { ${coreutils}/bin/rm -f "$tmp"; return 0; }
-          else
-            printf '%s\n' "$seed" >"$tmp" || { ${coreutils}/bin/rm -f "$tmp"; return 0; }
-          fi
-          ${coreutils}/bin/mv -T "$tmp" "$f" || ${coreutils}/bin/rm -f "$tmp"
-        }
-
         __claude_setup() {
           export CLAUDE_CONFIG_DIR="''${CLAUDE_CONFIG_DIR:-${dataDir}}"
           # unconditional: the agents' prose has this path baked in at build time
@@ -219,7 +223,9 @@ let
             echo "claude: $CLAUDE_MEMORY_DIR contains a nested git repository ($nested); memory commits miss files below it" >&2
           fi
           __claude_adopt_settings
-          __claude_seed_state
+          # skips the first-run screens and the trust prompt in projectsDir
+          ${seedState} "$(${jq}/bin/jq -nc --arg p "${projectsDir}" \
+            '{hasCompletedOnboarding: true, hasSeenAutoDefaultNotice: true, projects: {($p): {hasTrustDialogAccepted: true}}}')"
           ${lib.concatMapStringsSep "\n" (
             e: ''__claude_link ${lib.escapeShellArg e} "${config}/${e}"''
           ) entries}
@@ -227,7 +233,7 @@ let
         }
 
         __claude_setup || true
-        unset -f __claude_link __claude_prune __claude_adopt_settings __claude_seed_state __claude_setup
+        unset -f __claude_link __claude_prune __claude_adopt_settings __claude_setup
       '';
 
       # Sourced after the preamble: a plain interactive `claude [prompt]` in a repo's main jj
@@ -274,6 +280,11 @@ let
               # only the human's w-* workspaces get a session workspace; a-*, s-* etc. run as is
               case "$(${coreutils}/bin/basename "$__claude_root")" in w-*) ;; *) return 0 ;; esac
               main="$(${coreutils}/bin/dirname "$__claude_root")"; main="''${main%.agents}"
+              ;;
+          esac
+          case "$main" in
+            "${projectsDir}/"*)
+              ${seedState} "$(${jq}/bin/jq -nc --arg p "$main" '{projects: {($p): {hasTrustDialogAccepted: true}}}')"
               ;;
           esac
           # claude refuses --worktree until this repo itself is trusted (a trusted parent dir doesn't count)
@@ -347,7 +358,7 @@ let
         # Overlay-friendly customisation, e.g.
         #   prev.claude.extend { skills.foo = ./foo; settings.permissions.allow = [ "..." ]; }
         # attrsets (settings, agents, skills) deep-merge, extraPackages concatenates,
-        # instructions/dataDir are replaced. Results carry `extend` again.
+        # instructions/dataDir/projectsDir are replaced. Results carry `extend` again.
         extend =
           cfg:
           let
@@ -357,6 +368,7 @@ let
           build {
             instructions = cfg.instructions or instructions;
             dataDir = cfg.dataDir or dataDir;
+            projectsDir = cfg.projectsDir or projectsDir;
             settings = deepMerge settings (cfg.settings or { });
             # `null` entries remove an agent/skill, e.g. `skills.commit = null;`
             agents = dropNulls (deepMerge agents (cfg.agents or { }));
@@ -376,5 +388,5 @@ build {
   agents = if agents == null then defaultAgents else agents;
   skills = if skills == null then defaultSkills else skills;
   settings = if settings == null then import ./settings.nix else settings;
-  inherit extraPackages dataDir;
+  inherit extraPackages dataDir projectsDir;
 }
