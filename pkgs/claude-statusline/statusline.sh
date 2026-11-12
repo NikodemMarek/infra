@@ -56,12 +56,13 @@ if [ -z "$jj_info" ] && command -v git >/dev/null 2>&1 && git -C "$dir" rev-pars
   fi
 fi
 
-# jw session: title, kind, status and MRs (fails without a record)
+# jw session: title, kind, status, prompt-cache countdown and MRs (fails without a record)
 session=$(jw session get 2>/dev/null | jq -r --arg name "$session_name" '
   ((.title // "") | if . == "" then $name else . end | if length > 40 then .[:39] + "…" else . end) as $title
   | [$title,
      (.kind // "" | if . == "task" or . == "" then "" else "[\(.)]" end),
      (.status // ""),
+     (.cache_expires_at | numbers | . - now | if . <= 0 then "cache:cold" else "cache:\(. / 60 | ceil)m" end),
      ((.mrs // [])[]
        | (capture("/merge_requests/(?<n>[0-9]+)") | "!" + .n) // (capture("/pull/(?<n>[0-9]+)") | "#" + .n) // empty)]
   | map(select(. != "")) | join(" ")' 2>/dev/null)

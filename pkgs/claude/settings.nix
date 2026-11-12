@@ -7,6 +7,7 @@
   statusLine = {
     type = "command";
     command = "claude-statusline";
+    refreshInterval = 30;
   };
 
   # Built-in auto-memory is replaced by the knowledge notes and curator. Both the
