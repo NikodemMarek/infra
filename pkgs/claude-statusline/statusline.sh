@@ -3,13 +3,34 @@
 # so a missing tool or odd input degrades the line instead of killing it.
 input=$(cat)
 
+# Fields from stdin, one per line
+{
+  read -r dir
+  read -r session_name
+  read -r start
+  read -r model
+  read -r ctx
+  read -r limits
+  read -r cost
+  read -r lines
+} < <(echo "$input" | jq -r '
+  (.workspace.current_dir // .cwd // ""),
+  (.session_name // ""),
+  (.session.start_time // ""),
+  (.model.display_name // ""),
+  (.context_window.used_percentage | if . != null then "ctx:\(round)%" else "" end),
+  ([(.rate_limits.five_hour.used_percentage | select(. != null) | "5h:\(round)%"),
+    (.rate_limits.seven_day.used_percentage | select(. != null) | "7d:\(round)%")] | join(" ")),
+  (.cost.total_cost_usd // ""),
+  ((.cost.total_lines_added // 0) as $a | (.cost.total_lines_removed // 0) as $r
+    | if $a + $r > 0 then "+\($a)/-\($r)" else "" end)')
+
 # Directory
-dir=$(echo "$input" | jq -r '.workspace.current_dir // .cwd // empty')
 [ -z "$dir" ] && dir=$(pwd)
 short_dir="${dir/#"$HOME"/\~}"
 
 # Name the session's jj workspace after the session title (claude-jj-workspace decides; once, in the background)
-if [ -n "$(echo "$input" | jq -r '.session_name // empty')" ] && command -v claude-jj-workspace >/dev/null 2>&1; then
+if [ -n "$session_name" ] && command -v claude-jj-workspace >/dev/null 2>&1; then
   case "$dir" in */*.agents/s-*) printf '%s' "$input" | claude-jj-workspace title >/dev/null 2>&1 & ;; esac
 fi
 
@@ -35,22 +56,23 @@ if [ -z "$jj_info" ] && command -v git >/dev/null 2>&1 && git -C "$dir" rev-pars
   fi
 fi
 
-# Package version (pom.xml or package.json)
-pkg_ver=""
-if [ -f "$dir/pom.xml" ]; then
-  pkg_ver=$(grep -m1 '<version>' "$dir/pom.xml" | sed 's/.*<version>\(.*\)<\/version>.*/\1/' | tr -d ' ')
-elif [ -f "$dir/package.json" ]; then
-  pkg_ver=$(jq -r '.version // empty' "$dir/package.json" 2>/dev/null)
-fi
+# jw session: title, kind, status and MRs (fails without a record)
+session=$(jw session get 2>/dev/null | jq -r --arg name "$session_name" '
+  ((.title // "") | if . == "" then $name else . end | if length > 40 then .[:39] + "…" else . end) as $title
+  | [$title,
+     (.kind // "" | if . == "task" or . == "" then "" else "[\(.)]" end),
+     (.status // ""),
+     ((.mrs // [])[]
+       | (capture("/merge_requests/(?<n>[0-9]+)") | "!" + .n) // (capture("/pull/(?<n>[0-9]+)") | "#" + .n) // empty)]
+  | map(select(. != "")) | join(" ")' 2>/dev/null)
+[ -z "$session" ] && session="${session_name:0:40}"
 
-# Java version
-java_ver=""
-if command -v java >/dev/null 2>&1; then
-  java_ver=$(java -version 2>&1 | head -1 | sed 's/.*"\(.*\)".*/\1/')
-fi
+# Cost and lines changed
+cost_lines=""
+[ -n "$cost" ] && cost_lines=$(printf '$%.2f' "$cost")
+[ -n "$lines" ] && cost_lines="${cost_lines:+$cost_lines }$lines"
 
 # Session uptime
-start=$(echo "$input" | jq -r '.session.start_time // empty')
 if [ -n "$start" ]; then
   now=$(date +%s)
   elapsed=$((now - start / 1000))
@@ -65,20 +87,15 @@ else
   uptime=""
 fi
 
-# Model + context
-model=$(echo "$input" | jq -r '.model.display_name // empty')
-used=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
-ctx=""
-[ -n "$used" ] && ctx=$(printf "ctx:%.0f%%" "$used")
-
 # Build output: starship-like
 out="$short_dir"
 [ -n "$jj_info" ] && out="$out $jj_info"
 [ -n "$git_branch" ] && out="$out on  $git_branch $git_dirty"
-[ -n "$pkg_ver" ] && out="$out | v$pkg_ver"
-[ -n "$java_ver" ] && out="$out via v$java_ver"
+[ -n "$session" ] && out="$out | $session"
 [ -n "$model" ] && out="$out | $model"
 [ -n "$ctx" ] && out="$out | $ctx"
+[ -n "$limits" ] && out="$out | $limits"
+[ -n "$cost_lines" ] && out="$out | $cost_lines"
 [ -n "$uptime" ] && out="$out | ${uptime}"
 
 printf '%s' "$out"
