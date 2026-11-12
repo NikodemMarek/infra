@@ -562,7 +562,7 @@ fn record_loads_the_status_fields() {
     put(
         &dir,
         "s.json",
-        r#"{"status":"waiting","waiting_for":"permission prompt","status_at":1700000000.5}"#,
+        r#"{"status":"waiting","waiting_for":"permission prompt","status_at":1700000000.5,"cache_expires_at":1700003600}"#,
     );
     assert_eq!(
         Record::load(&dir, "s"),
@@ -570,6 +570,7 @@ fn record_loads_the_status_fields() {
             status: "waiting".into(),
             waiting_for: "permission prompt".into(),
             status_at: Some(1700000000.5),
+            cache_expires_at: Some(1700003600.0),
             ..Record::default()
         })
     );
@@ -581,9 +582,25 @@ fn record_with_wrong_types_reads_as_empty() {
     put(
         &dir,
         "s.json",
-        r#"{"kind":1,"mrs":"x","status":2,"waiting_for":true,"status_at":"now"}"#,
+        r#"{"kind":1,"mrs":"x","status":2,"waiting_for":true,"status_at":"now","cache_expires_at":"x"}"#,
     );
     assert_eq!(Record::load(&dir, "s"), Some(Record::default()));
+}
+
+#[test]
+fn cache_label_counts_whole_minutes_up_and_goes_cold_at_zero() {
+    for (expires_at, label) in [
+        (2520.0, "cache:42m"),
+        (3600.0, "cache:60m"),
+        (61.0, "cache:2m"),
+        (60.0, "cache:1m"),
+        (1.0, "cache:1m"),
+        (0.0, "cache:cold"),
+        (-5.0, "cache:cold"),
+    ] {
+        assert_eq!(cache_label(expires_at, 0.0), label, "{expires_at}");
+    }
+    assert_eq!(cache_label(3520.0, 1000.0), "cache:42m");
 }
 
 #[test]

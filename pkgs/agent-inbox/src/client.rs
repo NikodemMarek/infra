@@ -57,6 +57,8 @@ pub struct Record {
     pub waiting_for: String,
     /// When the status last changed (seconds since the epoch).
     pub status_at: Option<f64>,
+    /// When the session's prompt cache is estimated to go cold (seconds since the epoch).
+    pub cache_expires_at: Option<f64>,
 }
 
 impl Record {
@@ -87,6 +89,7 @@ impl Record {
             status: text("status"),
             waiting_for: text("waiting_for"),
             status_at: v.get("status_at").and_then(Value::as_f64),
+            cache_expires_at: v.get("cache_expires_at").and_then(Value::as_f64),
         })
     }
 
@@ -351,6 +354,16 @@ pub fn age(since: f64, now: f64) -> String {
         0..=59 => format!("{secs}s"),
         60..=3599 => format!("{}m", secs / 60),
         _ => format!("{}h", secs / 3600),
+    }
+}
+
+/// Time left of a prompt cache that expires at `expires_at`: `cache:42m`, `cache:cold`
+pub fn cache_label(expires_at: f64, now: f64) -> String {
+    let left = expires_at - now;
+    if left <= 0.0 {
+        "cache:cold".to_string()
+    } else {
+        format!("cache:{}m", (left / 60.0).ceil() as u64)
     }
 }
 
