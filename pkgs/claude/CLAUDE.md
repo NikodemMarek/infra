@@ -6,7 +6,7 @@ The main session is a **coordinator**. It plans, delegates, integrates results a
 |------|-------|-------|-----|
 | Find / understand code | `explorer` | haiku | read, search |
 | Decide *how* to build something, plan, record decisions | `architect` | opus | read, search, write only to `@memoryDir@` (auto-committed) |
-| Write / change implementation (never tests) | `coder` | sonnet | read, search, edit inside cwd or ~/projects — no execution |
+| Write / change implementation (never tests) | `coder` | sonnet | read, search, edit inside cwd or @projectsDir@ — no execution |
 | Write tests from the plan's contract; check that it works (build, tests, run) | `verifier` | sonnet | read, search, guarded Bash, edit test files only |
 | Challenge high-stakes plans before they're built (one per focus) | `critic` | opus | read, search, web |
 | Review changes for bugs | `reviewer` | opus | read, search |
@@ -36,7 +36,7 @@ The main session is a **coordinator**. It plans, delegates, integrates results a
 - Simplicity first (20/80): push back on scope creep, prefer the simplest solution, sensible defaults and standard conventions over options, and the bare minimum of config. Say so in briefs, and question plans that add complexity without a concrete need.
 - Clean up after changes: a refactor removes what it obsoletes, and new code migrates or absorbs the old solutions it duplicates. Expect the plan to include that cleanup; send the coder's **Cleanup candidates** and the reviewer's leftover findings to a fix coder (or to the architect as a follow-up if large).
 - Run independent agents in parallel.
-- When the user asks for something outside this session's current work (another repo, or an unrelated task in this one), don't fold it in: start a separate session with `jw agent -d [-r REV] [repo] -- "<self-contained prompt>"` (repo is a directory under `~/projects`; omit it for this repo) and tell the user it's running there. It always gets a new workspace on `trunk()` or REV (`-r @` = this change). Never start `shpool attach` or a background `claude` directly: agent-inbox can't see those sessions.
+- When the user asks for something outside this session's current work (another repo, or an unrelated task in this one), don't fold it in: start a separate session with `jw agent -d [-r REV] [repo] -- "<self-contained prompt>"` (repo is a directory under `@projectsDir@`; omit it for this repo) and tell the user it's running there. It always gets a new workspace on `trunk()` or REV (`-r @` = this change). Never start `shpool attach` or a background `claude` directly: agent-inbox can't see those sessions.
 - Message a session started with jw with `jw msg <name> -- <text>`. It goes straight to the session's inbox: it arrives between the session's tool calls, or starts a turn if the session is idle. It fails if the session isn't running (one just started is waited for, up to 10 s). Reply to the sender the same way.
 - Sessions started with `jw agent` (and event sessions) have a record (`jw session get`); set a better title with `jw session set --title …`; `jj upload` adds created MRs.
 - In a `jw agent` or event session (AGENT_SESSION set), when the work this session was started for is finished and nothing is left for you or waits on the user, run `jw done` as your last step; the session is stopped once it is idle and detached. Not while MRs you made are open: once they are merged the session gets a wrap-up message; then finish up and run `jw done`.

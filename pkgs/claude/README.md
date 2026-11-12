@@ -15,7 +15,7 @@ nix build .#claude                                # build it (from the repo root
 - `pkgs/jj-upload`, `pkgs/claude-hooks`, `pkgs/claude-statusline`, `pkgs/agent-skills` - the other tools
 - `pkgs/default.nix` - registers `claude` and the tools; `overlays/default.nix` exposes them as the `additions` overlay and `flake.nix` exports them as `packages`
 
-`@memoryDir@` and `@dataDir@` in the markdown files and the settings are substituted at build time.
+`@memoryDir@`, `@dataDir@` and `@projectsDir@` in the markdown files and the settings are substituted at build time.
 
 The wrapper takes `knowledge`, `claude-hooks`, `claude-statusline` and `jj-upload` from the package set (`callPackage`) and puts them on its `PATH`, so overriding any of them propagates into `claude`. Its default skills come from `agent-skills` the same way. `pkgs/default.nix` passes `null` for `instructions`, `agents`, `skills` and `settings` so that callPackage never injects a same-named package and the bundled defaults are used.
 
@@ -85,7 +85,7 @@ Claude-only frontmatter (`allowed-tools`, and `disable-model-invocation` in `com
 
 ## Data dir
 
-On launch the wrapper uses `CLAUDE_CONFIG_DIR` (default: the package's `dataDir`, `$HOME/.local/share/claude`) and sets `CLAUDE_MEMORY_DIR=$CLAUDE_CONFIG_DIR/memory` (always; the agents' prose has that path baked in). The memory dir is `git init`ed if it is not a repo yet.
+On launch the wrapper uses `CLAUDE_CONFIG_DIR` (default: the package's `dataDir`, `$HOME/.local/share/claude`) and sets `CLAUDE_MEMORY_DIR=$CLAUDE_CONFIG_DIR/memory` (always; the agents' prose has that path baked in) and `CLAUDE_PROJECTS_DIR` (the package's `projectsDir`, where `claude-guard-writes` lets agents write to other repos). The memory dir is `git init`ed if it is not a repo yet.
 
 ```
 ~/.local/share/claude/

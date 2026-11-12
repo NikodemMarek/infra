@@ -1,5 +1,5 @@
 # PreToolUse guard for Edit/Write/NotebookEdit in subagents.
-# Usage: claude-guard-writes code    -> allow writes only inside the session cwd or ~/projects, never into config/secrets/.git/architect memory
+# Usage: claude-guard-writes code    -> allow writes only inside the session cwd or $CLAUDE_PROJECTS_DIR, never into config/secrets/.git/architect memory
 #        claude-guard-writes tests   -> like code, but only test files (the verifier writes tests, never the implementation)
 #        claude-guard-writes memory  -> allow writes only to the architect's own files in the memory repo
 #                                       (README.md, INDEX.md, templates/**, projects/<slug>/{overview,decisions,log}.md, projects/<slug>/notes/**)
@@ -7,6 +7,7 @@
 MODE="${1:?mode required}"
 CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 MEM="${CLAUDE_MEMORY_DIR:-$CFG/memory}"
+PROJECTS="${CLAUDE_PROJECTS_DIR:-}"
 input="$(cat)"
 path="$(jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' <<<"$input")"
 cwd="$(jq -r '.cwd // empty' <<<"$input")"
@@ -37,12 +38,12 @@ if [ "$MODE" = memory ]; then
 fi
 
 # MODE=code or tests
-# Other repos under ~/projects are fine, but not the other workspaces of this one (<repo>, <repo>.agents/*):
+# Other repos under $PROJECTS are fine (none if unset), but not the other workspaces of this one (<repo>, <repo>.agents/*):
 # the agent's work must stay in its own workspace to be squashed into the right change.
 home="$cwd"
 case "$(dirname -- "$cwd")" in *.agents) home="$(dirname -- "$cwd")" && home="${home%.agents}" ;; esac
-under "$cwd" || { under "$HOME/projects" && ! under "$home" && ! under "$home.agents"; } \
-  || deny "Writes outside the working directory ($cwd) and other repos under ~/projects are not allowed (got $abs)."
+under "$cwd" || { [ -n "$PROJECTS" ] && under "$PROJECTS" && ! under "$home" && ! under "$home.agents"; } \
+  || deny "Writes outside the working directory ($cwd) and other repos under ${PROJECTS:-\$CLAUDE_PROJECTS_DIR (unset)} are not allowed (got $abs)."
 for p in "$HOME/.claude" "$CFG" "$HOME/.ssh" "$HOME/.gnupg" "$HOME/.config" "$HOME/.local" "$HOME/.aws" "$HOME/.kube" "$HOME/.m2/settings.xml" "$MEM"; do
   under "$p" && deny "Path $abs is protected (config/secrets/architect memory)."
 done

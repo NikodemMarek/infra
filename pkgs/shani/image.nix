@@ -63,7 +63,6 @@
     settings = {
       permissions = {
         deny = ["AskUserQuestion"];
-        additionalDirectories = ["/projects"];
       };
       hooks.StopFailure = [
         {

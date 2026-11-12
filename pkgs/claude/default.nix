@@ -97,6 +97,12 @@ let
         assert lib.assertMsg (lib.hasPrefix "$HOME/" dataDir) "claude: dataDir must start with $HOME/ (got ${dataDir})";
         "~" + lib.removePrefix "$HOME" dataDir;
       prettyMemoryDir = "${prettyDataDir}/memory";
+      prettyProjectsDir =
+        if lib.hasPrefix "$HOME/" projectsDir then
+          "~" + lib.removePrefix "$HOME" projectsDir
+        else
+          assert lib.assertMsg (lib.hasPrefix "/" projectsDir) "claude: projectsDir must start with $HOME/ or / (got ${projectsDir})";
+          projectsDir;
 
       settingsFile = writeText "claude-settings.json" (builtins.toJSON settings);
 
@@ -113,6 +119,7 @@ let
         find "$out" -type f \( -name '*.md' -o -name 'settings.json' \) -exec sed -i \
           -e ${lib.escapeShellArg "s|@dataDir@|${prettyDataDir}|g"} \
           -e ${lib.escapeShellArg "s|@memoryDir@|${prettyMemoryDir}|g"} \
+          -e ${lib.escapeShellArg "s|@projectsDir@|${prettyProjectsDir}|g"} \
           {} +
       '';
 
@@ -142,7 +149,7 @@ let
 
       # Sourced from the makeWrapper script, which runs with `bash -e`: all work
       # happens in a function called through `|| true` (this disables -e inside
-      # it), and nothing but the two exports is left behind.
+      # it), and nothing but the exports is left behind.
       preamble = writeShellScript "claude-preamble" ''
         __claude_link() {
           local dst="$CLAUDE_CONFIG_DIR/$1" src="$2" cur
@@ -213,6 +220,7 @@ let
           export CLAUDE_CONFIG_DIR="''${CLAUDE_CONFIG_DIR:-${dataDir}}"
           # unconditional: the agents' prose has this path baked in at build time
           export CLAUDE_MEMORY_DIR="$CLAUDE_CONFIG_DIR/memory"
+          export CLAUDE_PROJECTS_DIR="${projectsDir}"
           ${coreutils}/bin/mkdir -p "$CLAUDE_CONFIG_DIR/agents" "$CLAUDE_CONFIG_DIR/skills" "$CLAUDE_MEMORY_DIR"
           if [ ! -e "$CLAUDE_MEMORY_DIR/.git" ] && command -v git >/dev/null 2>&1; then
             git -C "$CLAUDE_MEMORY_DIR" init -q >/dev/null 2>&1
