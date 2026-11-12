@@ -320,6 +320,12 @@ impl App {
             .unwrap_or(session.started_at)
     }
 
+    /// The prompt cache label of `session` (`cache:42m`); None if its record has no expiry.
+    fn session_cache_label(&self, session: &Session) -> Option<String> {
+        let expires_at = self.record(&session.agent_session)?.cache_expires_at?;
+        Some(client::cache_label(expires_at, self.now))
+    }
+
     /// The Sessions tab: after All and the configured tabs.
     fn sessions_tab(&self) -> usize {
         self.tabs.len() + 1
@@ -1917,7 +1923,10 @@ fn session_row(
     } else {
         format!("{:>2}", pending.min(99))
     };
-    let age = client::age(app.session_status_at(session), app.now);
+    let mut age = client::age(app.session_status_at(session), app.now);
+    if let Some(cache) = app.session_cache_label(session) {
+        age = format!("{cache} {age}");
+    }
     let head = 2 + 1 + BADGE_WIDTH + 1 + place_width(repo_width, context_width);
     let age_width = age.chars().count();
     let waiting_for = truncate(
@@ -1961,6 +1970,9 @@ fn session_lines(app: &App, session: &Session) -> Vec<Line<'static>> {
     }
     let since = client::age(app.session_status_at(session), app.now);
     head.push(Span::styled(format!("  ·  {since}"), dim()));
+    if let Some(cache) = app.session_cache_label(session) {
+        head.push(Span::styled(format!("  ·  {cache}"), dim()));
+    }
     let mut lines = vec![Line::from(head)];
     let shpool = if session.shpool.is_empty() {
         "none: not attachable"
@@ -6342,6 +6354,38 @@ mod tests {
         let row = screen.lines().find(|l| l.contains("BUSY")).unwrap();
         assert!(row.contains("a question") && row.contains("30s"), "{row}");
         assert!(screen.contains("BUSY  r  a question  ·  30s"), "{screen}");
+    }
+
+    #[test]
+    fn session_row_and_detail_show_the_cache_label_before_the_age() {
+        let mut a = sessions_app(vec![], vec![session(1, "s-a")]);
+        let record = Record {
+            status: "idle".into(),
+            status_at: Some(970.0),
+            cache_expires_at: Some(3520.0),
+            ..Record::default()
+        };
+        a.records.insert(AGENT_SESSION.into(), record);
+        let screen = screen_at(&a, 200, 30);
+        let row = screen.lines().find(|l| l.contains("IDLE")).unwrap();
+        assert!(row.contains("cache:42m 30s"), "{row}");
+        assert!(screen.contains("IDLE  r  ·  30s  ·  cache:42m"), "{screen}");
+    }
+
+    #[test]
+    fn an_expired_cache_shows_as_cold() {
+        let mut a = sessions_app(vec![], vec![session(1, "s-a")]);
+        let record = Record {
+            status: "idle".into(),
+            status_at: Some(970.0),
+            cache_expires_at: Some(900.0),
+            ..Record::default()
+        };
+        a.records.insert(AGENT_SESSION.into(), record);
+        let screen = screen_at(&a, 200, 30);
+        let row = screen.lines().find(|l| l.contains("IDLE")).unwrap();
+        assert!(row.contains("cache:cold 30s"), "{row}");
+        assert!(screen.contains("IDLE  r  ·  30s  ·  cache:cold"), "{screen}");
     }
 
     #[test]
