@@ -119,7 +119,6 @@ let
                 echo "cannot send the message to session $to" >&2
                 exit 1
               fi
-              jq --arg title "sent to the running Claude session $to" '.title = $title' <<<"$event" | ${lib.getExe notify}
               exit 0
             else
               echo "context tool: invalid message output: $out" >&2
@@ -221,10 +220,11 @@ let
     '';
   };
 in
-# event handler: notify, then (with a contextTool) prepare a workspace and the
+# event handler: with a contextTool, prepare a workspace and the
 # GitLab context, and open a shpool session there (`jw attach <name>`)
 # running Claude in auto mode. Without a contextTool the session runs a plain
-# claude in the main checkout, also in auto mode.
+# claude in the main checkout, also in auto mode. It notifies only when it
+# starts a session or fails, not for events that go to a running session.
 writeShellApplication {
   name = "event-handler-claude-${name}";
   # glab, extraPackages: the environment, PATH included, goes into the shpool session via the job script
@@ -241,14 +241,21 @@ writeShellApplication {
 
     dry_run=''${EVENT_HANDLER_DRY_RUN:-}
 
-    if [[ -z "$dry_run" ]]; then
-      ${lib.getExe notify} <<<"$event"
-    fi
+    notified=""
+    notify_once() {
+      if [[ -z "$dry_run" && -z "$notified" ]]; then
+        notified=1
+        ${lib.getExe notify} <<<"$event" || true
+      fi
+    }
+    # only a started session or a failure notifies; events for a running session do not
+    trap 'if [[ $? -ne 0 ]]; then notify_once; fi' EXIT
 
     repo=$(jq -r '.project // "" | split("/") | last // ""' <<<"$event")
     dir="$HOME/${projectsDir}/$repo"
     if [[ -z "$repo" || ! -d "$dir" ]]; then
       echo "no checkout for project '$repo' at $dir, not starting claude" >&2
+      notify_once
       exit 0
     fi
 
@@ -324,14 +331,10 @@ writeShellApplication {
     fi
 
     if [[ "$mode" == queued ]]; then
-      shopt -s nullglob
-      queued=("$sdir"/queue/*.md)
-      ws=$(cat "$sdir/shpool" 2>/dev/null || true)
-      # notify shows `.shpool` as "jw attach <name>", if set
-      jq --arg title "''${#queued[@]} update(s) queued for the running Claude session" --arg ws "$ws" \
-        '.title = $title | .shpool = $ws' <<<"$event" | ${lib.getExe notify}
       exit 0
     fi
+
+    notify_once
 
     if [[ -z "''${TERM:-}" || "$TERM" == dumb ]]; then export TERM=xterm-256color; fi
     export COLORTERM=truecolor

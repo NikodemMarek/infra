@@ -2,9 +2,10 @@
 # stdin, its type in $ER_TYPE. Handlers: commands of the event-handlers package or
 # absolute paths. The leaf link only denies events.> (see pkgs/nats-server/nats.conf):
 # any subject outside events. is reachable from the cluster.
-events.claude.> event-handler-notify-normal
+events.claude.question event-handler-notify-normal
+events.claude.permission_request event-handler-notify-normal
+events.claude.not_started event-handler-notify-normal
 events.sudo.> event-handler-notify-normal
-events.task.started event-handler-notify-normal
 events.task.failed event-handler-notify-normal
 events.task.new event-handler-task
 events.claude.> event-handler-inbox
