@@ -2,7 +2,7 @@
 # follow-up prompt files, blocks the stop: the reason is a pointer to the files (paths only, never
 # contents: they hold untrusted GitLab comment text); stdout is used only for this decision. Otherwise, in sessions with a
 # session record (AGENT_SESSION: started by `jw agent` or an event), tells the user the session waits for them:
-# sets the record status to idle and posts claude.waiting (notification + agent-inbox), titled with the first line of the last message.
+# sets the record status to idle and posts claude.waiting (agent-inbox only), titled with the first line of the last message.
 # `key` = session id, so the inbox keeps one item per session (replaced every turn). Never blocks
 # otherwise: always exit 0.
 # always read all of stdin first, so Claude Code never gets EPIPE on a large input
