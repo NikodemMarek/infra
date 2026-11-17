@@ -22,15 +22,22 @@ rel="${abs#"$real"/}"
 # Serialise with other memory writers (the knowledge tooling takes the same lock).
 lockdir="${XDG_RUNTIME_DIR:-/tmp/user-$(id -u)}/knowledge"
 mkdir -p "$lockdir" 2>/dev/null
-(
-  flock -w 30 9 || exit 0
-  git -c core.hooksPath=/dev/null add -A -- "$rel" >/dev/null 2>&1
-  git -c core.hooksPath=/dev/null diff --cached --quiet -- "$rel" >/dev/null 2>&1 && exit 0
-  git -c core.hooksPath=/dev/null commit -q --no-verify -m "architect: update $rel" -- "$rel" >/dev/null 2>&1 || true
-) 9>"$lockdir/memory.lock"
+commit_err="$(
+  (
+    flock -w 30 9 || exit 0
+    git -c core.hooksPath=/dev/null add -A -- "$rel" >/dev/null 2>&1
+    git -c core.hooksPath=/dev/null diff --cached --quiet -- "$rel" >/dev/null 2>&1 && exit 0
+    out="$(git -c core.hooksPath=/dev/null commit -q --no-verify -m "architect: update $rel" -- "$rel" 2>&1 >/dev/null)" \
+      || printf '%s\n' "${out%%$'\n'*}"
+  ) 9>"$lockdir/memory.lock"
+)"
+msg=""
+[ -z "$commit_err" ] || msg="memory: commit of $rel failed: $commit_err"
 # Files below a nested repository can never be committed by the memory repo; say so.
 nested="$(find "$real" -mindepth 2 -name .git -print -quit 2>/dev/null)"
 if [ -n "$nested" ]; then
-  jq -n --arg p "$nested" '{systemMessage: ("memory: nested git repository at " + $p + "; files below it are not committed")}'
+  msg="${msg:+$msg; }memory: nested git repository at $nested; files below it are not committed"
 fi
+# One JSON object at most: the hook's stdout must parse as a single document.
+[ -z "$msg" ] || jq -n --arg m "$msg" '{systemMessage: $m}'
 exit 0

@@ -85,7 +85,7 @@ Claude-only frontmatter (`allowed-tools`, and `disable-model-invocation` in `com
 
 ## Data dir
 
-On launch the wrapper uses `CLAUDE_CONFIG_DIR` (default: the package's `dataDir`, `$HOME/.local/share/claude`) and sets `CLAUDE_MEMORY_DIR=$CLAUDE_CONFIG_DIR/memory` (always; the agents' prose has that path baked in) and `CLAUDE_PROJECTS_DIR` (the package's `projectsDir`, where `claude-guard-writes` lets agents write to other repos). The memory dir is `git init`ed if it is not a repo yet.
+On launch the wrapper uses `CLAUDE_CONFIG_DIR` (default: the package's `dataDir`, `$HOME/.local/share/claude`) and sets `CLAUDE_MEMORY_DIR=$CLAUDE_CONFIG_DIR/memory` (always; the agents' prose has that path baked in) and `CLAUDE_PROJECTS_DIR` (the package's `projectsDir`, where `claude-guard-writes` lets agents write to other repos). The memory dir is `git init`ed if it is not a repo yet. If no git identity resolves there, the wrapper sets a repo-local `user.email` `$USER@<hostname>` and `user.name` `$USER` so auto-commits work.
 
 ```
 ~/.local/share/claude/
