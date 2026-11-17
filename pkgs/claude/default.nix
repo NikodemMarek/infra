@@ -218,6 +218,11 @@
           if [ ! -e "$CLAUDE_MEMORY_DIR/.git" ] && command -v git >/dev/null 2>&1; then
             git -C "$CLAUDE_MEMORY_DIR" init -q >/dev/null 2>&1
           fi
+          if [ -e "$CLAUDE_MEMORY_DIR/.git" ] && command -v git >/dev/null 2>&1 \
+            && ! git -C "$CLAUDE_MEMORY_DIR" config user.email >/dev/null 2>&1; then
+            git -C "$CLAUDE_MEMORY_DIR" config user.email "$USER@$(${coreutils}/bin/uname -n)" >/dev/null 2>&1
+            git -C "$CLAUDE_MEMORY_DIR" config user.name "$USER" >/dev/null 2>&1
+          fi
           local nested
           nested="$(${findutils}/bin/find "$CLAUDE_MEMORY_DIR" -mindepth 2 -maxdepth 3 -name .git -print -quit 2>/dev/null)"
           if [ -n "$nested" ]; then
