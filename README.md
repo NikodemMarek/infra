@@ -1,46 +1,37 @@
 # infra
 
-Nix flake monorepo: NixOS hosts, the packages and wrappers they use, and the manifests of the k3s cluster (`dijkstra`) that some of those hosts form. Hosts are impermanent (root is wiped on boot), secrets live in Bitwarden (hosts get them as sops files built at deploy time, the cluster through External Secrets Operator), and the cluster is reconciled by Flux.
-
-All commands below are meant to be run from the repo root inside the dev shell.
+Nix flake monorepo: NixOS hosts, their packages, and the manifests of the k3s cluster `dijkstra` that some of those hosts form. Hosts are impermanent (root is wiped on boot). Secrets live in Bitwarden Secrets Manager: hosts get them as sops files built at deploy time, the cluster through External Secrets Operator. Flux reconciles the cluster. Agent rules are in `AGENTS.md`. Run the commands below from the repo root inside the dev shell.
 
 ## Layout
 
 ```
 flake.nix              inputs, nixosConfigurations, deploy-rs nodes, packages
-devenv.nix             dev shell: tools and the scripts described below
-secretspec.toml        inventory of every secret: one profile per host, `dijkstra` and `dijkstra-velero` for the cluster-wide secrets hosts read, `tailscale` for the key servers join the tailnet with
-.sops.yaml             age recipients: one per host
-secrets-stub/          placeholder for the `secrets` flake input
-host/
-  <name>/              per-host config, hardware, ssh_host_ed25519_key.pub
-  features/
-    default.nix        imported by every host: global + sops/impermanence/disko/stylix + modules/host
-    global/            always on: networking, nix, openssh, sops
-    optional/          opt-in features: k3s, tailscale, docker, libvirt, maintenance, ...
-    disko/             disk layouts, parametrised by device (and swap size)
-modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-notifier.nix, eso-bws-token.nix, agents.nix (the NATS event handler user services, the knowledge curator timer, the `jw-reap` timer that stops idle and finished agent sessions and removes the merged workspaces of finished ones, and the shpool user service)
-pkgs/                  wrapped packages (package + bundled config) and own tools (pkgs/agent-skills/skills: Agent Skills, shared by claude and agent-skills)
-overlays/              exposes pkgs/ (the wrapped packages, shadowing the nixpkgs ones, and the tools), flake inputs as packages, deploy-rs
+devenv.nix             dev shell: tools and scripts
+secretspec.toml        inventory of secrets: a profile per host, plus dijkstra, dijkstra-velero, tailscale, ci, tofu
+.sops.yaml             age recipients, one per host
+host/<name>/           per-host config, hardware, ssh_host_ed25519_key.pub
+host/features/         default.nix, global/ (always on), optional/ (k3s, tailscale, docker, wolf, ...), disko/
+modules/host/          own NixOS modules: persist, secrets, eso-bws-token, agents, battery-notifier
+pkgs/                  wrapped packages and own tools
 clusters/dijkstra/     Kubernetes manifests, reconciled by Flux
-tofu/                  OpenTofu config of the external infrastructure: Cloudflare, Tailscale, Oracle Cloud
-.github/               CI workflows; renovate.json: update PRs every Saturday for images, charts, Actions, tofu providers and flake.lock, merged by hand
+tofu/                  OpenTofu: Cloudflare, Tailscale, Oracle Cloud
+.github/               CI (hosts build, deploy, tofu); renovate.json: weekly update PRs
 ```
 
 ## Hosts
 
 | Host | Arch | Role |
 |------|------|------|
-| `yenn` | x86_64 | laptop/desktop (Hyprland), LUKS + btrfs. Not a deploy node, rebuilt with `host-switch` |
-| `geralt` | x86_64 | headless game streaming (Wolf + Moonlight), docker, libvirt; usually off, woken over LAN |
+| `yenn` | x86_64 | laptop (Hyprland), LUKS + btrfs; `host-switch`, not a deploy node |
+| `geralt` | x86_64 | headless game streaming (Wolf + Moonlight), docker, libvirt; usually off |
 | `roach` | x86_64 | k3s agent |
-| `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool` + data pool `tank`), NFS server, Garage (S3 for Velero) |
-| `triss` | aarch64 | k3s server (control plane), qemu/virtio guest |
-| `alp` | x86_64 | installer ISO, not in `nixosConfigurations` (see `mkiso`) |
+| `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool`, data pool `tank`), NFS server, Garage (S3 for Velero) |
+| `triss` | aarch64 | k3s server, Oracle Cloud instance (qemu guest) |
+| `alp` | x86_64 | installer ISO (`mkiso`), not in `nixosConfigurations` |
 
-`geralt`, `regis` and `triss` are deploy-rs nodes (`deploy.nodes` in `flake.nix`): ssh as `maintenance`, passwordless sudo.
+`geralt`, `regis` and `triss` are deploy-rs nodes: ssh as `maintenance`, passwordless sudo only for deploy-rs activation. Break-glass for `triss`: `ssh maintenance@141.147.2.187`; there `k3s.yaml` is root-only (`sudo kubectl`).
 
-Cluster access: the dev shell sets `KUBECONFIG` to `kubeconfig.yaml` in the `default` jj workspace root, so `kubectl` works from the workstation. On `triss` itself `k3s.yaml` is root-only (`sudo kubectl`).
+`geralt` runs [Wolf](https://github.com/games-on-whales/wolf) (`host/features/optional/wolf.nix`, state `/etc/wolf`; the pairing PIN URL is in `docker logs -f wolf`). Wake it with `wake-geralt` on `yenn` (`.link` changes apply only when the NIC appears: reboot once after deploying them). It suspends after 30 min without a stream or SSH login (`host/geralt/idle-suspend.nix`, `journalctl -u idle-suspend`); pause: `sudo systemd-run --unit=stay-awake systemd-inhibit --what=sleep sleep 4h` (cancel: `sudo systemctl stop stay-awake`).
 
 ### geralt hardware
 
@@ -73,45 +64,33 @@ Cluster access: the dev shell sets `KUBECONFIG` to `kubeconfig.yaml` in the `def
 - HDD: 2x Seagate IronWolf Pro 18 TB (ST18000NE000), ZFS mirror (`tank`); 2 of 4 bays used
 - Ethernet: 2x onboard Realtek RTL8126 5 GbE (out-of-tree `r8126`), MACs `6c:bf:b5:05:77:88`, `6c:bf:b5:05:77:89`
 
-## Game streaming (geralt)
-
-`host/features/optional/wolf.nix` runs [Wolf](https://github.com/games-on-whales/wolf) (Moonlight server) as a docker container, pinned by image digest.
-
-- Wake: `wake-geralt` on `yenn` (runs `ssh maintenance@regis wakeonlan -i 192.168.18.255 b4:2e:99:a4:86:1c`). `regis` must be cabled to geralt's LAN and wake-on-PCIe enabled in the BIOS. `.link` changes apply only when the NIC appears, so reboot once after deploying them.
-- Sleep (`host/geralt/idle-suspend.nix`): suspends (S3, no hibernate) after 30 min without a Moonlight stream or SSH login. Pause with `sudo systemd-run --unit=stay-awake systemd-inhibit --what=sleep sleep 4h` (cancel: `sudo systemctl stop stay-awake`); see why it did or didn't with `journalctl -u idle-suspend`.
-- Pair: add `geralt` in Moonlight (over tailscale); it shows a PIN. `docker logs -f wolf` on geralt prints `Insert pin at http://<ip>:47989/pin/#<secret>`: open that with geralt's tailscale address and enter the PIN.
-- State lives in `/etc/wolf` (persisted under `/persist/data`): `cfg/config.toml` (Wolf-owned, holds the paired clients, edited by hand), certs, per-client app homes with game libraries. Typical hand edits: add Heroic (image `ghcr.io/games-on-whales/heroic-games-launcher:edge`) and set the apps' `DeviceCgroupRules` hidraw major `244` to geralt's (`grep hidraw /proc/devices`).
-
 ## Dev shell
 
-`devenv` is loaded by direnv (`.envrc`), or run `devenv shell`. Entering the shell prints the script list and sets `KUBECONFIG=kubeconfig.yaml` (git-ignored). Scripts that build host secrets read them from Bitwarden Secrets Manager and need `BWS_ACCESS_TOKEN` (the machine account `ci-hosts`, or a local token).
+`devenv` is loaded by direnv, or run `devenv shell`. Scripts that build host secrets need `BWS_ACCESS_TOKEN` (machine account `ci-hosts`, or a local token).
 
 | Script | What it does |
 |--------|--------------|
-| `host-switch [action]` | `nixos-rebuild <action>` (default `switch`) of the current host, with its secrets injected |
+| `host-switch [action]` | `nixos-rebuild <action>` (default `switch`) of the current host |
 | `host-deploy <node...>` | deploy-rs to the given nodes |
 | `install-remote <host> <user@ip>` | first install with nixos-anywhere + disko |
-| `secrets-build <outdir> <host...>` | build encrypted sops files from the Bitwarden Secrets Manager project `hosts` (used by the scripts above), needs `BWS_ACCESS_TOKEN` |
+| `secrets-build <outdir> <host...>` | build encrypted sops files from the project `hosts` |
 | `mkiso` / `writeiso /dev/XXX` | build the `alp` installer ISO / write it to a device |
-| `tofu <args>` | OpenTofu in `tofu/` with the secrets of the profile `tofu` from the Bitwarden Secrets Manager project `tofu`, needs `BWS_ACCESS_TOKEN` (see External infrastructure); `fmt`, `version`, `validate` and `init -backend=false` run without it |
+| `tofu <args>` | OpenTofu in `tofu/`; `fmt`, `version`, `validate`, `init -backend=false` need no token |
+
 ## Installing a new host
 
-1. Add the host: `host/<name>/default.nix`, an entry in `nixosConfigurations` (and `deploy.nodes` if it should be deployed remotely), a disko layout from `host/features/disko/` (or a custom one, see `host/regis/storage.nix`).
-2. Generate its ssh host key. The key doubles as the host's sops identity:
+1. Add `host/<name>/default.nix`, an entry in `nixosConfigurations` (and `deploy.nodes` for remote deploys) and a disko layout from `host/features/disko/` (custom: `host/regis/storage.nix`).
+2. Generate the ssh host key, which is also the host's sops identity:
    ```sh
    ssh-keygen -t ed25519 -N "" -f host/<name>/ssh_host_ed25519_key
    ssh-to-age < host/<name>/ssh_host_ed25519_key.pub
    ```
-   Commit only the `.pub` (the host config reads it). The private half goes to the Bitwarden Secrets Manager project `hosts` as `<name>/HOST_SSH_ED25519_PRIV` (see Secrets). The private key is git-ignored (`host/*/ssh_host_ed25519_key`), but delete the local file after installing.
-3. Put the age key in `.sops.yaml` (an anchor under `&hosts` and a `host/<name>/.+$` creation rule) and add a `[profiles.<name>]` to `secretspec.toml` with the host's secrets, and create them in the project `hosts` as `<name>/<KEY>`.
-4. Boot the target from the ISO: `mkiso`, then `writeiso /dev/sdX`. The ISO joins tailscale with an auth key read from `host/alp/key` (git-ignored, create it in the Tailscale console) and accepts the key of `yenn`'s user over ssh.
-5. For a host with a ZFS pool, put a disk key at `host/<name>/disk.key` (git-ignored; `regis`'s `tank` pool uses a raw key, `dd if=/dev/urandom of=host/regis/disk.key bs=32 count=1`). `install-remote` requires it only if the host's disko config has a zpool: it passes it to nixos-anywhere as `/tmp/disk.key` and also copies it to `/persist/data/etc/zfs/disk.key`. Other hosts need no disk key.
-6. Install:
-   ```sh
-   install-remote <name> root@<ip>
-   ```
-   It builds the host's secrets, copies the host key to `/persist/data/etc/ssh/ssh_host_ed25519_key` on the new disk and runs nixos-anywhere with the disko script and the toplevel as store paths.
-7. Servers (hosts importing `tailscale-server.nix`) join the tailnet on first boot as `tag:server`, with the OAuth client secret from `tailscale/TAILSCALE_AUTH_KEY` in the project `hosts`; the policy auto-approves the pod route k3s advertises. For a k3s node, install it without `k3s.nix` first (it needs the node's IP in `ips`), then add its tailnet IP (`tailscale ip -4`) to `ips` in `host/features/optional/k3s.nix`, add the import (`K3S_TOKEN` comes from the profile `dijkstra`), and `host-deploy` it.
+   Commit only the `.pub`. Put the private half in the project `hosts` as `<name>/HOST_SSH_ED25519_PRIV` and delete the local file after installing (git-ignored).
+3. Add the age key to `.sops.yaml` (an anchor under `&hosts` and a `host/<name>/.+$` creation rule) and a `[profiles.<name>]` to `secretspec.toml`; create the secrets in the project `hosts` as `<name>/<KEY>`.
+4. Boot the target from the ISO (`mkiso`, `writeiso`). It joins tailscale with an auth key from `host/alp/key` (git-ignored, create it in the Tailscale console) and accepts `yenn`'s user key over ssh.
+5. A host with a ZFS pool needs `host/<name>/disk.key` (git-ignored; `regis`: `dd if=/dev/urandom of=host/regis/disk.key bs=32 count=1`).
+6. `install-remote <name> root@<ip>` builds the secrets, copies the host key and the disk key to the new disk and runs nixos-anywhere.
+7. Servers (importing `tailscale-server.nix`) join the tailnet on first boot as `tag:server` with `tailscale/TAILSCALE_AUTH_KEY` (project `hosts`). A k3s node is installed without `k3s.nix` first; then add its tailnet IP (`tailscale ip -4`) to `ips` in `host/features/optional/k3s.nix`, import it and `host-deploy` it.
 
 ## Updating hosts
 
@@ -121,284 +100,140 @@ host-switch test       # any nixos-rebuild action
 host-deploy geralt roach
 ```
 
-`host-deploy` builds the secrets for the requested nodes, checks their ssh host keys and runs `deploy --skip-checks`.
-
-Merges to `main` deploy `geralt`, `regis` and `triss` (`.github/workflows/deploy.yml`). Hosts that are offline are skipped (a notice in the log); re-running an old run redeploys that old commit. The logs print nothing but failures, by design.
-
-One-time setup:
-
-1. In Bitwarden Secrets Manager add to the project `hosts` the secrets `ci/SSH_ID_ED25519` (the private half of `host/features/optional/ci_ssh_id_ed25519.pub`), `ci/TAILSCALE_OAUTH_CLIENT_ID` and `ci/TAILSCALE_OAUTH_CLIENT_SECRET` (a Tailscale OAuth client with scope `auth_keys` and tag `tag:ci`), and create the machine account `ci-hosts` with read access to the project.
-2. In the GitHub repo Settings > Environments create `deploy`, deployment branches "Selected branches" = `main`, and the environment secret `BWS_ACCESS_TOKEN` = the access token of `ci-hosts`.
+CI deploys on merge (`.github/workflows/deploy.yml`) and builds every host on PRs (`hosts.yml`). Offline hosts are skipped; re-running an old run redeploys that old commit. The deploy job reads the `ci` profile (ssh key, Tailscale OAuth client with scope `auth_keys`, tag `tag:ci`) from the project `hosts`; the GitHub environment `deploy` (branch `main`) holds `BWS_ACCESS_TOKEN` of `ci-hosts`.
 
 ## Secrets
 
-Modules never talk to sops directly. They go through a small contract:
+Modules never talk to sops directly:
 
-- `modules/host/secrets.nix` defines `config.secrets.<name>` with `owner`, `group`, `mode`, `neededForUsers` and `path` (defaults to `/run/secrets/<name>`). Consumers read only `config.secrets.<name>.path`. `profile` (default: the host's name) names the profile that holds the secret, for one that lives elsewhere, e.g. `profile = "dijkstra"` for a cluster-wide secret (`dijkstra/<KEY>` in the project `hosts`).
-- `host/features/global/sops.nix` is the only place that knows the provider is sops-nix: it maps every `config.secrets` entry to `sops.secrets` and reads `<host>.yaml` from the `secrets` flake input. The age identity is `/persist/data/etc/ssh/ssh_host_ed25519_key`.
-- `secretspec.toml` is the inventory. The profile named after the host lists its secrets as uppercased names. Evaluation fails if the secrets used by modules and the profile diverge (missing, unused or badly named; names match `^[a-z0-9_]+$`). Secrets with another `profile` must exist in that profile, which is not required to be used completely by the host.
-- The values live in the Bitwarden Secrets Manager project `hosts`, one secret per value named `<profile>/<KEY>`. BWS lowercases names, so matching is case-insensitive. The scripts need `BWS_ACCESS_TOKEN`: the machine account `ci-hosts` (read access to `hosts`) or a local token.
+- `modules/host/secrets.nix` defines `config.secrets.<name>` with `owner`, `group`, `mode`, `neededForUsers` and `path` (default `/run/secrets/<name>`). Consumers read only `.path`. `profile` (default: the host's name) names the profile of a secret that lives elsewhere, e.g. `dijkstra`.
+- `host/features/global/sops.nix` is the only place that knows about sops-nix; it reads `<host>.yaml` from the `secrets` flake input. The age identity is the host's ssh key under `/persist/data/etc/ssh/`.
+- `secretspec.toml` is the inventory: the profile named after the host lists its secrets as uppercased names; evaluation fails if modules and profile diverge (names match `^[a-z0-9_]+$`). `ci` and `tofu` are used by no host.
+- Values live in the project `hosts`, named `<profile>/<KEY>` (case-insensitive). `tofu` has its own project with plain key names.
 
-`secrets-build <outdir> <host...>` reads each profile from the project `hosts` (`bws-project`), keeps exactly the secrets the config declares, verifies that ssh private keys match the `.pub` files in the repo and that the host's age key matches `.sops.yaml`, hashes `USERS_*_PASSWORD` entries (login passwords) with `mkpasswd`, and writes `<outdir>/<host>.yaml` encrypted for the host (plaintext never touches disk). Keys marked `composed` in `secretspec.toml` (e.g. `GARAGE_ENV` in `dijkstra-velero`) are assembled from other keys; the inputs are not written.
-
-The `secrets` flake input is `path:./secrets-stub`, a placeholder with no sops files. Every script that builds a host passes `--override-input secrets path:<outdir>`; to build by hand:
+`secrets-build <outdir> <host...>` keeps exactly the declared secrets, checks the ssh private keys against the `.pub` files and the host's age key against `.sops.yaml`, hashes `USERS_*_PASSWORD`, and writes `<outdir>/<host>.yaml` encrypted for the host. Keys marked `composed` in `secretspec.toml` (e.g. `GARAGE_ENV`) are assembled from other keys. The `secrets` flake input is `path:./secrets-stub`; the scripts pass `--override-input secrets path:<outdir>`. By hand:
 
 ```sh
 secrets-build /tmp/s geralt
 nixos-rebuild build --flake .#geralt --override-input secrets path:/tmp/s
 ```
 
-`.sops.yaml` holds the age recipients, one key per host. Host files (`host/<name>/...`) are encrypted only for their host.
-
 ### Adding a secret
 
-1. Declare and use it in the module that needs it:
+1. Declare it in the module and read its path (`neededForUsers = true` for anything read while users are created):
    ```nix
-   { config, ... }: {
-     secrets.myservice_token = { owner = "myservice"; mode = "0400"; };
-
-     services.myservice.tokenFile = config.secrets.myservice_token.path;
-   }
+   secrets.myservice_token = { owner = "myservice"; mode = "0400"; };
+   services.myservice.tokenFile = config.secrets.myservice_token.path;
    ```
-   Use `neededForUsers = true` for anything read while users are created (password hashes); the path then is under `/run/secrets-for-users`.
-2. Add it to the profile of every host that imports the module, uppercased:
-   ```toml
-   [profiles.geralt]
-   MYSERVICE_TOKEN = { description = "myservice API token", required = true }
-   ```
-3. Create the matching secret in the Bitwarden Secrets Manager project `hosts`, named `geralt/MYSERVICE_TOKEN`.
-4. Check that the config and the inventory agree, then apply:
-   ```sh
-   nix eval .#nixosConfigurations.geralt.config.secrets --apply builtins.attrNames
-   host-deploy geralt
-   ```
+2. Add `MYSERVICE_TOKEN = { description = "...", required = true }` to `[profiles.<host>]` in `secretspec.toml` for every host importing the module.
+3. Create `<host>/MYSERVICE_TOKEN` in the project `hosts`.
+4. Check with `nix eval .#nixosConfigurations.geralt.config.secrets --apply builtins.attrNames`, then `host-deploy geralt`.
 
 ## Persistence
 
-Root is rolled back on every boot; state survives only in `/persist`, managed by `modules/host/persist.nix` on top of impermanence.
+Root is rolled back on every boot; state survives only in `/persist`, managed by `modules/host/persist.nix` (impermanence).
 
 | Option | Meaning |
 |--------|---------|
 | `persist.enable` | turn the rollback and bind mounts on |
-| `persist.deviceService` | systemd device unit to wait for before the rollback, e.g. `dev-nvme0n1p2.device` |
-| `persist.rootPath` | device holding the root (btrfs top level, e.g. `/dev/nvme0n1p2` or `/dev/mapper/crypted`) |
+| `persist.deviceService`, `persist.rootPath` | device unit to wait for (e.g. `dev-nvme0n1p2.device`); device holding the root |
 | `persist.isCrypted` / `persist.isZfs` | also wait for `cryptsetup.target` / roll back ZFS instead of btrfs |
 | `persist.data.{directories,files}` | state worth keeping, under `/persist/data` |
-| `persist.generated.{directories,files}` | state that can be regenerated, under `/persist/generated` |
-| `persist.users.<user>.{data,generated}` | the same, relative to the user's home |
+| `persist.generated.{directories,files}` | state that can be regenerated, under `/persist/generated` (always includes `/var/log`, `/var/lib/nixos`, `/var/lib/systemd`, `/etc/machine-id`) |
+| `persist.users.<user>.{data,generated}` | the same, relative to the user's home, e.g. `persist.users.nikodem.data.directories = [ "projects" ]` |
 
-`generated` always includes `/var/log`, `/var/lib/nixos`, `/var/lib/systemd` and `/etc/machine-id`. On btrfs the old `root` subvolume is moved to `old_roots/<timestamp>` and entries older than 30 days are deleted; on ZFS the rollback is `zfs rollback -r rpool/root@blank` (the snapshot is created by disko in `host/regis/storage.nix`). Home directories are created in both trees on activation.
+On btrfs the old `root` is kept in `old_roots/<timestamp>` for 30 days; on ZFS the rollback is `zfs rollback -r rpool/root@blank` (snapshot made by disko, `host/regis/storage.nix`).
 
-```nix
-persist.generated.directories = [
-  { directory = "/var/lib/iwd"; user = "root"; group = "root"; }
-];
-persist.users.nikodem.data.directories = [ "projects" ];
-persist.users.nikodem.generated.files = [ ".ssh/known_hosts" ];
-```
+## Packages
 
-## Wrapped packages
+`pkgs/<name>/default.nix` wraps an upstream package together with its config (`symlinkJoin` + `makeWrapper`; see `pkgs/rofi`). To add one: create `pkgs/<name>/`, register it in `pkgs/default.nix` (`<name> = pkgs.callPackage ./<name> {<name> = prev.<name>;};`) and use it as `pkgs.<name>`. Every derivation of that set is a flake package (`nix build .#<name>`; event handlers: `.#event-handlers.<name>`).
 
-`pkgs/<name>/default.nix` wraps an upstream package together with its config, so the config travels with the package instead of living in `$HOME`. The pattern is `symlinkJoin` + `makeWrapper`, with the config copied into `$out`:
-
-```nix
-{
-  pkgs,
-  rofi,
-  ...
-}:
-pkgs.symlinkJoin {
-  name = "rofi";
-  paths = [rofi];
-  buildInputs = [pkgs.makeWrapper];
-  postBuild = ''
-    wrapProgram $out/bin/rofi \
-        --suffix PATH : ${pkgs.lib.strings.makeBinPath [pkgs.uwsm]} \
-        --add-flags "-config $out/config/rofi/config.rasi"
-
-    mkdir -p $out/config/rofi
-    cp ${./config.rasi} $out/config/rofi/config.rasi
-  '';
-}
-```
-
-Pointing the program at its config is done with a flag (rofi) or an env var (`hyprpaper` sets `XDG_CONFIG_HOME=$out/.config`). To add one: create `pkgs/<name>/` with `default.nix` and the config files, register it in `pkgs/default.nix` (`<name> = pkgs.callPackage ./<name> {<name> = prev.<name>;};`: the wrapper shadows the nixpkgs package of the same name and gets that one as an explicit argument), and use it as `pkgs.<name>` (overlay `additions`, applied last). Every derivation of that set is exported as a flake package (`nix build .#<name>`); the event handlers are `nix build .#event-handlers.<name>`. Wrapped packages can depend on each other (`hyprland` bundles `waybar`, `rofi`, ...).
-
-Packages: bitwarden-cli, claude, dunst, gh, glab, heroic, hypridle, hyprland, hyprlock, hyprpaper, jujutsu, kanshi, moonlight-qt, nats-server, obsidian, prismlauncher, rofi, waybar, zellij, zen-browser.
-
-Apps that keep their state in `$HOME` (`bitwarden-cli`, `gh`, `heroic`, `moonlight-qt`, `obsidian`, `prismlauncher`, `zen-browser`) take an optional `dataDir`: with the default `null` the package is the upstream one unchanged, with `.override {dataDir = "/persist/generated/home/<user>/<app>";}` it is wrapped by `jail`, which points the app's config/data env var (`XDG_CONFIG_HOME`, `GH_CONFIG_DIR`, ...) at that directory so the state lands in a persisted path.
-
-`claude` (`pkgs/claude`, no nixpkgs package of that name; it wraps `claude-code`) is Claude Code with its config bundled: `CLAUDE.md`, `agents/`, `settings.nix` and `permissions.nix` live next to `default.nix`, the skills come from the `agent-skills` package (`pkgs/agent-skills/skills/`). It puts the tools below on its `PATH`, taken from the package set, so overriding one of them propagates. The package is customisable with `.extend { skills.foo = ./foo; settings = ...; }` (see `pkgs/claude/README.md`).
+Apps that keep state in `$HOME` (`bitwarden-cli`, `gh`, `heroic`, `moonlight-qt`, `obsidian`, `prismlauncher`, `zen-browser`) take an optional `dataDir` (`.override {dataDir = "/persist/generated/home/<user>/<app>";}`): `jail` then points their state at a persisted path. `claude` is customised with `.extend {...}`, see `pkgs/claude/README.md`.
 
 ### Tools
 
-Own programs that are not wrappers of an upstream package. They are top-level attributes (`pkgs.<name>`, `nix build .#<name>`; `jail` is a function and not built):
+Own programs (`nix build .#<name>`):
 
 | Package | What it is |
 |---------|------------|
-| `knowledge` | knowledge CLI of claude's memory repo: `knowledge submit` queues a note, `curate` (the user timer, every 6 h) merges the notes into the scope files, `skills` drafts skill ideas on demand, `hook` is the session-start/subagent-stop hook; `knowledge route` picks the repo a task belongs in |
-| `jj-upload` | pushes a stack of jj changes as stacked merge/pull requests (GitLab, GitHub) |
-| `jw` | jj workspaces at `<repo>.agents/<name>` for the repos under `projectsRoot` (default `~/projects`, set with `.override {projectsRoot = ...;}`; `yenn` uses `/persist/data/home/nikodem/projects`), with a fish function and completions; `jw new -r REV` starts on a revision or bookmark; `jw agent [-d] [-r REV] [repo] [--] [prompt]` always runs Claude in a new `s-MMDD-HHMMSS` workspace (on `trunk()` or REV) in a shpool session of the same name (`AGENT_SESSION=<name>`, with a session record of kind `task`), and fails for a non-jj repo; outside a repo and with a terminal, `jw agent "<task>"` picks the repo the task fits (`knowledge route`; the picker if unsure), without one (e.g. from an event handler) it fails if no repo fits; event sessions (`KNOWLEDGE_ORIGIN=event:*`) cannot start agents; `jw resume [-d] [repo]` picks one of the repo's finished Claude sessions, from the transcripts all its workspaces share, and continues it with `claude --resume` the same way, in its workspace (recreated on `trunk()` if pruned); `jw resume [-d] --session NAME` resumes the last Claude session of that agent session under its name (refused while it runs); `jw pick` picks a repo with fzf (the current one first) and prints its name (exit 130 if cancelled); `jw attach [name]` attaches to a Claude shpool session (picker if no name, a unique prefix is enough); `jw msg [--from SENDER] NAME [--] [text]` writes the text (quoted, under a `Message from SENDER:` header) to the inbox socket of the running Claude session NAME (its name or its workspace/shpool name; text from stdin if none; refused in GitLab event sessions): it arrives between the tool calls of a busy session or starts a turn in an idle one, and fails if no such session runs (one just started is waited for, up to 10 s); `jw session get` / `jw session set` (both take `[-s NAME]`) read or updates the session's record (`$XDG_STATE_HOME/agent-sessions/NAME.json`: kind, title, description, url, workspace, mrs; NAME defaults to `$AGENT_SESSION`; `set` is refused in GitLab event sessions); `jw session status busy|idle|waiting|ended [--waiting-for TEXT] [--cache-expires-at EPOCH]` sets the record's status of `$AGENT_SESSION` and when its prompt cache goes cold (written by the Claude hooks; the status is kept once `jw done` set it to `done`, the cache expiry still updates) |
-| `wallpaper` | the wallpaper image (the store path is the file), used by stylix, hyprpaper and hyprlock |
-| `claude-hooks` | hook commands of claude: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (lets agent-inbox answer permission requests and questions; `CLAUDE_INBOX_WAIT=0` turns that off; only for sessions with `AGENT_SESSION`, which routed events carry as `session`), the Stop hook (in sessions with `AGENT_SESSION` posts one `claude.waiting` event per turn, for agent-inbox only, no desktop notification; the inbox keeps the latest per session, key = session id), queued follow-up prompts of event sessions (`$CLAUDE_EVENT_SESSION_DIR/queue/*.md`; the Stop/UserPromptSubmit hooks hand Claude only their paths), jj workspaces for agents, and the session status in the record of sessions with `AGENT_SESSION` (`claude-status-hook`: busy, waiting on a permission request or question, idle, ended; outside busy it also records the estimated prompt-cache expiry) |
-| `claude-statusline` | claude's status line |
-| `agent-skills` | `pkgs/agent-skills/skills/` in the Agent Skills format, to link into the skills directory of other tools (OpenCode, ...) |
-| `event-bus` | events over plain NATS (local server, `$NATS_URL`): `event-pub TYPE` publishes a JSON object from stdin on `events.TYPE`; `event-subscribe HANDLER SUBJECT...` runs HANDLER per event (JSON on stdin, type in `$ER_TYPE`). |
-| `event-handlers` | the NATS event handlers as one systemd user service `event-handlers` (`services.agents` links the unit shipped in the package): the plain file `pkgs/event-handlers/handlers` has one `<subject> <handler>` line per subscription (`#` comments; a handler is a command of the package, e.g. `event-handler-notify-normal`, or an absolute path) and the service runs one `event-subscribe` per handler, restarting them all if one exits. Keep subjects under `events.`: the leaf link only denies `events.>`. Replace the file with `.override {handlers = ...;}`, or append: `concatText "handlers" [prev.event-handlers.handlers (writeText "extra" "events.gitlab.> ${...}\n")]`. A malformed file or an unknown handler fails the build. The handlers below are its attributes (`pkgs.event-handlers.<name>`) |
-| `agent-inbox` | terminal UI over the inbox directory `$XDG_RUNTIME_DIR/agent-inbox/` (`claude.*` and `sudo.*` events; only sessions started by `jw agent` or the GitLab event handler, i.e. with `AGENT_SESSION`, hand-started ones get the local dialog only, sudo prompts always route): rows show the title of the session record (`$XDG_STATE_HOME/agent-sessions/<name>.json`, read again every second), the detail pane its links and description, `o` opens its `url` or first MR (https only), Tab (Shift-Tab back) cycles the filter tabs (package arg `tabs`, a list of `{name; kinds ? null;}`) and the Sessions tab (live sessions; `a` attach, `x` kill, Enter their detail): list, inspect, dismiss, answer sudo password requests (written to the askpass FIFO, never published) and Claude permission prompts and questions (written to the permission hook's FIFO), attach to an item's shpool session in a zellij tab (`a`); `N` publishes a `task.new` with `event-pub` to start an agent (an empty task: `jw pick` a repo first, no attach; the session shows up in the Sessions tab, and a task that could not be published stays in the popup); `task.failed` items show in every tab, `p` picks a repo and sends the task again; also `list`, `reply <id>`, `dismiss <id>` and `sessions` (the live sessions as TSV: pid, status, age, shpool session, place, session id) |
-| `tm` | CLI for the markdown task list in the file `$TM_FILE` (required): one rolling backlog where the checkbox is the state (`[ ]` todo, `[/]` doing, `[x]` done). `add`, `start`, `stop`, `done`, `list`, `lint`; edits one line at a time and never moves lines, so untouched lines stay byte-identical |
-| `dictate` | records from the default microphone until Enter, transcribes with the local whisper-server (`host/features/optional/dictate.nix`, `DICTATE_WHISPER_URL`) and prints the text on stdout |
-| `agent-task` | quick capture of a task: a rofi prompt, optionally after a screenshot (`--shot`) and with the clipboard image attached on Ctrl+Enter; publishes `task.new` with `event-pub` |
-| `jail` | a function, not a package (no `nix build`): `jail <package> {ENV_VAR = "/abs/path";}` wraps every binary so it runs with those env vars set to fixed directories (created 0700), see the `dataDir` apps above |
-| `event-handlers.notify` | event handler: desktop notification with an "Open" action (flake: `event-handlers.notify`; `notify-critical` is its critical-urgency variant) |
-| `event-handlers.task` | event handler for `task.new {prompt?, repo?, images?}` (posted by `agent-task` and agent-inbox): starts an agent with `jw agent -d` and posts `task.started`, or `task.failed` with what is needed to retry; only images under `$XDG_RUNTIME_DIR/agent-task/` are passed on (flake: `event-handlers.task`) |
-| `event-handlers.inbox` | event handler that queues the event as `$XDG_RUNTIME_DIR/agent-inbox/<id>.json` (`{id, received, event}`; an event with a non-empty string `key` replaces the item of the same type and key, at most 200 are kept; flake: `event-handlers.inbox`) |
-| `event-handlers.remote-notify` | event handler for `remote.notify.>` from the cluster (untrusted; the leaf link denies `events.>` and the system subjects, so local events never cross). Producer contract: publish to `remote.notify.<anything>` a one-line JSON object `{"type":"remote.notify","title":…,"body"?:…,"project"?:…}` (`type` must be present and valid, its value is replaced; `title` a non-empty string, cut to 200 chars; `body` a string, cut to 1000; `project` matching `[A-Za-z0-9._-]{1,64}`, else `remote`). Every other field is dropped; the result goes to `event-handlers.notify` (flake: `event-handlers.remote-notify`) |
-| `event-handlers.claude` | GitLab event → Claude session: opens a shpool session (`jw attach <name>`, 1-day TTL; the shpool user service comes from `services.agents`) with Claude in the project's checkout under `$HOME/<projectsDir>`; if the context tool returns the optional `session` field, it continues the MR's one conversation (resume), and a live session picks the update up through its hooks; only a started session or a failure notifies; `contextTool` (a `gitlab-context prepare` compatible package, default none: plain Claude in the main checkout), `extraPackages`, the `gitlab.*` routes and the watcher are supplied by the work layer (flake: `event-handlers.claude`) |
+| `secrets-build`, `bws-project`, `bws`, `infra-tofu` | Bitwarden Secrets Manager tooling: host sops files, a project as JSON, the `bws` CLI, OpenTofu with the profile `tofu` |
+| `knowledge` | CLI of claude's memory repo (`curate` runs on a 6 h user timer) |
+| `jj-upload`, `forge` | stacked merge/pull requests from a jj stack; the forge (GitLab, GitHub) client |
+| `jw` | jj workspaces at `<repo>.agents/<name>` under `projectsRoot` (default `~/projects`); `jw agent` runs Claude in a new workspace and shpool session (`jw --help`) |
+| `event-bus` | events over plain NATS (`$NATS_URL`): `event-pub TYPE` publishes JSON from stdin on `events.TYPE`; `event-subscribe HANDLER SUBJECT...` runs HANDLER per event |
+| `event-handlers` | user service, one `event-subscribe` per line of `pkgs/event-handlers/handlers` (subjects stay under `events.`); `remote-notify` takes the untrusted `remote.notify.>` from the cluster |
+| `agent-inbox`, `agent-task`, `claude-hooks`, `claude-statusline`, `agent-skills` | agent tooling: terminal inbox of Claude prompts, sudo requests and tasks; task capture publishing `task.new`; claude's hooks, status line and skills |
+| `matrix-gateway`, `matrix-inbox`, `matrix-gateway-image`, `shani-image` | Matrix bridge of the NATS hub (in the cluster) and its client on `yenn`; the images are built into `triss` |
+| `tm`, `dictate`, `wallpaper` | task list CLI (`$TM_FILE`); microphone to text via the local whisper server; the wallpaper image |
+| `jail` | a function: `jail <package> {ENV_VAR = "/abs/path";}` runs every binary with those env vars set |
 
 ## External infrastructure
 
-OpenTofu in `tofu/` manages what lives outside the repo. State is in the private bucket `tofu-state` on Oracle Cloud (S3-compatible API, no locking: one apply at a time).
+OpenTofu in `tofu/` manages what lives outside the repo. State is in the private bucket `tofu-state` on Oracle Cloud (no locking: one apply at a time); secrets come from the project `tofu`.
 
-- Managed: the Cloudflare zone `nkmrk.com` and its DNS records, the mail Worker and Email Routing of `t.nkmrk.com`, the tailnet policy and DNS settings, Oracle Cloud `triss` (instance, VCN, subnet, security list, internet gateway, route table), the state bucket and the spending budget.
-- Manual: API tokens and keys and the Tailscale OAuth client hosts join with (tofu never creates secrets), the cloudflared tunnel itself (config in `clusters/dijkstra/cloudflare`), Mullvad, Matrix users, GitHub.
+- Managed: Cloudflare zone `nkmrk.com` (DNS in `tofu/cloudflare.tf`, mail Worker and Email Routing of `t.nkmrk.com` in `tofu/mail.tf`; not in the dashboard), the tailnet policy and DNS settings, Oracle Cloud `triss` (instance, VCN, subnet, security list, internet gateway, route table), the state bucket and the budget.
+- Manual: API tokens and keys, the Tailscale OAuth clients, the cloudflared tunnel, Mullvad, Matrix users, GitHub.
 
-One-time setup:
+Merging to `main` plans and applies (GitHub environment `tofu`, `BWS_ACCESS_TOKEN` of a read-only machine account). A plan that deletes or replaces anything fails the job: apply it locally after reading the plan, not while the workflow runs.
 
-1. In Oracle Cloud create the IAM user `tofu`, a group with it and a policy: manage virtual-network-family, manage instance-family, manage usage-budgets in tenancy, manage object-family where `target.bucket.name = 'tofu-state'`. Give the user an API key (its fingerprint and the OCIDs go into `tofu/oci.tf`) and a customer secret key.
-2. Create the private bucket `tofu-state` with versioning on (the backend needs it before `tofu init`), then import it into `oci_objectstorage_bucket.tofu_state`.
-3. Create the Cloudflare API token (permissions as in `secretspec.toml`, not cert-manager's) and the Tailscale OAuth client (scopes `policy_file`, `devices:core:read`, `devices:posture_attributes`, `dns`).
-4. In Bitwarden Secrets Manager create the project `tofu` with a secret per key of the profile `tofu` in `secretspec.toml` (plain key names) and a machine account with read access to it; export its access token as `BWS_ACCESS_TOKEN`.
-5. `tofu init`.
-6. In the GitHub repo Settings > Environments create `tofu`, deployment branches "Selected branches" = `main`, and the environment secret `BWS_ACCESS_TOKEN` = the access token of a machine account with read-only access to the project `tofu`.
+- To stop managing a resource use `removed { from = ... lifecycle { destroy = false } }`, never just delete the block.
+- Drift: `tofu plan -detailed-exitcode` (exit 2 means changes). After a `devenv update` that bumps providers: `tofu init -upgrade`.
+- Importing: `import` blocks in `tofu/imports-<provider>.tf`, `tofu plan -generate-config-out=generated.tf` (git-ignored), move the resources into `tofu/<provider>.tf`, apply, delete the imports file.
+- Tailscale: edit the policy only in `tofu/tailscale-policy.json` (console edits are reverted; its `tests` block rejects a policy that breaks server connectivity). Break-glass if an apply locks the cluster out: the console's JSON editor (Access controls).
+- Oracle Cloud: the public IP of `triss` is ephemeral and not managed. `oci.tf` holds every rule of the default security list and route table (console-added ones are removed); keep TCP 22, UDP 51820 (WireGuard hostPort) and the default route. The budget mails as soon as the tenancy spends anything.
 
-Workflow: open a PR (CI validates); merging to main plans and applies. A plan that deletes or replaces anything fails the job: apply it locally with `tofu apply` after reading the plan. The state has no locking, so don't apply locally while the workflow runs.
+## Cluster
 
-- Never apply a plan that replaces (`-/+`) or destroys something you didn't intend.
-- To stop managing a resource use a `removed { from = ... lifecycle { destroy = false } }` block, never just delete the resource block.
-- Drift check: `tofu plan -detailed-exitcode` (exit 2 means changes).
-- After a `devenv update` that bumps the providers: `tofu init -upgrade`.
+`clusters/dijkstra` is a k3s cluster over tailscale: `triss` is the server (traefik and cloud controller disabled), `roach` and `regis` are agents joining it through its tailscale address. Node config is `host/features/optional/k3s.nix` plus the per-host `services.k3s` blocks; the token is `dijkstra/K3S_TOKEN` in the project `hosts`. `regis` exports NFS (`nfs.nix`) for app volumes.
 
-Importing existing things:
+Flux, bootstrapped in `clusters/dijkstra/flux-system`, watches `main` of the GitHub repo and applies `./clusters/dijkstra`. The domain is the Flux variable `DOMAIN` (`flux-system/kustomization.yaml`); resources with shell `$` carry the `kustomize.toolkit.fluxcd.io/substitute: disabled` annotation.
 
-1. Add `import` blocks in `tofu/imports-<provider>.tf` and run `tofu plan -generate-config-out=generated.tf` (git-ignored).
-2. Move the trimmed resources into `tofu/<provider>.tf`, with `prevent_destroy` on anything whose loss is an outage. Check the generated config for secrets (e.g. OCI `metadata.user_data`) before committing.
-3. `tofu plan` must show only imports. Apply, then delete the imports file.
+### Cluster apps
 
-`-generate-config-out` does not overwrite: delete `generated.tf` before generating again.
+Each app is a directory under `clusters/dijkstra/`; shared: `storageclass.yaml`.
 
-Cloudflare: add records in `tofu/cloudflare.tf` and mail routing in `tofu/mail.tf`, not in the dashboard.
+| App | What it is | Notes |
+|-----|------------|-------|
+| `arrstack` | sonarr, radarr, lidarr, prowlarr, bazarr, qbittorrent (via gluetun/Mullvad), beets, flaresolverr | scaled by KEDA |
+| `cloudflare` | cloudflared tunnel | only hostnames in `cloudflared.yaml` are public |
+| `cnpg` | CloudNativePG operator | webhooks `failurePolicy: Fail`, see Break-glass |
+| `dns` | split-DNS for `nkmrk.com` at `10.43.0.53` (also `<service>.<namespace>.svc.cluster.local`) | |
+| `immich`, `navidrome` | photos; Navidrome with `audiomuse-ai` | databases `immich-postgres`, `audiomuse-postgres` (see Backups); AudioMuse-AI settings live in its own DB (web UI) |
+| `mail-hook` | mail to `t.nkmrk.com` (Cloudflare Email Worker `tofu/mail-worker.js`) as posts in `#mail` | `mail-hook/mail_hook_token` (project `cluster`) must equal `TF_VAR_mail_hook_token` (project `tofu`): rotate both, then `tofu apply` |
+| `matrix` | private non-federated Synapse (`matrix.nkmrk.com`), mautrix bridges (`whatsapp`, `meta`), `gateway` (`matrix-gateway`, bot `@agents`, rooms `#agents`, `#mail`) | create users: `kubectl -n matrix exec -it deploy/synapse -- register_new_matrix_user -c /config/homeserver.yaml http://localhost:8008` (secret `matrix/registration_shared_secret`); DB `matrix-postgres`; the gateway image is imported into `triss` like `shani`'s (`ErrImageNeverPull`: `k3s ctr images import` it); anything on the hub can post into `#agents` as `@agents`: never type secrets there |
+| `nats` | hub `yenn` joins as a leafnode over WireGuard; single replica on `triss`, no JetStream | a new producer namespace must be added to the NetworkPolicy; it publishes `remote.notify.<source>` |
+| `omniverse` | git-sync, WebDAV, radicale (CalDAV) | calendar subscriptions: secret `omniverse/calendar_subscriptions`; refresh now: `kubectl -n omniverse create job --from=cronjob/calendar-subscriptions refresh-now` |
+| `shani` | Claude agent runner on `triss` | start work from `yenn`: `NATS_URL=nats://nats.nats.svc.cluster.local:4222 event-pub task.new <<<'{"repo":"infra","prompt":"…"}'`; debug `kubectl -n shani exec -it deploy/shani -- bash`; image imported into `triss` (see `AGENTS.md`, Deploy) |
+| `wireguard` | VPN server on `triss`, egress via Mullvad (`wireguard/mullvad_*` in project `cluster`; without it peers have no internet) | limited peers `10.13.13.2-127` reach only `*.nkmrk.com`, the cluster DNS and the internet; full peers `10.13.13.128-254` also the pod and service networks. New peer: add a `[Peer]` with the next free `10.13.13.N/32` to `wg0.conf`; client `DNS = 10.43.0.53`, `MTU = 1200`, `Endpoint = vpn.nkmrk.com:51820`. `yenn` is a peer (`host/yenn/wireguard.nix`): tunnel down means no internet (`sudo networkctl down wg0` / `up`) |
 
-Tailscale:
+Others: `cert-manager` (Let's Encrypt wildcard), `cron`, `external-secrets`, `intel-gpu-plugin`, `jellyfin` (with seerr), `keda`, `ollama`, `openebs`, `proxy` (traefik, gateway), `velero`, `webdav` (books).
 
-- Edit the policy only in `tofu/tailscale-policy.json`: the next apply reverts console edits.
-- The `tests` block makes Tailscale reject a policy that breaks server connectivity.
-- The OAuth client hosts join with is made by hand (Tailscale console Settings > OAuth clients: scope Auth keys write, tag `tag:server`). Its secret goes to the project `hosts` as `tailscale/TAILSCALE_AUTH_KEY`; deleting the client revokes it.
+Internal services (`<name>.nkmrk.com`, gateway `internal` listener, full WireGuard peers only, HTTPS): a new name needs an HTTPRoute on `sectionName: internal` and an entry in the `dns` Corefile. `bazarr` and `prowlarr` go through the KEDA interceptor (`keda/httproute.yaml`), so their host is also listed in their `HTTPScaledObject`.
 
-Oracle Cloud:
+### Kubernetes secrets
 
-- The public IP of `triss` is ephemeral, so it is not managed.
-- The VCN's default security list and route table are `oci_core_default_security_list` and `oci_core_default_route_table` with `manage_default_resource_id`: `oci.tf` holds every rule, and the next apply removes rules added in the console. Keep TCP 22, UDP 51820 (WireGuard hostPort) and the default route to the internet gateway.
-- Put `lifecycle { prevent_destroy = true }` on every OCI resource; `ignore_changes` only for attributes that can't reach zero diff (likely `metadata`, `source_details`).
-- `-/+` or "forces replacement" on the instance or its VNIC: never apply.
-- Break-glass: `ssh maintenance@141.147.2.187`.
-- Budget: `oci_budget_budget.tenancy` (1 per month) mails as soon as the tenancy spends anything. OCI allows one budget per compartment.
+The Secret `secrets` of a namespace comes from the ExternalSecret in `clusters/dijkstra/<ns>/external-secret.yaml`, which reads the project `cluster` through the ClusterSecretStore `bitwarden` (read-only machine account `eso`). BWS secrets are named `<ns>/<key>`, lowercase (the case matters here). The ESO access token is `dijkstra/ESO_BWS_TOKEN` in the project `hosts`, applied by `triss` (`services.eso-bws-token`).
 
-## Infra
+1. Create the secret `<ns>/<key>` in the project `cluster`.
+2. Add `- secretKey: <key>` with `remoteRef: {key: <ns>/<key>}` to the `data` of the ExternalSecret.
+3. Reference it in the manifests as secret `secrets`, key `<key>`.
 
-`clusters/dijkstra` is a k3s cluster over tailscale:
-
-| Node | Role |
-|------|------|
-| `triss` | server (traefik and cloud controller disabled) |
-| `roach`, `regis` | agents, join `triss` through its tailscale address |
-
-Node config is in `host/features/optional/k3s.nix` plus the per-host `services.k3s` blocks. The token comes from the project `hosts` (`dijkstra/K3S_TOKEN`). `regis` also exports NFS (`nfs.nix`), used for app volumes.
-
-The tailnet policy is `tofu/tailscale-policy.json`, applied with `tofu apply`; don't edit it in the console. The console's JSON editor (Access controls) is the break-glass if an apply locks the cluster out.
-
-Flux is bootstrapped in `clusters/dijkstra/flux-system` (do not edit `gotk-*.yaml`). It watches `main` of the GitHub repo and applies `./clusters/dijkstra`, so nothing is applied by hand: commit, push, wait. To apply immediately:
+Composed values (e.g. the appservice registrations of `matrix`) are rendered in `spec.target.template`. Changes apply within 15 minutes; to apply now (then delete the pod if the app reads the secret at startup):
 
 ```sh
-flux reconcile kustomization flux-system --namespace flux-system --with-source
+kubectl -n <ns> annotate externalsecret secrets force-sync=$(date +%s) --overwrite
 ```
 
-The domain is the Flux variable `DOMAIN`, set in `clusters/dijkstra/flux-system/kustomization.yaml`, and resources with shell `$` carry the `kustomize.toolkit.fluxcd.io/substitute: disabled` annotation.
+After rotating the ESO token, deploy `triss` and restart `eso-bws-token.service` there.
 
-Each app is a directory: `arrstack` (sonarr, radarr, lidarr, prowlarr, bazarr, qbittorrent (egress via gluetun/Mullvad), beets, flaresolverr), `cert-manager` (Let's Encrypt wildcard for internal HTTPS), `cloudflare` (tunnel; only the hostnames listed in `cloudflared.yaml` are public), `cnpg` (CloudNativePG operator), `cron`, `dns` (split-DNS resolver for nkmrk.com for WireGuard peers, at `10.43.0.53`), `external-secrets` (External Secrets Operator and the Bitwarden SDK server; the ClusterSecretStore `bitwarden` reads the Bitwarden Secrets Manager project `cluster` with the read-only machine account `eso`; each namespace has an ExternalSecret `secrets`), `immich` (`photos.nkmrk.com`), `intel-gpu-plugin` (exposes regis's iGPU as `gpu.intel.com/i915`), `jellyfin` (`movies.nkmrk.com`, with seerr at `seerr.nkmrk.com`), `keda`, `mail-hook` (incoming mail to `#mail`, `mail-hook.nkmrk.com`, public through cloudflared), `matrix` (Synapse, `matrix.nkmrk.com`), `nats` (leafnode hub for `yenn`, see below), `navidrome` (`music.nkmrk.com`, with audiomuse-ai), `ollama`, `omniverse` (git-sync, webdav, radicale), `openebs`, `proxy` (traefik, gateway), `shani` (event-driven Claude agent runner on `triss`), `velero`, `webdav` (books, `books.nkmrk.com`, public through cloudflared), `wireguard` (WireGuard server on `triss`, egress via Mullvad). Shared: `storageclass.yaml`.
-
-`shani` on the cluster: the image is built into triss (`services.k3s.images`) and k3s imports it. When `nix eval --raw .#nixosConfigurations.triss.pkgs.shani-image.imageTag` differs from the tag in `clusters/dijkstra/shani/deployment.yaml`, put the new tag there, `host-deploy triss`, then merge (the deployment uses `Recreate`, so a tag Flux applies before the import leaves no runner).
-
-Work on `shani` is started only by events from `yenn`: `NATS_URL=nats://nats.nats.svc.cluster.local:4222 event-pub task.new <<<'{"repo":"infra","prompt":"…"}'` starts an agent session, `… event-pub session.message <<<'{"to":"s-…","text":"…"}'` sends a message to a session (resumed if it is not running). Notifications arrive on `yenn` via `remote.notify`. Debug with `kubectl -n shani exec -it deploy/shani -- bash`. One-time bootstrap: run `claude` and `/login` (`claude auth login` if pasting fails), accept the trust dialog in `/projects`, then `jw clone https://github.com/<owner>/<repo>` per repo.
-
-Services on the gateway's `internal` listener (full WireGuard peers only, HTTPS; `dns` resolves these names to `traefik-internal`): `radicale`, `sonarr`, `radarr`, `lidarr`, `qbittorrent`, `bazarr`, `prowlarr`, `ollama`, `audiomuse-ai`, `matrix` (Synapse) and `omniverse` (WebDAV), each at `<name>.nkmrk.com`, and immich at `photos.nkmrk.com`. `bazarr` and `prowlarr` go through the KEDA interceptor (`keda/httproute.yaml`), so their host is also listed in their `HTTPScaledObject`. A new internal name needs an HTTPRoute on `sectionName: internal` and an entry in the `dns` Corefile.
-
-`nats` (single replica on `triss`, no JetStream) is the hub `yenn` joins as a leafnode over WireGuard; its NetworkPolicy lets the namespace `wireguard` connect (TCP 4222 and 7422) and `shani` (TCP 4222). A cluster producer adds its namespace to that NetworkPolicy and publishes `remote.notify.<source>` with JSON `{title, body?, project?}`, which `yenn` shows as a desktop notification.
-
-AudioMuse-AI (`navidrome/audiomuse-ai`) keeps its settings (Navidrome login, auth/API token, AI provider) in its own database, set in its web UI at `https://audiomuse-ai.nkmrk.com/`. Navidrome's `audiomuseai` plugin is configured in Navidrome's UI with that token.
-
-Radicale (`omniverse/radicale`) serves CalDAV at `https://radicale.nkmrk.com/` (full WireGuard peers only, through the gateway's `internal` listener), user `nikodem`. Its data is the omniverse `dav/` directory, versioned by git-sync except what the `omniverse-gitignore` ConfigMap excludes (the `sub-*` subscription calendars and Radicale runtime files). `dav/` is not served over the omniverse WebDAV because Radicale is its only writer: use CalDAV (DAVx⁵ on Android).
-
-Calendar subscriptions are listed in the secret `CALENDAR_SUBSCRIPTIONS` (BWS project `cluster`, `omniverse/calendar_subscriptions`), one `<name> <url> [<display name>]` per line: `<name>` is lowercase letters, digits and dashes, starting with a letter or digit; `<url>` is `http(s)://` or `webcal://`; the display name (may contain spaces) defaults to `<name>`. All other lines are ignored. The CronJob `calendar-subscriptions` refreshes them daily at 04:00 Europe/Warsaw into read-only `sub-<name>` calendars. Run it now with:
-
-```bash
-kubectl -n omniverse create job --from=cronjob/calendar-subscriptions refresh-now
-```
-
-To remove a subscription, delete its line, then delete the calendar (read-only over CalDAV):
-
-```bash
-kubectl -n omniverse exec deploy/radicale -- rm -r /data/collection-root/nikodem/sub-<name>
-```
-
-Matrix (`matrix/synapse`) is a private, non-federated Synapse (`server_name` `nkmrk.com`, permanent) at `https://matrix.nkmrk.com/` (full WireGuard peers only, through the gateway's `internal` listener, client API only: `/_synapse` admin is not routed through the gateway). Log in by typing `matrix.nkmrk.com` as the homeserver. Registration is closed; create users with the shared secret (`matrix/registration_shared_secret` in the BWS project `cluster`):
-
-```bash
-kubectl -n matrix exec -it deploy/synapse -- register_new_matrix_user -c /config/homeserver.yaml http://localhost:8008
-```
-
-Its database is the CloudNativePG cluster `matrix-postgres`, backed up and restored like the Immich database (a `pg_dump` pre-hook, `synapse.dump`; database and owner `synapse`); the signing key and media are on the PVC `synapse-data`.
-
-Bridges are mautrix appservices in `matrix/<network>`, one per network (`whatsapp`, `meta`, pinned image, SQLite on its own PVC). For WhatsApp, DM `@whatsappbot:nkmrk.com` and send `login qr`; for Messenger, DM `@metabot:nkmrk.com`, send `login` and pick Messenger. Bump the bridge images about monthly: a "client outdated" notice in the bridge room is the cue.
-
-`matrix/gateway` runs `matrix-gateway`, the only Matrix client of the bot `@agents:nkmrk.com`: it posts what agents publish on the NATS hub into the room `#agents` and publishes the owner's replies, signed. Bot API: publish `matrix.send` with `{"to", "ref", "body"}` (a routed post) or `{"reply_to", "body"}` (a notice) or `{"room": "mail", "body"}` (a plain post into `#mail`); the owner's replies come on `matrix.reply.<to>` as `{"type", "msg", "sig"}`, to be verified with the gateway's public key before trusting them. A top-level (not a reply) message `!<host> <task>` from the owner is published on `matrix.command.<host>` as `{"type": "matrix.command", "msg", "sig"}`, where `msg` is the JSON `{"kind": "matrix.command", "to", "text", "event_id", "ts"}` (`ts`: Synapse's `origin_server_ts` in ms); subscribers verify `sig` over `msg` and `kind == "matrix.command"` before trusting it, and should drop old or repeated commands (`event_id`, `ts`). A reply that starts with `!` is an answer, not a command. Setup: register `agents` (not an admin) with `register_new_matrix_user` as above and save its password in the BWS project `cluster` as `matrix/agents_password`; run `nix run .#matrix-gateway -- keygen`, save the private key there as `matrix/gateway_signing_key` and commit the public `MATRIX_GATEWAY_KEY` in `pkgs/matrix-inbox/gateway.pub`; then run `host-deploy triss` before merging, so the image is imported (like `shani`) before Flux rolls out the deployment, which uses `imagePullPolicy: Never` (`nix eval --raw .#nixosConfigurations.triss.pkgs.matrix-gateway-image.imageTag` must match the tag in `clusters/dijkstra/matrix/gateway/deployment.yaml`; on `ErrImageNeverPull`, import the image built from `.#nixosConfigurations.triss.pkgs.matrix-gateway-image` by hand with `k3s ctr images import`). Once the gateway is up, the owner must accept the `#agents` and `#mail` room invites from the bot in their Matrix client before messages arrive. Anything on the NATS hub can post into `#agents` as `@agents`, so a message there may be forged; never type secrets there, because every hub client can read the replies. No "✅ Answered." within a few seconds means the reply was not delivered.
-
-`mail-hook` turns incoming mail into posts in `#mail`. The Cloudflare Email Worker `tofu/mail-worker.js` receives all mail to `t.nkmrk.com` (Email Routing catch-all, `tofu/mail.tf`): it forwards throwaway addresses (anything but `hook@`) to `FORWARD_TO` with an `X-Mail-Hook` header, and POSTs `{kind, from, to, subject}` with `Authorization: Bearer <HOOK_TOKEN>` to `https://mail-hook.nkmrk.com/mail`. Mail to `hook@` (Gmail/Proton auto-forwards) is only notified. It runs Redpanda Connect with the config in `clusters/dijkstra/mail-hook/configmap.yaml`: it checks the token and the body, publishes `mail.received` on the NATS hub, and posts it with `matrix.send` `{"room": "mail", "body"}`; invalid requests get a non-2xx response and are published nowhere. Setup: create `mail-hook/mail_hook_token` in the BWS project `cluster` (`openssl rand -hex 32`), the same value as the secret `TF_VAR_mail_hook_token` in the BWS project `tofu`, and the reading inbox as `TF_VAR_mail_forward_to` there. Widen the tofu Cloudflare token as in `secretspec.toml` and run `tofu apply`; click the verification mail Cloudflare sends to the inbox (the destination address). Point Gmail/Proton forwarding at `hook@t.nkmrk.com` (Gmail's confirmation code shows up in `#mail`). For Bitwarden, use the username generator "Catch-all email" with domain `t.nkmrk.com`.
-
-On yenn the user unit `matrix-inbox` (`host/yenn/matrix-inbox.nix`) forwards Claude's questions and permission prompts to the matrix-gateway over NATS and answers them from verified replies (setup: see the matrix-gateway paragraph). After `host-switch` on yenn, enable it with `systemctl --user start matrix-inbox` (`restart` after updates; a switch doesn't start or restart user services). Prompts wait 10 minutes.
-
-It also starts agent sessions: send `!yenn <task>` in `#agents` and `jw agent -d` starts a session on `yenn`, with the repo picked by jw. The reply is "Started <session> in <repo>." or "Failed: ...". No reply means the command was not delivered (or was more than 5 minutes old). Anyone who can post as `@nikodem`, read the gateway signing key or merge to infra `main` can start agents on `yenn`; revoke the `@nikodem` sessions when a device is lost.
-
-### WireGuard peers
-
-Peers have one of two tiers, set by their address. Limited peers (`10.13.13.2-127`) reach only `*.nkmrk.com`, the cluster DNS server (`10.43.0.53`) and the internet (via Mullvad), never the cluster network. Full peers (`10.13.13.128-254`) also reach the cluster's pod and service networks (`10.42.0.0/15`). The pod's firewall enforces the tiers. Peers' internet leaves through the pod's own Mullvad WireGuard tunnel (relay `de-fra-wg-001`, pinned in `wireguard/deployment.yaml`); without the tunnel peers have no internet. To change the relay, take its IPv4 and public key from Mullvad's relay list (`api.mullvad.net/public/relays/wireguard/v2`).
-
-1. Generate a key pair: `umask 077; wg genkey > p.key; wg pubkey < p.key`.
-2. Add a `[Peer]` (name comment, `PublicKey`, next free `10.13.13.N/32` in its tier) to `clusters/dijkstra/wireguard/wg0.conf`, commit and push; the pod restarts with it.
-3. Write the client config `client.conf`:
-   ```ini
-   [Interface]
-   PrivateKey = <p.key>
-   Address = 10.13.13.N/32
-   DNS = 10.43.0.53
-   MTU = 1200
-
-   [Peer]
-   PublicKey = <server public key, see wg0.conf>
-   Endpoint = vpn.nkmrk.com:51820
-   AllowedIPs = 0.0.0.0/0, ::/0
-   PersistentKeepalive = 25
-   ```
-4. `qrencode -t ansiutf8 < client.conf`, scan it, then delete `p.key` and `client.conf`.
-
-`yenn` is a NixOS peer (`host/yenn/wireguard.nix`); its private key is `WIREGUARD_PRIVATE_KEY` in profile `yenn`. All its internet except the tailnet and directly attached networks goes through the tunnel, and its DNS always goes to the cluster `dns` resolver at `10.43.0.53`, which also resolves cluster services as `<service>.<namespace>.svc.cluster.local`. With the tunnel down there is no internet: `sudo networkctl down wg0` (`up` to restore), or click the waybar WireGuard button. Behind a captive portal take the tunnel down and run `sudo resolvectl default-route wlan0 yes`; after logging in, `sudo resolvectl default-route wlan0 no` and bring the tunnel back up.
+A fresh cluster: k3s and `triss` (applies the ESO token), `flux bootstrap`, then `kubectl apply -f` `clusters/dijkstra/cert-manager/` and `clusters/dijkstra/external-secrets/{namespace,helm,sdk-server}.yaml` by hand (Flux fails on the whole tree until the ExternalSecret, ClusterSecretStore and Certificate CRDs exist), wait until their HelmReleases are Ready, then reconcile.
 
 ### Backups
 
-Velero backs up the cluster daily at 18:00 Europe/Warsaw and keeps each backup for 30 days. The target is Garage on `regis` (`host/regis/garage.nix`): a single-node S3 store on the `tank/garage` dataset, bucket `velero` at `http://100.100.215.91:3900`, reachable only over `tailscale0` and `cni0`. Velero and Garage share one key pair, from `ACCESS_KEY_ID` and `SECRET_ACCESS_KEY` of the profile `dijkstra-velero` (`dijkstra-velero/<KEY>` in the project `hosts` for Garage, copied as `velero/access_key_id` and `velero/secret_access_key` in the project `cluster` for Velero; rotate both); Garage creates the layout, the bucket and the key on startup (`--single-node --default-bucket`).
+Velero backs up the cluster daily at 18:00 Europe/Warsaw (schedule `daily-openebs`), keeping each backup 30 days, to Garage on `regis` (`host/regis/garage.nix`): a single-node S3 store on `tank/garage`, bucket `velero` at `http://100.100.215.91:3900`, reachable only over `tailscale0` and `cni0`. Velero and Garage share one key pair: `dijkstra-velero/ACCESS_KEY_ID` and `SECRET_ACCESS_KEY` in the project `hosts` (Garage), copied as `velero/access_key_id` and `velero/secret_access_key` in the project `cluster` (rotate both).
 
-- Backed up: every namespace except `kube-system`, `velero` and `flux-system`, without Secrets (they come from Bitwarden), and the pod volumes through kopia, except `local-storage` (the media on tank), `nfs`, emptyDir and PVCs labelled `backup: skip` (downloads, caches).
-- The beets library (`library.db`) lives on its own PVC `beets-data`, mounted only by the always-on beets pod, so Velero backs it up with the rest. To restore it, `velero restore` that PVC; delete a leftover `library.db-journal` next to it first, or sqlite rolls it back onto the restored file.
+- Backed up: every namespace except `kube-system`, `velero` and `flux-system`, without Secrets (they come from Bitwarden), and pod volumes through kopia, except `local-storage` (media on tank), `nfs`, emptyDir and PVCs labelled `backup: skip` (`velero/volume-policy.yaml`).
+- The beets library (`library.db`) is on its own PVC `beets-data`: `velero restore` that PVC, after deleting a leftover `library.db-journal` next to it (sqlite would roll it back onto the restored file).
 - Nothing alerts on a failed backup: check `velero backup get` now and then.
 
 #### Restore
@@ -415,22 +250,22 @@ velero restore describe <restore> --details
 flux resume kustomization flux-system -n flux-system
 ```
 
-- Delete only the backed-up `openebs-*` PVCs. Keep the `backup: skip` ones and the static `local-storage`/`nfs` ones: Velero restores their PV as is, so a deleted one stays Pending.
-- A PVC shared by several Deployments (`arrstack-config-pvc`, `omniverse-pvc`) is restored through only one of their pods; the others start on the empty volume and write to it (fresh SQLite databases, a git clone) before the restore finishes. Restore those volumes with kopia (below) instead.
+- Delete only the backed-up `openebs-*` PVCs. Keep the `backup: skip` and static `local-storage`/`nfs` ones: Velero restores their PV as is, so a deleted one stays Pending.
+- A PVC shared by several Deployments (`arrstack-config-pvc`, `omniverse-pvc`) is restored through only one of their pods; the others start on the empty volume and write to it first. Restore those with kopia (below).
 - Don't delete the namespace: the static media PVs would go Released with a stale `claimRef` and the restored PVCs wouldn't bind.
-- Arrstack apps are scaled by KEDA: delete their HTTPScaledObjects first (`kubectl -n arrstack delete httpscaledobject --all`). Flux is suspended, so it doesn't recreate them until you resume.
-- The replaced volumes stay as Released PVs (Retain). Once the app works, clean up with `kubectl delete pv <pv>`, then `kubectl -n openebs delete zfsvolume <pv>` (destroys the dataset) for openebs-zfs, or remove `/var/openebs/local/<pv>` on `triss`.
+- Arrstack apps are scaled by KEDA: first `kubectl -n arrstack delete httpscaledobject --all` (Flux is suspended, so it doesn't recreate them).
+- The replaced volumes stay as Released PVs (Retain). Once the app works, `kubectl delete pv <pv>`, then `kubectl -n openebs delete zfsvolume <pv>` (destroys the dataset; openebs-zfs) or remove `/var/openebs/local/<pv>` on `triss`.
 
 ##### Restore a volume with kopia
 
-For shared volumes, or when a Velero restore fails, restore the data with kopia into the existing volume:
+For shared volumes, or when a Velero restore fails:
 
 1. Suspend Flux (it resets `replicas`), scale the app to 0, and delete its HTTPScaledObject if KEDA scales it:
    ```sh
    flux suspend kustomization flux-system -n flux-system
    kubectl -n <namespace> scale deploy/<app> --replicas=0
    ```
-2. On the node holding the volume, connect read-only to the namespace's repository. The password is Velero's static default (secret `velero/velero-repo-credentials`), so this works without the cluster:
+2. On the node holding the volume, connect read-only to the namespace's repository (Velero's static default password, secret `velero/velero-repo-credentials`, works without the cluster):
    ```sh
    sudo nix run nixpkgs#kopia -- repository connect s3 --endpoint 100.100.215.91:3900 --disable-tls --bucket velero --prefix kopia/<namespace>/ --region garage --access-key <GK...> --secret-access-key <secret> --password static-passw0rd --readonly
    ```
@@ -440,7 +275,7 @@ For shared volumes, or when a Velero restore fails, restore the data with kopia 
    ```
 4. Find the volume's directory `<path>` and a place `<aside>` for its current contents outside it (`<pv>` is the PVC's `spec.volumeName`):
    - `triss`: `<path>` is `/var/openebs/local/<pv>`, `<aside>` is `/var/openebs/local/<pv>.pre-restore`.
-   - `regis`: mount the dataset (it is not mounted while the app is down); `<path>` is `/mnt/restore`, `<aside>` is `/mnt/openebs/pre-restore-<pv>`, outside the dataset so its quota doesn't count both copies:
+   - `regis`: mount the dataset (unmounted while the app is down); `<path>` is `/mnt/restore`, `<aside>` is `/mnt/openebs/pre-restore-<pv>` (outside the dataset so its quota doesn't count both copies):
      ```sh
      sudo mkdir -p /mnt/restore && sudo mount -t zfs rpool/openebs/<pv> /mnt/restore
      ```
@@ -456,13 +291,13 @@ For shared volumes, or when a Velero restore fails, restore the data with kopia 
 
 #### Immich database
 
-The Immich database is the CloudNativePG cluster `immich-postgres` (`clusters/dijkstra/immich/postgres.yaml`). Its PVC is copied by Velero like any other, but live PGDATA is not a consistent backup: the daily 18:00 backup first runs a pre-hook that writes `immich.dump` (`pg_dump -Fc`) to the PVC root, then copies the PVC. Restore only from that dump.
+The Immich database is the CloudNativePG cluster `immich-postgres` (`clusters/dijkstra/immich/postgres.yaml`). Live PGDATA is not a consistent backup: a pre-hook writes `immich.dump` (`pg_dump -Fc`) to the PVC root before Velero copies it. Restore only from that dump, never with `velero restore` of the `immich` namespace (it would recreate operator-owned objects).
 
 ##### Restore the database
 
-Run everything from the workstation (dev shell). `<pod>` is the primary, `kubectl -n immich get cluster immich-postgres -o jsonpath='{.status.currentPrimary}'` (usually `immich-postgres-1`).
+Run from the workstation. `<pod>` is the primary: `kubectl -n immich get cluster immich-postgres -o jsonpath='{.status.currentPrimary}'` (usually `immich-postgres-1`).
 
-1. Make sure the Cluster from git is healthy (`kubectl -n immich get cluster immich-postgres`); if it is missing, let Flux recreate it and wait. Any hand-written bootstrap must set `database: immich` and `owner: immich`, otherwise CNPG creates an empty `app` database.
+1. Make sure the Cluster from git is healthy (`kubectl -n immich get cluster immich-postgres`); if missing, let Flux recreate it (a hand-written bootstrap must set `database: immich` and `owner: immich`, else CNPG creates an empty `app` database).
 2. Suspend Flux and stop Immich:
    ```sh
    flux suspend kustomization flux-system -n flux-system
@@ -486,31 +321,9 @@ Run everything from the workstation (dev shell). `<pod>` is the primary, `kubect
    Without `--create`, `pg_restore` drops database-level settings such as `vchordrq.probes`; the second `pg_restore` replays them.
 6. `flux resume kustomization flux-system -n flux-system`, check Immich, then delete `./immich-pgdata`.
 
-Don't `velero restore` the `immich` namespace for the database: it would recreate operator-owned objects.
-
-The same pre-hook and restore procedure applies to `audiomuse-postgres` (database `audiomuse`, namespace `navidrome`, `clusters/dijkstra/navidrome/audiomuse-ai/postgres.yaml`): substitute that cluster, namespace, database and owner (`audiomuse`), the dump name (`audiomuse.dump`) and the AudioMuse-AI deployments (from its Helm release) for `deploy/immich`.
+`audiomuse-postgres` (namespace `navidrome`, database and owner `audiomuse`, dump `audiomuse.dump`) and `matrix-postgres` (namespace `matrix`, database and owner `synapse`, dump `synapse.dump`) are backed up and restored the same way: substitute cluster, namespace, database, owner, dump name, and the app's deployments (for AudioMuse-AI see its Helm release) for `deploy/immich`.
 
 ##### Break-glass
 
 - Operator down: the CNPG webhooks use `failurePolicy: Fail` and everything is one `flux-system` Kustomization, so every apply fails. Suspend it (`flux suspend kustomization flux-system -n flux-system`), roll the operator back with `helm -n cnpg-system rollback cloudnative-pg` (or fix the release), then resume.
 - PVC full: raise `spec.storage.size` in `immich/postgres.yaml` (openebs-zfs allows expansion).
-
-### Kubernetes secrets
-
-The Secret `secrets` of a namespace is created by the ExternalSecret `clusters/dijkstra/<ns>/external-secret.yaml`, which reads the Bitwarden Secrets Manager project `cluster`. The BWS secrets are named `<ns>/<key>`, in lowercase (the case matters here). The External Secrets Bitwarden token is applied by `triss` as `external-secrets/bitwarden-access-token`.
-
-1. Create the secret `<ns>/<key>` in the BWS project `cluster`, e.g. `matrix/api_key`.
-2. Add `- secretKey: <key>` with `remoteRef: {key: <ns>/<key>}` to the `data` of the ExternalSecret.
-3. Reference it in the manifests as secret `secrets`, key `<key>`.
-
-Values composed of other keys (the appservice registrations of `matrix`, `cloud` of `velero`) are rendered in `spec.target.template`. Changes apply within 15 minutes. To apply now:
-
-```sh
-kubectl -n <ns> annotate externalsecret secrets force-sync=$(date +%s) --overwrite
-```
-
-then delete the pod if the app reads the secret at startup.
-
-The ESO token is `dijkstra/ESO_BWS_TOKEN` in the BWS project `hosts`, applied by `triss`; after rotating it, deploy `triss` and restart `eso-bws-token.service` there.
-
-A fresh cluster: k3s and `triss` (applies the ESO token), `flux bootstrap`, then `kubectl apply -f` `clusters/dijkstra/cert-manager/` and `clusters/dijkstra/external-secrets/{namespace,helm,sdk-server}.yaml` by hand (Flux dry-runs the whole tree and fails on the ExternalSecret, ClusterSecretStore and Certificate kinds until those CRDs exist), wait until their HelmReleases are Ready, then reconcile.
