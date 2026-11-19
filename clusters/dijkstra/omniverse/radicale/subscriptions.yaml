@@ -3,6 +3,8 @@ kind: ConfigMap
 metadata:
   name: calendar-subscriptions
   namespace: omniverse
+  annotations:
+    kustomize.toolkit.fluxcd.io/substitute: disabled
 data:
   refresh.sh: |
     #!/bin/sh

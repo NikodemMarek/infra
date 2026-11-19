@@ -9,7 +9,7 @@ spec:
       namespace: default
       sectionName: internal
   hostnames:
-    - "qbittorrent.nkmrk.com"
+    - "qbittorrent.${DOMAIN}"
   rules:
     - matches:
         - path:

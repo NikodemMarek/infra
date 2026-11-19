@@ -9,7 +9,7 @@ spec:
       namespace: default
       sectionName: websecure
   hostnames:
-    - "music.nkmrk.com"
+    - "music.${DOMAIN}"
   rules:
     - matches:
         - path:

@@ -9,7 +9,7 @@ data:
 
     homeserver:
       address: http://synapse.matrix.svc.cluster.local:8008
-      domain: nkmrk.com
+      domain: ${DOMAIN}
 
     appservice:
       address: http://whatsapp.matrix.svc.cluster.local:29318
@@ -26,7 +26,7 @@ data:
 
     bridge:
       permissions:
-        "@nikodem:nkmrk.com": admin
+        "@nikodem:${DOMAIN}": admin
 
     network:
       history_sync:

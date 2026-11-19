@@ -6,7 +6,7 @@ metadata:
 spec:
   secretName: nkmrk-com-tls
   dnsNames:
-    - "*.nkmrk.com"
+    - "*.${DOMAIN}"
   issuerRef:
     kind: ClusterIssuer
     name: letsencrypt

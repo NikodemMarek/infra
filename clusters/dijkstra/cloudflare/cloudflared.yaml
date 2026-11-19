@@ -14,15 +14,15 @@ data:
       matchSNItoHost: true
 
     ingress:
-      - hostname: movies.nkmrk.com
+      - hostname: movies.${DOMAIN}
         service: https://traefik.default.svc.cluster.local:443
-      - hostname: seerr.nkmrk.com
+      - hostname: seerr.${DOMAIN}
         service: https://traefik.default.svc.cluster.local:443
-      - hostname: music.nkmrk.com
+      - hostname: music.${DOMAIN}
         service: https://traefik.default.svc.cluster.local:443
-      - hostname: books.nkmrk.com
+      - hostname: books.${DOMAIN}
         service: https://traefik.default.svc.cluster.local:443
-      - hostname: mail-hook.nkmrk.com
+      - hostname: mail-hook.${DOMAIN}
         service: https://traefik.default.svc.cluster.local:443
       - service: http_status:404
 ---

@@ -3,6 +3,8 @@ kind: ConfigMap
 metadata:
   name: dns-corefile
   namespace: dns
+  annotations:
+    kustomize.toolkit.fluxcd.io/substitute: disabled
 data:
   Corefile: |
     (upstream) {

@@ -9,7 +9,7 @@ spec:
     - name: internal
       port: 9443
       protocol: HTTPS
-      hostname: "*.nkmrk.com"
+      hostname: "*.${DOMAIN}"
       tls:
         mode: Terminate
         certificateRefs:
@@ -21,7 +21,7 @@ spec:
     - name: websecure
       port: 8443
       protocol: HTTPS
-      hostname: "*.nkmrk.com"
+      hostname: "*.${DOMAIN}"
       tls:
         mode: Terminate
         certificateRefs:

@@ -3,6 +3,8 @@ kind: Deployment
 metadata:
   name: books
   namespace: webdav
+  annotations:
+    kustomize.toolkit.fluxcd.io/substitute: disabled
 spec:
   replicas: 1
   selector:
