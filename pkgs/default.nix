@@ -55,6 +55,7 @@
   agent-task = pkgs.callPackage ./agent-task {};
   event-bus = pkgs.callPackage ./event-bus {};
   matrix-gateway = pkgs.callPackage ./matrix-gateway {};
+  mail-hook = pkgs.callPackage ./mail-hook {};
   tm = pkgs.callPackage ./tm {};
   matrix-gateway-image = pkgs.callPackage ./matrix-gateway/image.nix {};
   shani-image = pkgs.callPackage ./shani/image.nix {};
