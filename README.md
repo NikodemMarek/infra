@@ -262,6 +262,15 @@ Tailscale:
 - The `tests` block makes Tailscale reject a policy that breaks server connectivity.
 - Auth keys stay manual.
 
+Oracle Cloud:
+
+- The public IP of `triss` is ephemeral, so it is not managed.
+- The VCN's default security list and route table are `oci_core_default_security_list` and `oci_core_default_route_table` with `manage_default_resource_id`: `oci.tf` holds every rule, and the next apply removes rules added in the console. Keep TCP 22, UDP 51820 (WireGuard hostPort) and the default route to the internet gateway.
+- Put `lifecycle { prevent_destroy = true }` on every OCI resource; `ignore_changes` only for attributes that can't reach zero diff (likely `metadata`, `source_details`).
+- `-/+` or "forces replacement" on the instance or its VNIC: never apply.
+- Break-glass: `ssh maintenance@141.147.2.187`.
+- Budget: `oci_budget_budget.tenancy` (1 per month) mails as soon as the tenancy spends anything. OCI allows one budget per compartment.
+
 ## Infra
 
 `clusters/dijkstra` is a k3s cluster over tailscale:
