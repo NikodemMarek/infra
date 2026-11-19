@@ -20,5 +20,15 @@
     "routes": {
       "10.42.0.0/16": ["tag:server"]
     }
-  }
+  },
+  "tests": [
+    {
+      "src": "tag:server",
+      "accept": ["tag:server:22", "tag:server:6443"]
+    },
+    {
+      "src": "tag:management",
+      "accept": ["tag:server:22", "tag:server:6443"]
+    }
+  ]
 }
