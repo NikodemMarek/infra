@@ -1,0 +1,6 @@
+#!/bin/sh
+if [ "$(basename "$PWD")" = keep ]; then
+	echo "not merged"
+	exit 1
+fi
+echo merged

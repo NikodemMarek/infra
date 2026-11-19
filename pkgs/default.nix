@@ -41,7 +41,7 @@
   # and jj-upload from the package set, so overrides of them propagate.
   # jj-upload needs the upstream jj: the wrapped one bundles jj-upload (recursion).
   jj-upload = pkgs.callPackage ./jj-upload {jujutsu = prev.jujutsu;};
-  jw = pkgs.callPackage ./jw {};
+  jw = pkgs.callPackage ./jw {jujutsu = prev.jujutsu;};
   jail = pkgs.callPackage ./jail {};
   bitwarden-cli = pkgs.callPackage ./bitwarden-cli {bitwarden-cli = prev.bitwarden-cli;};
   wallpaper = pkgs.callPackage ./wallpaper {};

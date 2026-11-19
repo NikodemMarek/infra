@@ -1,0 +1,666 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::env;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::Path;
+use std::process::{self, Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use chrono::{DateTime, Local};
+use serde_json::{Map, Value};
+
+use crate::cmd::{output_timeout, output_with_input, stdin_is_tty};
+use crate::procs::{claude_dir, live_claudes};
+use crate::record::{valid_name, write_error, Record, Records};
+use crate::session::{in_event_session, session_name};
+use crate::shpool::Shpool;
+use crate::workspace::{
+    add_workspace, agent_workspace, basename, dirname, fetch, is_dir, is_gitlab, layout, locate,
+    pick, realpath, repo_home, repos, resolve_dir, root,
+};
+use crate::{AgentArgs, AttachArgs, ResumeArgs};
+
+/// The word quoted for a POSIX shell, as shlex.quote does.
+pub fn sh_quote(word: &str) -> String {
+    let safe = |b: u8| b.is_ascii_alphanumeric() || b"@%+=:,./-_".contains(&b);
+    if !word.is_empty() && word.bytes().all(safe) {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', r#"'"'"'"#))
+    }
+}
+
+/// Asks `knowledge route` which repo the task fits: (repo, reason), no repo if there is no confident guess.
+fn route(task: &str) -> (Option<String>, String) {
+    let names = repos();
+    if names.is_empty() {
+        return (None, format!("no jj repos under {}", root()));
+    }
+    eprintln!("jw: choosing a repo...");
+    let input: Vec<String> = names.iter().map(|n| format!("{}/{n}", root())).collect();
+    let mut cmd = Command::new("knowledge");
+    // a nested claude refuses to start otherwise
+    cmd.args(["route", "--", task])
+        .env_remove("CLAUDECODE")
+        .stderr(Stdio::piped());
+    let out = match output_timeout(&mut cmd, Some(input.join("\n")), Duration::from_secs(90)) {
+        Ok(Some(out)) => out,
+        Ok(None) => return (None, "routing failed: timed out".to_string()),
+        Err(e) => return (None, format!("routing failed: {e}")),
+    };
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let last = stderr.lines().map(str::trim).rfind(|l| !l.is_empty());
+        let why = match (last, out.status.code()) {
+            (Some(last), _) => last.to_string(),
+            (None, Some(code)) => format!("exit {code}"),
+            (None, None) => "exit -1".to_string(),
+        };
+        return (None, format!("routing failed: {why}"));
+    }
+    let answer: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
+    let Some(repo) = answer.get("repo") else {
+        return (None, "bad answer".to_string());
+    };
+    let reason = answer
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    match repo.as_str() {
+        Some(repo) if names.iter().any(|n| n == repo) => {
+            eprintln!("jw: {repo}: {reason}");
+            (Some(repo.to_string()), reason)
+        }
+        _ if reason.is_empty() => (None, "no clear match".to_string()),
+        _ => (None, reason),
+    }
+}
+
+/// The environment without the variables that tie a session to the caller's own (repo key, event queue, nested-claude
+/// marker). CLAUDE_CODE_* from a calling Claude (session id, child marker, messaging socket) would make the new Claude
+/// a child of the caller: it writes into the caller's transcript and never registers, so jw msg cannot reach it.
+fn agent_env() -> BTreeMap<String, String> {
+    const DROP: [&str; 8] = [
+        "CLAUDECODE",
+        "CLAUDE_PID",
+        "CLAUDE_EFFORT",
+        "AI_AGENT",
+        "CLAUDE_EVENT_SESSION_DIR",
+        "KNOWLEDGE_ORIGIN",
+        "CLAUDE_WORKSPACE_BASE",
+        "AGENT_SESSION",
+    ];
+    env::vars_os()
+        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+        .filter(|(k, _)| !DROP.contains(&k.as_str()) && !k.starts_with("CLAUDE_CODE_"))
+        .collect()
+}
+
+pub fn runtime_dir() -> String {
+    env::var("XDG_RUNTIME_DIR")
+        .ok()
+        .filter(|dir| !dir.is_empty())
+        // SAFETY: getuid has no preconditions
+        .unwrap_or_else(|| format!("/run/user/{}", unsafe { libc::getuid() }))
+}
+
+fn task_record(prompt: &str, workspace: &str) -> Record {
+    let mut record = Record {
+        kind: Some("task".to_string()),
+        workspace: Some(workspace.to_string()),
+        ..Record::default()
+    };
+    if let Some(first) = prompt.lines().map(str::trim).find(|l| !l.is_empty()) {
+        record.title = Some(first.chars().take(200).collect());
+        record.description = Some(prompt.chars().take(8000).collect());
+    }
+    record
+}
+
+pub fn cmd_agent(a: AgentArgs) -> Result<(), String> {
+    if in_event_session() {
+        return Err("event sessions cannot start agents".to_string());
+    }
+    // clap drops a leading `--`; after it everything is the prompt, even a first word naming a repo
+    let argv: Vec<String> = env::args().collect();
+    let literal = argv
+        .iter()
+        .position(|w| w == "--")
+        .is_some_and(|i| argv.len() - i - 1 == a.args.len());
+    let args = a.args.as_slice();
+    let first = args.first().filter(|f| !literal && !f.is_empty());
+    let (home, prompt) = match first {
+        Some(first) if repos().contains(first) => {
+            let mut prompt = &args[1..];
+            match prompt.first().map(String::as_str) {
+                Some("--") => prompt = &prompt[1..],
+                Some("-r" | "--revision" | "-d" | "--detach") => {
+                    return Err("options go before the repo".to_string());
+                }
+                _ => {}
+            }
+            (format!("{}/{first}", root()), prompt)
+        }
+        _ => {
+            if let Some(first) = first {
+                if args.get(1).is_some_and(|s| s == "--") {
+                    return Err(format!("{first}: not a repo"));
+                }
+                if Path::new(&format!("{}/{first}", root())).exists() {
+                    return Err(format!("{first}: not a jj repo"));
+                }
+            }
+            let home = match locate() {
+                Ok((_, home)) => home,
+                // not in a repo: the prompt says which, else pick one
+                Err(_) => pick_for(&args.join(" "))?,
+            };
+            (home, args)
+        }
+    };
+    let revision = a.revision.filter(|r| !r.is_empty());
+    // the default trunk() is resolved in home without a snapshot
+    let resolve_in = revision.as_ref().and_then(|_| resolve_dir(&home));
+    fetch(&home);
+    let text = prompt.join(" ");
+    // one argument after `--`: claude takes a single prompt, and neither a first word like `update` nor a leading `-` is parsed
+    let claude = if prompt.is_empty() {
+        vec!["claude".to_string()]
+    } else {
+        vec!["claude".to_string(), "--".to_string(), text.clone()]
+    };
+    launch(
+        &home,
+        a.detach,
+        claude,
+        &text,
+        |name| {
+            let revision = revision.as_deref().unwrap_or("trunk()");
+            add_workspace(&home, revision, name, resolve_in.as_deref())
+        },
+        None,
+        false,
+    )
+}
+
+/// The repo for a task outside a repo: the one the task says, else a picked one.
+fn pick_for(task: &str) -> Result<String, String> {
+    let tty = stdin_is_tty();
+    let blank = task.trim().is_empty();
+    if !tty && blank {
+        return Err("no repo: pass one (no terminal to pick)".to_string());
+    }
+    let (guess, why) = if blank {
+        (None, String::new())
+    } else {
+        route(task)
+    };
+    if let Some(guess) = guess {
+        return Ok(format!("{}/{guess}", root()));
+    }
+    if !tty {
+        return Err(format!("no repo chosen ({why})"));
+    }
+    if !why.is_empty() {
+        eprintln!("jw: no repo chosen ({why}), pick one");
+    }
+    repo_home(None)
+}
+
+/// Runs argv in a new shpool session of the repo at home, with a record titled after text, and attaches to it unless
+/// detach. The session is called preferred if no shpool session has that name, else s-<time>. make_dir(name) returns the
+/// directory to run in; it is called under the lock, once the name is chosen. With resume an existing record of the
+/// name only gets its workspace updated.
+fn launch(
+    home: &str,
+    detach: bool,
+    argv: Vec<String>,
+    text: &str,
+    make_dir: impl FnOnce(&str) -> Result<String, String>,
+    preferred: Option<&str>,
+    resume: bool,
+) -> Result<(), String> {
+    let rundir = runtime_dir();
+    let name = {
+        // names are picked and taken (session started) under it
+        let lock_path = format!("{rundir}/jw-agent.lock");
+        let lock = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&lock_path)
+            .map_err(|e| format!("{lock_path}: {e}"))?;
+        lock.lock().map_err(|e| format!("{lock_path}: {e}"))?;
+        let taken = Shpool.list()?;
+        let name = match preferred {
+            Some(name) if valid_name(name) && !taken.contains_key(name) => name.to_string(),
+            _ => {
+                let base = Local::now().format("s-%m%d-%H%M%S").to_string();
+                let mut name = base.clone();
+                let mut i = 2;
+                while taken.contains_key(&name)
+                    || Path::new(&format!("{home}.agents/{name}")).exists()
+                {
+                    name = format!("{base}-{i}");
+                    i += 1;
+                }
+                name
+            }
+        };
+        let dir = make_dir(&name)?;
+        let records = Records::new();
+        let fields = if resume && records.read(&name).is_some() {
+            Record {
+                workspace: Some(dir.clone()),
+                ..Record::default()
+            }
+        } else {
+            task_record(text, &dir)
+        };
+        // the inbox shows the session from its record; a failure must not stop the session
+        let recorded = records.update(&name, |r| {
+            r.merge(fields);
+            // a (re)started session is not finished
+            r.clear_marks();
+            true
+        });
+        if let Err(e) = recorded {
+            eprintln!("jw: {}", write_error(&e));
+        }
+        let job = write_job(&rundir, &name, &dir, &argv)?;
+        let started = Shpool.start(&name, &dir, &job);
+        if !matches!(started, Ok(true)) {
+            // the script removes the file when it starts; the empty workspace is left for `jw prune`
+            let _ = fs::remove_file(&job);
+            return Err(match started {
+                Err(e) => e,
+                Ok(_) => format!("shpool attach failed for session {name}"),
+            });
+        }
+        name
+    };
+    if detach {
+        eprintln!("jw: started {name} in {}", basename(home));
+        // agent-inbox parses this line (its `N`)
+        eprintln!("jw attach {name}");
+        return Ok(());
+    }
+    // if claude has exited, attach would silently create a plain shell session under this name; checking narrows the
+    // race, it doesn't close it
+    // the daemon can still count the exited `attach -b` client as attached for a moment, and refuses a second one then
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let state = loop {
+        let state = Shpool.list()?.get(&name).cloned();
+        if state.as_deref() == Some("attached") && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(100));
+        } else {
+            break state;
+        }
+    };
+    if state.is_none() {
+        return Err(format!("session {name} ended before attaching"));
+    }
+    Err(Shpool.attach(&name))
+}
+
+/// Writes the 0600 script that sets up the session's environment and runs argv; the environment and the prompt go only
+/// into this file: shpool does not pass on the client's environment, and its -c is split like shell words.
+fn write_job(rundir: &str, name: &str, dir: &str, argv: &[String]) -> Result<String, String> {
+    let mut env = agent_env();
+    env.insert("AGENT_SESSION".to_string(), name.to_string());
+    // started from a service (task.new) there is no terminal env, and claude falls back to no colors
+    if env.get("TERM").map_or("dumb", String::as_str) == "dumb" {
+        env.insert("TERM".to_string(), "xterm-256color".to_string());
+    }
+    env.entry("COLORTERM".to_string())
+        .or_insert_with(|| "truecolor".to_string());
+    env.insert("SHPOOL_SESSION_NAME".to_string(), name.to_string());
+    let is_var = |k: &str| {
+        k.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && !["UID", "EUID", "PPID", "SHELLOPTS", "BASHOPTS"].contains(&k)
+    };
+    let mut lines: Vec<String> = env
+        .iter()
+        .filter(|(k, _)| is_var(k.as_str()))
+        .map(|(k, v)| format!("export {k}={}", sh_quote(v)))
+        .collect();
+    // after the exports: PATH is set now
+    lines.push(r#"rm -f -- "$0""#.to_string());
+    lines.push(format!("cd -- {} || exit 1", sh_quote(dir)));
+    let words: Vec<String> = argv.iter().map(|w| sh_quote(w)).collect();
+    // also unloads an inherited direnv env
+    lines.push(format!("exec direnv exec . {}", words.join(" ")));
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let path = format!("{rundir}/jw-agent-{}-{nanos}", process::id());
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .and_then(|mut f| f.write_all(format!("{}\n", lines.join("\n")).as_bytes()))
+        .map_err(|e| format!("{path}: {e}"))?;
+    Ok(path)
+}
+
+/// The directory name under projects/ that the claude wrapper (__claude_project) gives the repo at home.
+fn project_key(home: &str) -> Result<String, String> {
+    let key: String = home
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    if key.len() <= 64 {
+        return Ok(key);
+    }
+    let out =
+        output_with_input(&mut Command::new("cksum"), home).map_err(|e| format!("cksum: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let crc = stdout.split_whitespace().next().ok_or("cksum failed")?;
+    Ok(format!("{}-{crc}", &key[key.len() - 50..]))
+}
+
+/// The text of a transcript's user entry (whitespace collapsed), empty for tool results.
+fn user_text(entry: &Map<String, Value>) -> String {
+    let text = match entry.get("message").and_then(|m| m.get("content")) {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .filter_map(|b| b.get("text")?.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => return String::new(),
+    };
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The root of the workspace of the repo at home that directory cwd is in, by string so that deleted directories work;
+/// None outside the repo.
+fn workspace_root(cwd: &str, home: &str) -> Option<String> {
+    let agents = format!("{home}.agents/");
+    if let Some(rest) = cwd.strip_prefix(&agents) {
+        let name = rest.split('/').next().unwrap_or("");
+        return (!name.is_empty()).then(|| format!("{agents}{name}"));
+    }
+    (cwd == home || cwd.starts_with(&format!("{home}/"))).then(|| home.to_string())
+}
+
+/// (root of the last workspace of the repo at home it worked in, title) of the transcript, None if it has no user
+/// message or workspace.
+fn transcript(path: &str, home: &str) -> Option<(String, String)> {
+    let data = fs::read(path).ok()?;
+    let (mut root, mut ai, mut custom) = (None, None, None);
+    let mut first = String::new();
+    for line in String::from_utf8_lossy(&data).lines() {
+        let Ok(Value::Object(entry)) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let text = |key: &str| {
+            entry
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
+        if let Some(cwd) = entry.get("cwd").and_then(Value::as_str) {
+            root = workspace_root(cwd, home).or(root);
+        }
+        let meta = entry.get("isMeta").and_then(Value::as_bool) == Some(true);
+        match entry.get("type").and_then(Value::as_str) {
+            Some("ai-title") => ai = text("aiTitle").or(ai),
+            Some("custom-title") => custom = text("customTitle").or(custom),
+            Some("user") if first.is_empty() && !meta => first = user_text(&entry),
+            _ => {}
+        }
+    }
+    if first.is_empty() {
+        return None;
+    }
+    let title = custom.or(ai).unwrap_or(first);
+    let title: String = title.chars().take(100).collect();
+    Some((
+        root?,
+        title.split_whitespace().collect::<Vec<_>>().join(" "),
+    ))
+}
+
+struct Row {
+    label: String,
+    id: String,
+    root: String,
+    title: String,
+}
+
+/// The repo's transcripts newest first, without the live ones if skip_live; only those whose last workspace is
+/// workspace if given, only the newest one if newest_only.
+fn resume_rows(
+    home: &str,
+    newest_only: bool,
+    workspace: Option<&str>,
+    skip_live: bool,
+) -> Result<Vec<Row>, String> {
+    let base = format!("{}/projects/{}", claude_dir(), project_key(home)?);
+    let mut files: Vec<(SystemTime, String)> = fs::read_dir(&base)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let id = e
+                .file_name()
+                .into_string()
+                .ok()?
+                .strip_suffix(".jsonl")?
+                .to_string();
+            let mtime = fs::metadata(e.path()).ok()?.modified().ok()?;
+            Some((mtime, id))
+        })
+        .collect();
+    files.sort_by(|a, b| b.cmp(a));
+    let live: HashSet<String> = if skip_live {
+        live_claudes()
+            .into_iter()
+            .filter_map(|c| c.session_id)
+            .collect()
+    } else {
+        HashSet::new()
+    };
+    let mut rows = vec![];
+    for (mtime, id) in files {
+        if live.contains(&id) {
+            continue;
+        }
+        let Some((root, title)) = transcript(&format!("{base}/{id}.jsonl"), home) else {
+            continue;
+        };
+        if is_gitlab(basename(&root)) || workspace.is_some_and(|w| w != root) {
+            continue;
+        }
+        let when = DateTime::<Local>::from(mtime).format("%m-%d %H:%M");
+        let short: String = id.chars().take(8).collect();
+        rows.push(Row {
+            label: format!("{when}\t{}\t{title}\t{short}", basename(&root)),
+            id,
+            root,
+            title,
+        });
+        if newest_only {
+            break;
+        }
+    }
+    Ok(rows)
+}
+
+/// (home, workspace) of the record of session name; the repo comes from the workspace path if it is gone.
+fn session_repo(name: &str) -> Result<(String, String), String> {
+    let record = Records::new()
+        .read(name)
+        .ok_or_else(|| format!("no session record {name}"))?;
+    let ws = record.workspace.as_deref();
+    if let Some((home, _, path)) = agent_workspace(ws) {
+        return Ok((home, path));
+    }
+    if let Some(ws) = ws.filter(|w| !w.contains('\0') && Path::new(w).is_absolute()) {
+        let parent = dirname(ws);
+        let agents = basename(parent);
+        let repo = agents.strip_suffix(".agents").unwrap_or(agents);
+        let wname = basename(ws);
+        if realpath(dirname(parent)) == realpath(root())
+            && agents.ends_with(".agents")
+            && !repo.is_empty()
+            && valid_name(wname)
+            && is_dir(&format!("{}/{repo}/.jj", root()))
+        {
+            return Ok((
+                format!("{}/{repo}", root()),
+                format!("{}/{agents}/{wname}", root()),
+            ));
+        }
+    }
+    Err(format!("no repo for session {name}"))
+}
+
+pub fn cmd_resume(a: ResumeArgs) -> Result<(), String> {
+    if in_event_session() {
+        return Err("event sessions cannot resume sessions".to_string());
+    }
+    let session = a.session.filter(|s| !s.is_empty());
+    let repo = a.repo.filter(|r| !r.is_empty());
+    if session.is_some() && repo.is_some() {
+        return Err("--session takes no repo".to_string());
+    }
+    let (home, row, name) = if let Some(session) = session {
+        let name = session_name(Some(&session))?;
+        let (home, workspace) = session_repo(&name)?;
+        if Shpool.list()?.contains_key(&name) {
+            return Err(format!("session {name} is running"));
+        }
+        let Some(row) = resume_rows(&home, true, Some(&workspace), false)?
+            .into_iter()
+            .next()
+        else {
+            return Err(format!("no sessions to resume for {name}"));
+        };
+        if live_claudes()
+            .iter()
+            .any(|c| c.session_id.as_deref() == Some(row.id.as_str()))
+        {
+            return Err(format!("session {name} is running"));
+        }
+        (home, row, name)
+    } else {
+        let home = match &repo {
+            None => locate().ok().map(|(_, home)| home),
+            Some(_) => None,
+        };
+        let home = match home {
+            Some(home) => home,
+            None => repo_home(repo.as_deref())?,
+        };
+        let rows = resume_rows(&home, false, None, true)?;
+        if rows.is_empty() {
+            return Err(format!("no sessions to resume in {}", basename(&home)));
+        }
+        let labels: Vec<String> = rows.iter().map(|r| r.label.clone()).collect();
+        let label = pick(&labels, "", None)?;
+        let row = rows
+            .into_iter()
+            .find(|r| r.label == label)
+            .ok_or("no such session")?;
+        let name = basename(&row.root).to_string();
+        (home, row, name)
+    };
+    let Row {
+        id, root, title, ..
+    } = row;
+    let make_dir = |name: &str| -> Result<String, String> {
+        if is_dir(&root) {
+            return Ok(root.clone());
+        }
+        fetch(&home);
+        let dir = add_workspace(&home, "trunk()", name, None)?;
+        eprintln!("jw: {root} is gone, recreated it as {dir} on trunk");
+        Ok(dir)
+    };
+    let claude = vec!["claude".to_string(), "--resume".to_string(), id];
+    launch(&home, a.detach, claude, &title, make_dir, Some(&name), true)
+}
+
+/// The session called prefix, else the only one starting with it.
+fn match_session(names: &[&String], prefix: &str) -> Result<String, String> {
+    if names.iter().any(|n| *n == prefix) {
+        return Ok(prefix.to_string());
+    }
+    let mut matches: Vec<&String> = names
+        .iter()
+        .copied()
+        .filter(|n| n.starts_with(prefix))
+        .collect();
+    matches.sort();
+    match matches.as_slice() {
+        [] => Err(format!("no Claude shpool session {prefix}")),
+        [only] => Ok(only.to_string()),
+        _ => Err(format!(
+            "{prefix} is ambiguous: {}",
+            matches
+                .iter()
+                .map(|n| n.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+/// fzf lines name, workspace (repo/name, else the directory), shpool state of the sessions in found ({session:
+/// directory of its Claude}) that shpool has (state); those of the repo `current` first.
+fn session_rows(
+    found: &BTreeMap<String, String>,
+    state: &HashMap<String, String>,
+    current: Option<&str>,
+) -> Vec<String> {
+    let mut rows = vec![];
+    for (name, cwd) in found {
+        let Some(shpool_state) = state.get(name) else {
+            continue;
+        };
+        let mut d = cwd.as_str();
+        while d != "/" && !d.is_empty() && !is_dir(&format!("{d}/.jj")) {
+            d = dirname(d);
+        }
+        let (repo, where_) = if is_dir(&format!("{d}/.jj")) {
+            let (repo, workspace, _) = layout(d);
+            let where_ = format!("{repo}/{workspace}");
+            (Some(repo), where_)
+        } else {
+            (None, cwd.clone())
+        };
+        let other = current.is_none() || repo.as_deref() != current;
+        rows.push((other, format!("{name}\t{where_}\t{shpool_state}")));
+    }
+    rows.sort_by_key(|(other, _)| *other);
+    rows.into_iter().map(|(_, line)| line).collect()
+}
+
+pub fn cmd_attach(a: AttachArgs) -> Result<(), String> {
+    let found: BTreeMap<String, String> = live_claudes()
+        .into_iter()
+        .filter_map(|c| Some((c.shpool?, c.cwd)))
+        .collect();
+    let state = Shpool.list()?;
+    let name = a.name.filter(|n| !n.is_empty());
+    if let Some(name) = &name {
+        // also right after `jw agent -d`, before claude has registered its session
+        if state.contains_key(name) {
+            return Err(Shpool.attach(name));
+        }
+        let names: Vec<&String> = found.keys().filter(|n| state.contains_key(*n)).collect();
+        return Err(Shpool.attach(&match_session(&names, name)?));
+    }
+    let current = locate().ok().map(|(root, _)| layout(&root).0);
+    let rows = session_rows(&found, &state, current.as_deref());
+    let picked = pick(&rows, "", Some("no Claude shpool sessions"))?;
+    Err(Shpool.attach(picked.split('\t').next().unwrap_or("")))
+}

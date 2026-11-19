@@ -1,0 +1,8 @@
+#!/bin/sh
+{
+	for a in "$@"; do
+		echo "arg=$a"
+	done
+	echo "pwd=$(pwd -P)"
+	env | sed 's/^/env=/'
+} > "$FAKE_LOG_DIR/claude.log"

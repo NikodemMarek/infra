@@ -1,0 +1,36 @@
+#!/bin/sh
+echo "$*" >> "$FAKE_LOG_DIR/shpool.log"
+[ "$1" = --no-daemonize ] && shift
+cmd=$1
+shift
+case "$cmd" in
+list)
+	echo "NAME CREATED_AT STATUS"
+	if [ -f "$SHPOOL_STATE" ]; then
+		while read -r n s; do
+			echo "$n 0 $s"
+		done < "$SHPOOL_STATE"
+	fi
+	;;
+attach)
+	script=
+	name=
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		-b) shift ;;
+		--ttl | -d) shift 2 ;;
+		-c) script=$2; shift 2 ;;
+		*) name=$1; shift ;;
+		esac
+	done
+	echo "$name disconnected" >> "$SHPOOL_STATE"
+	env -i PATH="$PATH" FAKE_LOG_DIR="$FAKE_LOG_DIR" sh -c "$script"
+	exit $?
+	;;
+kill)
+	for n in "$@"; do
+		grep -v "^$n " "$SHPOOL_STATE" > "$SHPOOL_STATE.new"
+		mv "$SHPOOL_STATE.new" "$SHPOOL_STATE"
+	done
+	;;
+esac
