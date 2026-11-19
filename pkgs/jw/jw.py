@@ -1433,7 +1433,7 @@ def parse_args():
     g.add_argument("--session", metavar="NAME", help="resume the last Claude session of the agent session NAME under its name (not with a repo; refused while it runs)")
     s.add_argument("repo", nargs="?", help=f"repo under {ROOT} (default: this one, else pick one)")
     s.set_defaults(func=cmd_resume)
-    s = sub.add_parser("attach", aliases=["at"], help="attach to a Claude shpool session (default: pick one, this repo's first); a unique prefix of the name is enough")
+    s = sub.add_parser("attach", help="attach to a Claude shpool session (default: pick one, this repo's first); a unique prefix of the name is enough")
     s.add_argument("name", nargs="?")
     s.set_defaults(func=cmd_attach)
     s = sub.add_parser("msg", help="send a message to a running Claude session: delivered right away, between the tool calls of a busy session or as a new turn of an idle one; fails if the session is not running")

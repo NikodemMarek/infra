@@ -250,11 +250,6 @@ class Cli(unittest.TestCase):
         self.assertIs(a.func, jw.cmd_attach)
         self.assertEqual(a.name, "foo")
 
-    def test_alias(self):
-        a = self.parse("at", "foo")
-        self.assertIs(a.func, jw.cmd_attach)
-        self.assertEqual(a.name, "foo")
-
     def test_name_optional(self):
         a = self.parse("attach")
         self.assertIs(a.func, jw.cmd_attach)
