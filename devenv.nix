@@ -96,6 +96,8 @@
       stringData: .
     }
   '';
+
+  tofu = pkgs.opentofu.withPlugins (p: [p.cloudflare_cloudflare p.tailscale_tailscale p.oracle_oci]);
 in {
   packages = [
     inputs.deploy-rs.packages.${pkgs.stdenv.hostPlatform.system}.deploy-rs
@@ -349,6 +351,47 @@ in {
         if $check && $dirty; then exit 1; fi
       '';
       description = "[--check] build the cluster's Kubernetes secrets from bitwarden";
+    };
+    tofu = {
+      exec = ''
+        source ${common}
+
+        direct=false
+        case "''${1:-}" in
+          fmt | version | validate) direct=true ;;
+          init)
+            case " $* " in
+              *" -backend=false "*) direct=true ;;
+            esac
+            ;;
+        esac
+
+        if ! $direct; then
+          had_session=''${BW_SESSION:+1}
+          bw_unlock
+          bw sync > /dev/null
+          # assigned first, set -e ignores a failing $(...) inside the arguments below
+          secrets=$(secretspec export --profile tofu --format json)
+          if ! printf '%s' "$secrets" | jq -e 'all(.[]; . != null and . != "")' > /dev/null; then
+            echo "empty secret in bitwarden profile tofu" >&2
+            exit 1
+          fi
+          # tofu and its provider plugins must not inherit the vault session
+          [ -n "$had_session" ] || bw lock > /dev/null
+          unset BW_SESSION
+
+          # plaintext only ever lives in memory and pipes, never touches the disk
+          while IFS= read -r -d "" pair; do
+            export "$pair"
+          done < <(printf '%s' "$secrets" | jq -j 'to_entries[] | "\(.key)=\(.value)\u0000"')
+          unset secrets
+          # OCI's S3-compatible API rejects the AWS SDK's default checksums
+          export AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
+        fi
+
+        ${tofu}/bin/tofu -chdir="$DEVENV_ROOT/tofu" "$@"
+      '';
+      description = "[tofu args...] OpenTofu for the external infrastructure, secrets from bitwarden";
     };
     host-switch = {
       exec = ''

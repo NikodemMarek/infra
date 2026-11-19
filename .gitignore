@@ -20,5 +20,11 @@ devenv.local.yaml
 # configs
 kubeconfig.yaml
 
+# tofu
+tofu/.terraform/
+tofu/.terraform.lock.hcl
+tofu/generated.tf
+tofu/*.tfplan
+
 # cluster-secrets-build, left behind by an interrupted run
 clusters/dijkstra/secrets/.build.tmp
