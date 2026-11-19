@@ -22,6 +22,8 @@ data:
         service: https://traefik.default.svc.cluster.local:443
       - hostname: books.nkmrk.com
         service: https://traefik.default.svc.cluster.local:443
+      - hostname: mail-hook.nkmrk.com
+        service: https://traefik.default.svc.cluster.local:443
       - service: http_status:404
 ---
 apiVersion: apps/v1

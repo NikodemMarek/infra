@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mail-hook
+  namespace: mail-hook
+  labels:
+    app: mail-hook
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mail-hook
+  template:
+    metadata:
+      labels:
+        app: mail-hook
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/hostname: triss
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      volumes:
+        - name: config
+          configMap:
+            name: mail-hook
+      containers:
+        - name: connect
+          image: docker.redpanda.com/redpandadata/connect:4.118.0
+          args: ["run", "/config/connect.yaml"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: MAIL_HOOK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: secrets
+                  key: mail_hook_token
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "5m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
