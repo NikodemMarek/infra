@@ -273,7 +273,7 @@ fn list_json_closed_pipe_does_not_panic() {
     e.write("tasks.md", &b);
     let mut child = Command::new(env!("CARGO_BIN_EXE_tm"))
         .args(["list", "--json"])
-        .env("TM_DIR", &e.dir)
+        .env("TM_FILE", e.dir.join("tasks.md"))
         .env("TM_TODAY", "2026-10-18")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

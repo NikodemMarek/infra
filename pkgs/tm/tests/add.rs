@@ -13,12 +13,21 @@ fn add_appends_with_created() {
 }
 
 #[test]
-fn add_creates_missing_tasks_file() {
+fn add_to_empty_file() {
     let e = Env::empty();
     let o = e.tm(&["add", "first"]);
     o.ok();
     assert_eq!(o.stdout, "1: - [ ] first @created(2026-10-18)\n");
     assert_eq!(e.read("tasks.md"), "- [ ] first @created(2026-10-18)\n");
+}
+
+#[test]
+fn add_does_not_create_missing_file() {
+    let e = Env::empty();
+    let missing = e.dir.join("missing.md");
+    e.run_in(&missing, "2026-10-18", &["add", "first"])
+        .fail(&format!("tm: task file not found: {}", missing.display()));
+    assert!(!missing.exists());
 }
 
 #[test]

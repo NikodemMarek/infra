@@ -20,7 +20,7 @@ rustPlatform.buildRustPackage {
   cargoLock.lockFile = ./Cargo.lock;
 
   meta = {
-    description = "CLI for the markdown task list (tasks.md)";
+    description = "CLI for a markdown task list";
     mainProgram = "tm";
   };
 }

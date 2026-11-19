@@ -4,7 +4,7 @@ use std::process;
 use clap::Parser;
 use tm::Request;
 
-/// Manage the markdown task list $TM_DIR/tasks.md.
+/// Manage the markdown task list $TM_FILE.
 #[derive(Parser)]
 #[command(name = "tm", version)]
 struct Cli {

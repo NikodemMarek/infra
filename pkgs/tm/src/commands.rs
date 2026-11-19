@@ -23,7 +23,7 @@ pub struct Output {
     pub failed: bool,
 }
 
-/// Reads TM_DIR and TM_TODAY on every call. Never prints, panics or exits.
+/// Reads TM_FILE and TM_TODAY on every call. Never prints, panics or exits.
 pub fn execute(request: Request, json: bool) -> Output {
     let mut stdout = String::new();
     let mut store = match Store::open() {

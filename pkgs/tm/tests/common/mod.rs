@@ -46,6 +46,7 @@ impl Env {
         let dir = std::env::temp_dir().join(format!("tm-test-{}-{}", std::process::id(), n));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("tasks.md"), "").unwrap();
         Env { dir }
     }
 
@@ -69,10 +70,10 @@ impl Env {
         self.dir.join(rel).exists()
     }
 
-    pub fn run_in(&self, dir: &Path, today: &str, args: &[&str]) -> Out {
+    pub fn run_in(&self, file: &Path, today: &str, args: &[&str]) -> Out {
         let o = Command::new(env!("CARGO_BIN_EXE_tm"))
             .args(args)
-            .env("TM_DIR", dir)
+            .env("TM_FILE", file)
             .env("TM_TODAY", today)
             .output()
             .unwrap();
@@ -84,11 +85,11 @@ impl Env {
     }
 
     pub fn tm(&self, args: &[&str]) -> Out {
-        self.run_in(&self.dir, "2026-10-18", args)
+        self.run_in(&self.dir.join("tasks.md"), "2026-10-18", args)
     }
 
     pub fn tm_on(&self, today: &str, args: &[&str]) -> Out {
-        self.run_in(&self.dir, today, args)
+        self.run_in(&self.dir.join("tasks.md"), today, args)
     }
 }
 
