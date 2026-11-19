@@ -1,0 +1,123 @@
+#!/bin/sh
+# Fake glab / gh: behaviour chosen by basename $0. One raw-forge-shaped JSON file per MR in $FAKE_FORGE_DIR.
+set -eu
+d=${FAKE_FORGE_DIR:?FAKE_FORGE_DIR unset}
+mkdir -p "$d"
+jq -cn '$ARGS.positional' --args -- "$@" >> "$d/calls.log"
+kind=$(basename "$0")
+[ "${1:-}" = api ] || exit 0
+shift
+
+DEC='def hex: ascii_downcase|explode|map(if .>=97 then .-87 else .-48 end)|.[0]*16+.[1];
+def dec: gsub("\\+";" ")|gsub("%(?<h>[0-9A-Fa-f]{2})";(.h|hex|[.]|implode));'
+
+host=
+method=GET
+path=
+fields='{}'
+
+add_field() {
+  k=${2%%=*}
+  v=${2#*=}
+  if [ "$1" = typed ] && { [ "$v" = true ] || [ "$v" = false ]; }; then
+    printf '%s' "$fields" | jq -c --arg k "$k" --argjson v "$v" '.[$k]=$v'
+  else
+    printf '%s' "$fields" | jq -c --arg k "$k" --arg v "$v" '.[$k]=$v'
+  fi
+}
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --hostname) host=$2; shift 2 ;;
+    -X|--method) method=$2; shift 2 ;;
+    -f|--raw-field) fields=$(add_field raw "$2"); shift 2 ;;
+    -F|--field) fields=$(add_field typed "$2"); shift 2 ;;
+    *) path=$1; shift ;;
+  esac
+done
+
+query=
+case $path in
+  *\?*) query=${path#*\?}; path=${path%%\?*} ;;
+esac
+path=${path#/}
+pathd=$(printf '%s' "$path" | jq -Rr "$DEC"'dec')
+params=$(printf '%s' "$query" | jq -R "$DEC"'split("&")|map(select(length>0)|split("=")|{(.[0]|dec):(.[1:]|join("=")|dec)})|add // {}')
+
+id=${pathd##*/}
+case $id in *[!0-9]*|'') id= ;; esac
+
+if [ "$kind" = glab ]; then
+  proj=${pathd#projects/}; proj=${proj%/merge_requests*}
+  src_q=.source_branch
+  sha_f='.sha //= (if $sha=="" then null else $sha end)'
+  idkey=iid
+else
+  proj=${pathd#repos/}; proj=${proj%/pulls*}
+  src_q=.head.ref
+  sha_f='.head.sha //= (if $sha=="" then null else $sha end)'
+  idkey=number
+fi
+
+render() {
+  src=$(jq -r "$src_q" "$1")
+  sha=$(git -C "${FAKE_REMOTE:?FAKE_REMOTE unset}" rev-parse -q --verify "refs/heads/$src" 2>/dev/null || true)
+  jq -c --arg sha "$sha" "$sha_f" "$1"
+}
+
+files() { ls "$d"/[0-9]*.json 2>/dev/null || true; }
+
+case $method:$id in
+  GET:)
+    fs=$(files)
+    if [ -z "$fs" ]; then echo '[]'; exit 0; fi
+    for f in $fs; do render "$f"; done | jq -cs --argjson p "$params" --arg key "$idkey" '
+      ($p.source_branch // ($p.head // null | if . == null then null else sub("^[^:]*:"; "") end)) as $b
+      | map(select($b == null or (.source_branch // .head.ref) == $b))
+      | sort_by(-(.[$key]))'
+    ;;
+  GET:*)
+    f=$d/$id.json
+    [ -f "$f" ] || { echo '{"message":"404 Not Found"}'; exit 1; }
+    render "$f"
+    ;;
+  POST:)
+    n=$(( $(files | wc -l) + 1 ))
+    f=$d/$n.json
+    if [ "$kind" = glab ]; then
+      jq -cn --argjson f "$fields" --argjson n "$n" --arg url "https://$host/$proj/-/merge_requests/$n" '{
+        iid: $n, web_url: $url, state: "opened",
+        draft: ($f.title | startswith("Draft: ")), work_in_progress: ($f.title | startswith("Draft: ")),
+        title: $f.title, target_branch: $f.target_branch, source_branch: $f.source_branch,
+        description: ($f.description // ""), merge_commit_sha: null, squash_commit_sha: null}' > "$f"
+    else
+      jq -cn --argjson f "$fields" --argjson n "$n" --arg url "https://$host/$proj/pull/$n" '{
+        number: $n, html_url: $url, state: "open", merged_at: null, draft: ($f.draft // false),
+        title: $f.title, base: {ref: $f.base}, head: {ref: $f.head},
+        body: ($f.body // ""), merge_commit_sha: null}' > "$f"
+    fi
+    render "$f"
+    ;;
+  PUT:[0-9]*|PATCH:[0-9]*)
+    f=$d/$id.json
+    [ -f "$f" ] || { echo '{"message":"404 Not Found"}'; exit 1; }
+    if [ "$kind" = glab ]; then
+      jq -c --argjson f "$fields" '
+        . + ($f | {title, target_branch, description} | with_entries(select(.value != null)))
+        | if $f.state_event == "close" then .state = "closed"
+          elif $f.state_event == "reopen" then .state = "opened" else . end' "$f" > "$f.tmp"
+    else
+      jq -c --argjson f "$fields" '
+        (if $f.title != null then .title = $f.title else . end)
+        | (if $f.base != null then .base.ref = $f.base else . end)
+        | (if $f.body != null then .body = $f.body else . end)
+        | (if $f.state != null then .state = $f.state else . end)' "$f" > "$f.tmp"
+    fi
+    mv "$f.tmp" "$f"
+    render "$f"
+    ;;
+  *)
+    echo "fake forge: unsupported $method $pathd" >&2
+    exit 1
+    ;;
+esac
