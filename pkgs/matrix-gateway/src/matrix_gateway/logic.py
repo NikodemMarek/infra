@@ -14,6 +14,7 @@ TO_RE = r"[a-z0-9][a-z0-9-]{0,62}"
 COMMAND_HOST_RE = r"![A-Za-z0-9][A-Za-z0-9-]{0,62}"
 BODY_MAX = 20000
 REF_MAX = 1024
+POST_ROOMS = ("mail",)
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class Send:
     to: str | None = None
     ref: str | None = None
     reply_to: str | None = None
+    room: str | None = None
 
 
 def sanitize(text: str, single_line: bool = False) -> str:
@@ -62,6 +64,11 @@ def parse_send(line: str) -> Send | None:
     body = obj.get("body")
     if not isinstance(body, str) or not body or len(body) > BODY_MAX:
         return None
+    if "room" in obj:
+        room = obj["room"]
+        if not isinstance(room, str) or room not in POST_ROOMS:
+            return None
+        return Send(body, room=room)
     if "reply_to" in obj:
         reply_to = obj["reply_to"]
         if not isinstance(reply_to, str) or not reply_to.startswith("$") or len(reply_to) > 255:
@@ -78,6 +85,8 @@ def parse_send(line: str) -> Send | None:
 
 def content(send: Send) -> Obj:
     body = sanitize(send.body)
+    if send.room is not None:
+        return {"msgtype": "m.text", "body": body}
     if send.reply_to is not None:
         return {
             "msgtype": "m.notice",

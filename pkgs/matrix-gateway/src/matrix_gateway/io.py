@@ -116,7 +116,7 @@ class HttpMatrix:
             "preset": "private_chat",
             "visibility": "private",
             "room_alias_name": alias_localpart,
-            "name": "Agents",
+            "name": alias_localpart.capitalize(),
             "invite": [invite],
             "initial_state": [{"type": "m.room.retention", "state_key": "", "content": {"max_lifetime": 259200000}}],
         }

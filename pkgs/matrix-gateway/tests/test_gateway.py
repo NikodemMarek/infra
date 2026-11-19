@@ -4,7 +4,7 @@ import json
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from fakes import OWNER, ROOM, USER, FakeBus, FakeMatrix, owner_message
+from fakes import MAIL_ROOM, OWNER, ROOM, USER, FakeBus, FakeMatrix, owner_message
 from matrix_gateway.data import Obj
 from matrix_gateway.gateway import DEVICE_ID, Fatal, Gateway, MatrixError
 from matrix_gateway.logic import ROUTE
@@ -15,7 +15,7 @@ BUS_DOWN = "Failed: message bus unavailable."
 
 class Rig:
     def __init__(self, aliases: dict[str, str] | None = None) -> None:
-        self.matrix = FakeMatrix(aliases={"#agents:nkmrk.com": ROOM} if aliases is None else aliases)
+        self.matrix = FakeMatrix(aliases={"#agents:nkmrk.com": ROOM, "#mail:nkmrk.com": MAIL_ROOM} if aliases is None else aliases)
         self.bus = FakeBus()
         self.key = Ed25519PrivateKey.generate()
         self.gw = Gateway(self.matrix, self.bus, OWNER, "agents", "pw", self.key)
@@ -44,22 +44,22 @@ def test_device_id() -> None:
 def test_start_logs_in_and_uses_existing_room() -> None:
     r = Rig().started()
     assert r.matrix.logins == [("agents", "pw", "matrix-gateway")]
-    assert r.matrix.resolved == ["#agents:nkmrk.com"]
+    assert r.matrix.resolved == ["#agents:nkmrk.com", "#mail:nkmrk.com"]
     assert r.matrix.created == []
     assert r.matrix.sync_calls == [(ROOM, None, 0)]
 
 
 def test_start_creates_room() -> None:
     r = Rig(aliases={}).started()
-    assert r.matrix.created == [("agents", OWNER)]
-    assert r.matrix.sync_calls[0][0] == r.matrix.created_room
+    assert r.matrix.created == [("agents", OWNER), ("mail", OWNER)]
+    assert r.matrix.sync_calls[0][0] == "!agents:nkmrk.com"
 
 
 def test_start_alias_server_from_user_id() -> None:
-    r = Rig(aliases={"#agents:other.org": ROOM})
+    r = Rig(aliases={"#agents:other.org": ROOM, "#mail:other.org": MAIL_ROOM})
     r.matrix.user = "@agents:other.org"
     r.gw.start()
-    assert r.matrix.resolved == ["#agents:other.org"]
+    assert r.matrix.resolved == ["#agents:other.org", "#mail:other.org"]
     assert r.matrix.created == []
 
 
@@ -91,6 +91,14 @@ def test_on_send_routed() -> None:
     assert s.txn == "t1"
     assert s.event_type == "m.room.message"
     assert s.content == {"msgtype": "m.text", "body": "hi", ROUTE: {"to": "yenn", "ref": "/r/x"}}
+
+
+def test_on_send_post_room() -> None:
+    r = Rig().started()
+    r.gw.on_send('{"room":"mail","body":"x"}', "t1")
+    assert len(r.matrix.sent) == 1
+    assert r.matrix.sent[0].room == MAIL_ROOM
+    assert r.matrix.sent[0].content == {"msgtype": "m.text", "body": "x"}
 
 
 def test_on_send_notice() -> None:
