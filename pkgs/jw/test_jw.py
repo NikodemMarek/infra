@@ -1984,10 +1984,10 @@ class CmdResume(unittest.TestCase):
                                 "message": {"role": "user", "content": text}}) + "\n")
         os.utime(p, (mtime, mtime))
 
-    def resume(self, last=False, picked=None, repo=None):
+    def resume(self, picked=None, repo=None):
         self.err = io.StringIO()
         self.picker = mock.Mock(side_effect=lambda rows, *a, **kw: rows[picked if picked is not None else 0])
-        a = mock.Mock(repo=repo, detach=False, last=last, session=None)
+        a = mock.Mock(repo=repo, detach=False, session=None)
         with contextlib.ExitStack() as st:
             st.enter_context(mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.cfg}))
             st.enter_context(mock.patch.object(jw, "locate", return_value=("x", self.home)))
@@ -2003,19 +2003,6 @@ class CmdResume(unittest.TestCase):
     def preferred(self):
         c = self.launch.call_args
         return c.kwargs["preferred"] if "preferred" in c.kwargs else c.args[5]
-
-    def test_last_takes_newest_without_picker(self):
-        self.session("old-1", 1000, "old")
-        self.session("new-2", 3000, "new")
-        self.session("mid-3", 2000, "mid")
-        self.resume(last=True)
-        self.picker.assert_not_called()
-        home, detach, argv, text, make_dir = self.launch.call_args.args[:5]
-        self.assertEqual(home, self.home)
-        self.assertFalse(detach)
-        self.assertEqual(argv, ["claude", "--resume", "new-2"])
-        self.assertEqual(text, "new")
-        self.assertEqual(self.preferred(), "w1")
 
     def test_picker_rows_newest_first(self):
         self.session("old-1", 1000, "old")
@@ -2038,7 +2025,7 @@ class CmdResume(unittest.TestCase):
         self.session("new-2", 3000, "new")
         self.session("old-1", 1000, "old")
         self.live = [(1, {"sessionId": "new-2"}, self.cwd, None)]
-        self.resume(last=True)
+        self.resume()
         self.assertEqual(self.launch.call_args.args[2], ["claude", "--resume", "old-1"])
         self.resume()
         self.assertEqual(len(self.picker.call_args.args[0]), 1)
@@ -2048,12 +2035,12 @@ class CmdResume(unittest.TestCase):
         with open(os.path.join(self.proj, "bad-2.jsonl"), "w") as f:
             f.write("{}\n")
         os.utime(os.path.join(self.proj, "bad-2.jsonl"), (5000, 5000))
-        self.resume(last=True)
+        self.resume()
         self.assertEqual(self.launch.call_args.args[2], ["claude", "--resume", "good-1"])
 
     def test_no_rows_fails(self):
         with self.assertRaises(Fail):
-            self.resume(last=True)
+            self.resume()
         self.launch.assert_not_called()
 
     def test_all_live_fails(self):
@@ -2065,11 +2052,11 @@ class CmdResume(unittest.TestCase):
     def test_no_project_dir_fails(self):
         shutil.rmtree(self.proj)
         with self.assertRaises(Fail):
-            self.resume(last=True)
+            self.resume()
 
     def test_make_dir_existing_cwd(self):
         self.session("a-1", 1000)
-        self.resume(last=True)
+        self.resume()
         make_dir = self.launch.call_args.args[4]
         with mock.patch.object(jw, "add_workspace") as add_ws:
             self.assertEqual(make_dir("w1"), self.cwd)
@@ -2078,7 +2065,7 @@ class CmdResume(unittest.TestCase):
     def test_make_dir_recreates_missing_cwd(self):
         gone = os.path.join(self.tmp, "projects", "repo.agents", "gone")
         self.session("a-1", 1000, cwd=gone)
-        self.resume(last=True)
+        self.resume()
         self.assertEqual(self.preferred(), "gone")
         make_dir = self.launch.call_args.args[4]
         calls = mock.Mock()
@@ -2093,14 +2080,14 @@ class CmdResume(unittest.TestCase):
 
     def test_subdirectory_cwd_uses_workspace_root(self):
         self.session("a-1", 1000, cwd=os.path.join(self.cwd, "clusters", "x"))
-        self.resume(last=True)
+        self.resume()
         self.assertEqual(self.preferred(), "w1")
         self.assertEqual(self.launch.call_args.args[4]("w1"), self.cwd)
 
     def test_deleted_subdirectory_recreates_by_root_name(self):
         gone = os.path.join(self.tmp, "projects", "repo.agents", "gone", "sub")
         self.session("a-1", 1000, cwd=gone)
-        self.resume(last=True)
+        self.resume()
         self.assertEqual(self.preferred(), "gone")
         with mock.patch.object(jw, "add_workspace", return_value="/new/ws") as add_ws, \
                 mock.patch.object(jw, "fetch"), mock.patch("sys.stderr", self.err):
@@ -2109,19 +2096,19 @@ class CmdResume(unittest.TestCase):
 
     def test_home_cwd_resumed_in_home(self):
         self.session("a-1", 1000, cwd=self.home)
-        self.resume(last=True)
+        self.resume()
         self.assertEqual(self.launch.call_args.args[4]("x"), self.home)
 
     def test_outside_cwd_skipped(self):
         self.session("a-1", 1000, cwd="/elsewhere")
         with self.assertRaises(Fail):
-            self.resume(last=True)
+            self.resume()
 
     def test_event_session_fails(self):
         self.session("a-1", 1000)
         with mock.patch.dict(os.environ, {"KNOWLEDGE_ORIGIN": "event:comment"}):
             with self.assertRaises(Fail):
-                self.resume(last=True)
+                self.resume()
         self.launch.assert_not_called()
 
     def test_gitlab_workspaces_skipped(self):
@@ -2129,23 +2116,15 @@ class CmdResume(unittest.TestCase):
         os.makedirs(gl)
         self.session("gl-1", 3000, cwd=gl)
         self.session("old-1", 1000)
-        self.resume(last=True)
+        self.resume()
         self.assertEqual(self.launch.call_args.args[2], ["claude", "--resume", "old-1"])
         self.resume()
         self.assertEqual(len(self.picker.call_args.args[0]), 1)
 
-    def test_last_stops_reading_older_transcripts(self):
-        self.session("old-1", 1000)
-        self.session("new-2", 3000)
-        with mock.patch.object(jw, "transcript", wraps=jw.transcript) as t:
-            self.resume(last=True)
-        self.assertEqual(t.call_count, 1)
-        self.assertTrue(t.call_args.args[0].endswith("new-2.jsonl"))
-
     def test_repo_argument_used(self):
         self.session("a-1", 1000)
         with mock.patch.object(jw, "locate", side_effect=Fail("no")):
-            self.resume(last=True, repo="repo")
+            self.resume(repo="repo")
         self.assertEqual(self.launch.call_args.args[0], self.home)
 
 
@@ -2187,7 +2166,7 @@ class CmdResumeSession(unittest.TestCase):
 
     def resume(self, name="s-1", origin="", repo=None):
         self.err = io.StringIO()
-        a = mock.Mock(repo=repo, detach=False, last=False, session=name)
+        a = mock.Mock(repo=repo, detach=False, session=name)
         with contextlib.ExitStack() as st:
             st.enter_context(mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.cfg, "XDG_STATE_HOME": self.state,
                                                           "KNOWLEDGE_ORIGIN": origin}))
@@ -2315,18 +2294,6 @@ class CmdResumeSession(unittest.TestCase):
         self.assertEqual(a.session, "s-1")
         self.assertTrue(a.detach)
 
-    def test_usage_error_with_last(self):
-        for flag in ("-l", "--last"):
-            with self.subTest(flag=flag):
-                with self.assertRaises(SystemExit) as cm:
-                    self.parse("--session", "s-1", flag)
-                self.assertEqual(cm.exception.code, 2)
-
-    def test_last_with_repo_still_parses(self):
-        a = self.parse("-l", "repo")
-        self.assertTrue(a.last)
-        self.assertEqual(a.repo, "repo")
-
 
 class Launch(unittest.TestCase):
     def setUp(self):
@@ -2432,16 +2399,13 @@ class CliResume(unittest.TestCase):
         a = self.parse("resume")
         self.assertIs(a.func, jw.cmd_resume)
         self.assertFalse(a.detach)
-        self.assertFalse(a.last)
         self.assertFalse(a.repo)
 
     def test_alias_and_flags(self):
-        for flag in ("-l", "--last"):
-            a = self.parse("r", "-d", flag, "foo")
-            self.assertIs(a.func, jw.cmd_resume)
-            self.assertTrue(a.detach)
-            self.assertTrue(a.last)
-            self.assertEqual(a.repo, "foo")
+        a = self.parse("r", "-d", "foo")
+        self.assertIs(a.func, jw.cmd_resume)
+        self.assertTrue(a.detach)
+        self.assertEqual(a.repo, "foo")
 
 
 class CmdDone(RecordsBase):
