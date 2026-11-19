@@ -1031,10 +1031,10 @@ def cmd_resume(a):
             with contextlib.suppress(Fail):
                 home = locate()[1]
         home = home or repo_home(a.repo)
-        rows = resume_rows(home, a.last)
+        rows = resume_rows(home, False)
         if not rows:
             raise Fail(f"no sessions to resume in {os.path.basename(home)}")
-        sid, root, title = rows[next(iter(rows)) if a.last else pick(list(rows))]
+        sid, root, title = rows[pick(list(rows))]
         name = os.path.basename(root)
 
     def make_dir(name):
@@ -1428,9 +1428,7 @@ def parse_args():
     s.set_defaults(func=cmd_agent)
     s = sub.add_parser("resume", aliases=["r"], help="resume a Claude session of a repo (any of its workspaces; default: this one) in a shpool session, in its workspace (recreated on trunk() if it is gone)")
     s.add_argument("-d", "--detach", action="store_true", help="start the session in the background")
-    g = s.add_mutually_exclusive_group()
-    g.add_argument("-l", "--last", action="store_true", help="resume the newest session without asking")
-    g.add_argument("--session", metavar="NAME", help="resume the last Claude session of the agent session NAME under its name (not with a repo; refused while it runs)")
+    s.add_argument("--session", metavar="NAME", help="resume the last Claude session of the agent session NAME under its name (not with a repo; refused while it runs)")
     s.add_argument("repo", nargs="?", help=f"repo under {ROOT} (default: this one, else pick one)")
     s.set_defaults(func=cmd_resume)
     s = sub.add_parser("attach", help="attach to a Claude shpool session (default: pick one, this repo's first); a unique prefix of the name is enough")
