@@ -89,7 +89,7 @@ in {
       CARGO_HOME = "/persist/generated$HOME/cargo";
       NPM_CONFIG_CACHE = "/persist/generated$HOME/npm";
       DOCKER_CONFIG = "/persist/generated$HOME/docker";
-      TM_DIR = "$HOME/omniverse/tasks";
+      TM_FILE = "$HOME/omniverse/tasks/tasks.md";
     };
     shellAliases = {
       l = "eza -la --icons --group-directories-first --git";

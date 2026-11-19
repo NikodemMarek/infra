@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
@@ -9,8 +8,6 @@ use crate::parse::{parse_date, parse_line, with_token};
 use crate::task::{ParseError, Status, Task};
 
 pub type Result<T> = std::result::Result<T, String>;
-
-const FILE: &str = "tasks.md";
 
 /// The task file as text lines, each keeping its own `\n`, so writing the
 /// lines back is byte-identical.
@@ -52,7 +49,7 @@ impl TaskFile {
 }
 
 pub struct Store {
-    pub dir: PathBuf,
+    pub path: PathBuf,
     pub today: NaiveDate,
     pub file: TaskFile,
     /// Invalid lines already warned about, as line indexes.
@@ -62,27 +59,22 @@ pub struct Store {
 }
 
 impl Store {
-    /// Reads `tasks.md`; a missing file is empty.
+    /// Reads the task file named by `TM_FILE`, which must exist.
     pub fn open() -> Result<Store> {
-        let dir = match env::var_os("TM_DIR") {
-            Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-            _ => return Err("TM_DIR is not set".to_string()),
+        let path = match env::var_os("TM_FILE") {
+            Some(path) if !path.is_empty() => PathBuf::from(path),
+            _ => return Err("TM_FILE is not set".to_string()),
         };
-        if !dir.is_dir() {
-            return Err(format!("tasks dir not found: {}", dir.display()));
+        if !path.is_file() {
+            return Err(format!("task file not found: {}", path.display()));
         }
         let today = match env::var("TM_TODAY") {
             Ok(s) => parse_date(&s).ok_or_else(|| format!("invalid TM_TODAY: {s}"))?,
             Err(_) => Local::now().date_naive(),
         };
-        let path = dir.join(FILE);
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == ErrorKind::NotFound => String::new(),
-            Err(e) => return Err(io_error(&path, e)),
-        };
+        let text = fs::read_to_string(&path).map_err(|e| io_error(&path, e))?;
         Ok(Store {
-            dir,
+            path,
             today,
             file: TaskFile {
                 lines: text.split_inclusive('\n').map(String::from).collect(),
@@ -93,8 +85,7 @@ impl Store {
     }
 
     pub fn save(&self) -> Result<()> {
-        let path = self.dir.join(FILE);
-        fs::write(&path, self.file.lines.concat()).map_err(|e| io_error(&path, e))
+        fs::write(&self.path, self.file.lines.concat()).map_err(|e| io_error(&self.path, e))
     }
 
     /// The tasks with their line indexes. An invalid line is skipped, with a

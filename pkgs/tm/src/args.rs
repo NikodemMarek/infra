@@ -2,7 +2,7 @@ use clap::{Args, Subcommand, ValueEnum};
 
 #[derive(Debug, Subcommand)]
 pub enum Request {
-    /// Add a task to tasks.md (text without the checkbox)
+    /// Add a task to the task file (text without the checkbox)
     Add(AddArgs),
     /// Mark tasks as doing ([/])
     Start(RefsArgs),
@@ -12,7 +12,7 @@ pub enum Request {
     Done(RefsArgs),
     /// List tasks
     List(ListArgs),
-    /// Check tasks.md for format problems
+    /// Check the task file for format problems
     Lint(LintArgs),
 }
 
