@@ -1397,7 +1397,7 @@ def cmd_info(a):
 
 def parse_args():
     p = argparse.ArgumentParser(prog="jw", description=__doc__.splitlines()[0])
-    sub = p.add_subparsers(dest="cmd")
+    sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("new", aliases=["n"], help="create a workspace in a repo and go there")
     s.add_argument("repo", nargs="?", help=f"repo under {ROOT} (default: pick one, the current one first)")
     s.add_argument("-r", "--revision", help="revision, bookmark or bookmark@origin to start from (default: trunk()); when given in this repo, it is resolved in the current workspace")
@@ -1461,7 +1461,6 @@ def parse_args():
     s.set_defaults(func=cmd_status)
     s = sub.add_parser("done", help="mark this agent session finished: it is stopped once it is idle and detached")
     s.set_defaults(func=cmd_done)
-    sub.add_parser("ls", help="list the workspaces")
     return p.parse_args()
 
 
@@ -1469,9 +1468,6 @@ def main():
     # info runs on every prompt: skip building the parser
     a = argparse.Namespace(func=cmd_info) if sys.argv[1:] == ["info"] else parse_args()
     try:
-        if not hasattr(a, "func"):
-            sys.stdout.write(jj("--ignore-working-copy", "workspace", "list"))
-            return 0
         a.func(a)
     except Fail as e:
         if str(e):
