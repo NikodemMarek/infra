@@ -1,39 +1,42 @@
 {
   lib,
-  stdenvNoCC,
-  python3,
+  rustPlatform,
   makeWrapper,
   jujutsu,
+  git,
+  jq,
   jw,
 }:
 
 # Used through the jj aliases `upload` (`jj util exec -- jj-upload`), `sync`
 # (`jj util exec -- jj-upload sync`) and `stack` (`jj util exec -- jj-upload stack`).
 # glab / gh are not bundled; they are the user's own and are looked up on PATH.
-stdenvNoCC.mkDerivation {
+rustPlatform.buildRustPackage {
   pname = "jj-upload";
   version = "0.1.0";
 
-  dontUnpack = true;
+  src = lib.fileset.toSource {
+    root = ./.;
+    fileset = lib.fileset.unions [
+      ./Cargo.toml
+      ./Cargo.lock
+      ./src
+      ./tests
+    ];
+  };
+
+  cargoLock.lockFile = ./Cargo.lock;
+
   nativeBuildInputs = [ makeWrapper ];
+  nativeCheckInputs = [
+    jujutsu
+    git
+    jq
+  ];
 
-  doCheck = true;
-  checkPhase = ''
-    runHook preCheck
-    cp ${./jj-upload.py} jj_upload.py
-    cp ${./test_jj_upload.py} test_jj_upload.py
-    ${python3}/bin/python3 -m unittest
-    runHook postCheck
-  '';
-
-  installPhase = ''
-    runHook preInstall
-    install -Dm755 ${./jj-upload.py} $out/bin/jj-upload
-    substituteInPlace $out/bin/jj-upload \
-      --replace-fail "#!/usr/bin/env python3" "#!${python3}/bin/python3"
+  postInstall = ''
     wrapProgram $out/bin/jj-upload \
       --suffix PATH : ${lib.makeBinPath [ jujutsu jw ]}
-    runHook postInstall
   '';
 
   meta = {

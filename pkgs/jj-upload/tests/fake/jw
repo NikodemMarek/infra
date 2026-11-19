@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+d=${FAKE_FORGE_DIR:?FAKE_FORGE_DIR unset}
+mkdir -p "$d"
+jq -cn '$ARGS.positional' --args -- "$@" >> "$d/jw.log"
