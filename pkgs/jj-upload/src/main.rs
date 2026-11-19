@@ -40,8 +40,8 @@ edits are overwritten) and jj upload only maintains the stack list in the descri
 you abandoned or squashed away get their MR closed and their branch deleted. Changes at the \
 bottom of the stack whose MR was merged into trunk are abandoned by the sync.
 
-When an MR is created, local images/videos in its description (`![alt](path)`, absolute or \
-relative to the repo root) are uploaded to the GitLab project and the links rewritten to the \
+When an MR is created, local files linked in its description (`![alt](path)`, absolute or \
+relative to the repo root) that are not in the repo (git-ignored) are uploaded to the GitLab project and the links rewritten to the \
 uploaded URLs; GitHub has no API for that, so its links are left alone with a warning, as are \
 files that are missing or fail to upload.
 

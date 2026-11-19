@@ -14,10 +14,6 @@ use gitlab::GitLab;
 
 const STACK_START: &str = "<!-- jj-stack:start -->";
 const STACK_END: &str = "<!-- jj-stack:end -->";
-const MEDIA_EXTENSIONS: &[&str] = &[
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".avif", ".mp4", ".webm", ".mov",
-    ".mkv", ".m4v", ".ogv",
-];
 
 enum Field<'a> {
     Text(&'a str),
@@ -216,17 +212,28 @@ fn expanduser(path: &str) -> String {
 }
 
 fn local_file(target: &str, root: &str) -> Option<String> {
-    let lower = target.to_lowercase();
     if re(r"^[a-zA-Z][a-zA-Z0-9+.-]*:").is_match(target)
         || ["//", "#", "/uploads/"]
             .iter()
             .any(|p| target.starts_with(p))
-        || !MEDIA_EXTENSIONS.iter().any(|e| lower.ends_with(e))
     {
         return None;
     }
     let path = Path::new(root).join(expanduser(target));
     Some(path.to_string_lossy().into_owned())
+}
+
+fn tracked(path: &str, root: &str) -> Result<bool> {
+    if !Path::new(path).starts_with(root) {
+        return Ok(false);
+    }
+    let fileset = format!(
+        "file:\"{}\"",
+        path.replace('\\', "\\\\").replace('"', "\\\"")
+    );
+    Ok(!jj(&["file", "list", "-r", "@", "--", &fileset])?
+        .trim()
+        .is_empty())
 }
 
 pub fn upload_media(text: &str, fg: &dyn Forge) -> Result<String> {
@@ -249,11 +256,13 @@ pub fn upload_media(text: &str, fg: &dyn Forge) -> Result<String> {
             None => None,
             Some(path) => {
                 if !urls.contains_key(&path) {
-                    let url = if Path::new(&path).is_file() {
-                        fg.upload(&path)?
-                    } else {
+                    let url = if !Path::new(&path).is_file() {
                         eprintln!("  {}: file not found; link left as is", target.as_str());
                         None
+                    } else if tracked(&path, &root)? {
+                        None
+                    } else {
+                        fg.upload(&path)?
                     };
                     urls.insert(path.clone(), url);
                 }
