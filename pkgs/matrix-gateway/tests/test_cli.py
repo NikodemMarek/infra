@@ -35,7 +35,7 @@ def test_keygen_is_random(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def make_gateway(matrix: FakeMatrix) -> Gateway:
-    matrix.aliases["#agents:nkmrk.com"] = ROOM
+    matrix.aliases["#agents:example.com"] = ROOM
     gw = Gateway(matrix, FakeBus(), OWNER, "agents", "pw", Ed25519PrivateKey.generate())
     gw.start()
     return gw

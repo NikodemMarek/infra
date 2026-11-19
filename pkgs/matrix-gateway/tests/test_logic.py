@@ -20,7 +20,7 @@ from matrix_gateway.logic import (
     strip_fallback,
 )
 
-BOT = "@agents:nkmrk.com"
+BOT = "@agents:example.com"
 
 
 @pytest.mark.parametrize(
@@ -50,7 +50,7 @@ def test_sanitize_single_line() -> None:
 @pytest.mark.parametrize(
     ("body", "expected"),
     [
-        ("> <@agents:nkmrk.com> q\n> more\n\nyes", "yes"),
+        ("> <@agents:example.com> q\n> more\n\nyes", "yes"),
         ("yes", "yes"),
         ("> only", ""),
         ("a\n> b", "a\n> b"),
@@ -206,7 +206,7 @@ def test_route_ok() -> None:
 @pytest.mark.parametrize(
     "p",
     [
-        parent(sender="@other:nkmrk.com", to="yenn", ref="r"),
+        parent(sender="@other:example.com", to="yenn", ref="r"),
         parent(to="a.b", ref="r"),
         parent(to="Yenn", ref="r"),
         parent(to="yenn", ref=""),
@@ -252,6 +252,34 @@ LONE_SURROGATE = [
 )
 def test_parse_send_lone_surrogate(line: str) -> None:
     assert parse_send(line) is None
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '{"room":"mail","body":"hi"}',
+        '{"room":"mail","body":"hi","to":"yenn","ref":"r"}',
+    ],
+)
+def test_parse_send_post_room(line: str) -> None:
+    assert parse_send(line) == Send("hi", room="mail")
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '{"room":"agents","body":"hi"}',
+        '{"room":"x","body":"hi"}',
+        '{"room":1,"body":"hi"}',
+        '{"room":"mail","body":""}',
+    ],
+)
+def test_parse_send_post_room_invalid(line: str) -> None:
+    assert parse_send(line) is None
+
+
+def test_content_post_room() -> None:
+    assert content(Send("a\x07b", room="mail")) == {"msgtype": "m.text", "body": "a�b"}
 
 
 def test_parse_send_deeply_nested() -> None:

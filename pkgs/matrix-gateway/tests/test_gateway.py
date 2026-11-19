@@ -3,7 +3,7 @@ import json
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fakes import OWNER, ROOM, USER, FakeBus, FakeMatrix, owner_message
+from fakes import MAIL_ROOM, OWNER, ROOM, USER, FakeBus, FakeMatrix, owner_message
 from matrix_gateway.data import Obj
 from matrix_gateway.gateway import DEVICE_ID, Fatal, Gateway, MatrixError
 from matrix_gateway.logic import ROUTE
@@ -15,7 +15,9 @@ BUS_DOWN = "Failed: message bus unavailable."
 class Rig:
     def __init__(self, aliases: dict[str, str] | None = None) -> None:
         self.matrix = FakeMatrix(
-            aliases={"#agents:nkmrk.com": ROOM} if aliases is None else aliases
+            aliases={"#agents:example.com": ROOM, "#mail:example.com": MAIL_ROOM}
+            if aliases is None
+            else aliases
         )
         self.bus = FakeBus()
         self.key = Ed25519PrivateKey.generate()
@@ -53,22 +55,22 @@ def test_device_id() -> None:
 def test_start_logs_in_and_uses_existing_room() -> None:
     r = Rig().started()
     assert r.matrix.logins == [("agents", "pw", "matrix-gateway")]
-    assert r.matrix.resolved == ["#agents:nkmrk.com"]
+    assert r.matrix.resolved == ["#agents:example.com", "#mail:example.com"]
     assert r.matrix.created == []
     assert r.matrix.sync_calls == [(ROOM, None, 0)]
 
 
 def test_start_creates_room() -> None:
     r = Rig(aliases={}).started()
-    assert r.matrix.created == [("agents", OWNER)]
-    assert r.matrix.sync_calls[0][0] == r.matrix.created_room
+    assert r.matrix.created == [("agents", OWNER), ("mail", OWNER)]
+    assert r.matrix.sync_calls[0][0] == "!agents:example.com"
 
 
 def test_start_alias_server_from_user_id() -> None:
-    r = Rig(aliases={"#agents:other.org": ROOM})
+    r = Rig(aliases={"#agents:other.org": ROOM, "#mail:other.org": MAIL_ROOM})
     r.matrix.user = "@agents:other.org"
     r.gw.start()
-    assert r.matrix.resolved == ["#agents:other.org"]
+    assert r.matrix.resolved == ["#agents:other.org", "#mail:other.org"]
     assert r.matrix.created == []
 
 
@@ -104,6 +106,14 @@ def test_on_send_routed() -> None:
         "body": "hi",
         ROUTE: {"to": "yenn", "ref": "/r/x"},
     }
+
+
+def test_on_send_post_room() -> None:
+    r = Rig().started()
+    r.gw.on_send('{"room":"mail","body":"x"}', "t1")
+    assert len(r.matrix.sent) == 1
+    assert r.matrix.sent[0].room == MAIL_ROOM
+    assert r.matrix.sent[0].content == {"msgtype": "m.text", "body": "x"}
 
 
 def test_on_send_notice() -> None:
@@ -158,7 +168,7 @@ def test_reply_fallback_stripped() -> None:
     r = Rig().started()
     r.routed()
     r.gw.on_event(
-        owner_message("$o1", "> <@agents:nkmrk.com> B\n\n  y ", parent="$bot1")
+        owner_message("$o1", "> <@agents:example.com> B\n\n  y ", parent="$bot1")
     )
     assert verify(r, r.bus.published[0][1])["text"] == "y"
 
@@ -173,7 +183,7 @@ def test_parent_without_body_gives_empty_body() -> None:
 @pytest.mark.parametrize(
     "ev",
     [
-        owner_message("$o", "y", parent="$bot1", sender="@mallory:nkmrk.com"),
+        owner_message("$o", "y", parent="$bot1", sender="@mallory:example.com"),
         owner_message("$o", "y", parent="$bot1", msgtype="m.notice"),
         owner_message("$o", "y", parent="$bot1", rel_type="m.replace"),
         owner_message("$o", "y", parent="$bot1", event_type="m.reaction"),
@@ -214,7 +224,7 @@ def test_unknown_parent() -> None:
 def test_parent_by_other_sender() -> None:
     r = Rig().started()
     r.matrix.add_event(
-        "$p", "@mallory:nkmrk.com", {"body": "B", ROUTE: {"to": "yenn", "ref": "r"}}
+        "$p", "@mallory:example.com", {"body": "B", ROUTE: {"to": "yenn", "ref": "r"}}
     )
     r.gw.on_event(owner_message("$o", "y", parent="$p"))
     assert_not_routed_notice(r)
@@ -342,7 +352,7 @@ def test_command_host_lowercased() -> None:
 @pytest.mark.parametrize(
     "ev",
     [
-        command_event("$c", "!yenn x", sender="@mallory:nkmrk.com"),
+        command_event("$c", "!yenn x", sender="@mallory:example.com"),
         command_event("$c", "!yenn x", msgtype="m.notice"),
         command_event("$c", "!yenn x", rel_type="m.replace"),
         command_event("$c", "!yenn x", event_type="m.reaction"),
