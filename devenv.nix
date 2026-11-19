@@ -121,6 +121,9 @@ in {
     pkgs.pv-migrate
     pkgs.wireguard-tools
     pkgs.qrencode
+
+    pkgs.wrangler
+    pkgs.nodejs
   ];
 
   languages.rust.enable = true;
