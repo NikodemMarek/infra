@@ -24,6 +24,7 @@ pkgs/                  wrapped packages (package + bundled config) and own tools
 overlays/              exposes pkgs/ (the wrapped packages, shadowing the nixpkgs ones, and the tools), flake inputs as packages, deploy-rs
 clusters/dijkstra/     Kubernetes manifests, reconciled by Flux
 tailscale/policy.json  tailnet policy
+tofu/                  OpenTofu config of the external infrastructure: Cloudflare, Tailscale, Oracle Cloud
 ```
 
 ## Hosts
@@ -62,6 +63,7 @@ Cluster access: the dev shell sets `KUBECONFIG` to `kubeconfig.yaml` in the `def
 | `secrets-build <outdir> <host...>` | build encrypted sops files from Bitwarden (used by the scripts above) |
 | `mkiso` / `writeiso /dev/XXX` | build the `alp` installer ISO / write it to a device |
 | `cluster-secrets-build [--check]` | build the cluster's Kubernetes secrets from Bitwarden (see Kubernetes secrets) |
+| `tofu <args>` | OpenTofu in `tofu/` with the secrets of the profile `tofu` from Bitwarden (see External infrastructure); `fmt`, `version`, `validate` and `init -backend=false` run without Bitwarden |
 ## Installing a new host
 
 1. Add the host: `host/<name>/default.nix`, an entry in `nixosConfigurations` (and `deploy.nodes` if it should be deployed remotely), a disko layout from `host/features/disko/` (or a custom one, see `host/regis/storage.nix`).
@@ -222,6 +224,36 @@ Own programs that are not wrappers of an upstream package. They are top-level at
 | `event-handlers.inbox` | event handler that queues the event as `$XDG_RUNTIME_DIR/agent-inbox/<id>.json` (`{id, received, event}`; an event with a non-empty string `key` replaces the item of the same type and key, at most 200 are kept; flake: `event-handlers.inbox`) |
 | `event-handlers.remote-notify` | event handler for `remote.notify.>` from the cluster (untrusted; the leaf link denies `events.>` and the system subjects, so local events never cross). Producer contract: publish to `remote.notify.<anything>` a one-line JSON object `{"type":"remote.notify","title":…,"body"?:…,"project"?:…}` (`type` must be present and valid, its value is replaced; `title` a non-empty string, cut to 200 chars; `body` a string, cut to 1000; `project` matching `[A-Za-z0-9._-]{1,64}`, else `remote`). Every other field is dropped; the result goes to `event-handlers.notify` (flake: `event-handlers.remote-notify`) |
 | `event-handlers.claude` | GitLab event → Claude session: opens a shpool session (`jw attach <name>`, 1-day TTL; the shpool user service comes from `services.agents`) with Claude in the project's checkout under `$HOME/<projectsDir>`; if the context tool returns the optional `session` field, it continues the MR's one conversation (resume), and a live session picks the update up through its hooks; only a started session or a failure notifies; `contextTool` (a `gitlab-context prepare` compatible package, default none: plain Claude in the main checkout), `extraPackages`, the `gitlab.*` routes and the watcher are supplied by the work layer (flake: `event-handlers.claude`) |
+
+## External infrastructure
+
+OpenTofu in `tofu/` manages what lives outside the repo. State is in the private bucket `tofu-state` on Oracle Cloud (S3-compatible API, no locking: one apply at a time).
+
+- Managed: the Cloudflare zone `nkmrk.com` and its DNS records, the tailnet policy and DNS settings, Oracle Cloud `triss` (instance, VCN, subnet, security list, internet gateway, route table), the state bucket and the spending budget.
+- Manual: API tokens and keys and Tailscale auth keys (tofu never creates secrets), the cloudflared tunnel itself (config in `clusters/dijkstra/cloudflare`), Mullvad, Matrix users, GitHub.
+
+One-time setup:
+
+1. In Oracle Cloud create the IAM user `tofu`, a group with it and a policy: manage virtual-network-family, manage instance-family, manage usage-budgets in tenancy, manage object-family where `target.bucket.name = 'tofu-state'`. Give the user an API key (its fingerprint and the OCIDs go into `tofu/oci.tf`) and a customer secret key.
+2. Create the private bucket `tofu-state` with versioning on (the backend needs it before `tofu init`), then import it into `oci_objectstorage_bucket.tofu_state`.
+3. Create the Cloudflare API token (Zone:Read + Zone:DNS:Edit, `nkmrk.com` only, not cert-manager's) and the Tailscale OAuth client (scopes `policy_file`, `devices:core:read`, `devices:posture_attributes`, `dns`).
+4. Create the Bitwarden items `infra/tofu/<KEY>` for every key of the profile `tofu` in `secretspec.toml`.
+5. `tofu init`.
+
+Workflow: edit, `tofu plan`, read it, `tofu apply`, commit.
+
+- Never apply a plan that replaces (`-/+`) or destroys something you didn't intend.
+- To stop managing a resource use a `removed { from = ... lifecycle { destroy = false } }` block, never just delete the resource block.
+- Drift check: `tofu plan -detailed-exitcode` (exit 2 means changes).
+- After a `devenv update` that bumps the providers: `tofu init -upgrade`.
+
+Importing existing things:
+
+1. Add `import` blocks in `tofu/imports-<provider>.tf` and run `tofu plan -generate-config-out=generated.tf` (git-ignored).
+2. Move the trimmed resources into `tofu/<provider>.tf`, with `prevent_destroy` on anything whose loss is an outage. Check the generated config for secrets (e.g. OCI `metadata.user_data`) before committing.
+3. `tofu plan` must show only imports. Apply, then delete the imports file.
+
+`-generate-config-out` does not overwrite: delete `generated.tf` before generating again.
 
 ## Infra
 
