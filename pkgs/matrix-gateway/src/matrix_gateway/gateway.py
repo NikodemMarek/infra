@@ -7,6 +7,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from .data import Obj, get_int, get_obj, get_str
 from .logic import (
+    POST_ROOMS,
     Send,
     content,
     parse_command,
@@ -72,14 +73,19 @@ class Gateway:
         self._key = key
         self._bot = ""
         self._room = ""
+        self._post_rooms: dict[str, str] = {}
         self._since: str | None = None
 
     def start(self) -> None:
         self._bot = self._matrix.login(self._user, self._password, DEVICE_ID)
-        alias = "#agents:" + self._bot.partition(":")[2]
-        self._room = self._matrix.resolve_alias(alias) or self._matrix.create_room(
-            "agents", self._owner
-        )
+        server = self._bot.partition(":")[2]
+        self._room = self._matrix.resolve_alias(
+            "#agents:" + server
+        ) or self._matrix.create_room("agents", self._owner)
+        for name in POST_ROOMS:
+            self._post_rooms[name] = self._matrix.resolve_alias(
+                f"#{name}:{server}"
+            ) or self._matrix.create_room(name, self._owner)
         self._since = self._matrix.sync(self._room, None, 0)[0]
 
     def step(self) -> None:
@@ -146,7 +152,8 @@ class Gateway:
         if send is None:
             log.warning("dropping an invalid matrix.send message")
             return
-        self._matrix.send(self._room, content(send), txn)
+        room = self._post_rooms[send.room] if send.room is not None else self._room
+        self._matrix.send(room, content(send), txn)
 
     def _notice(self, event_id: str, text: str) -> None:
         self._matrix.send(

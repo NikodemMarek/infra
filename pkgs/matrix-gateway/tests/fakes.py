@@ -3,9 +3,10 @@ from dataclasses import dataclass
 from matrix_gateway.data import Obj
 from matrix_gateway.gateway import BusError
 
-USER = "@agents:nkmrk.com"
-OWNER = "@nikodem:nkmrk.com"
-ROOM = "!room:nkmrk.com"
+USER = "@agents:example.com"
+OWNER = "@nikodem:example.com"
+ROOM = "!room:example.com"
+MAIL_ROOM = "!mail:example.com"
 
 
 @dataclass(frozen=True)
@@ -23,7 +24,6 @@ class FakeMatrix:
         self.aliases: dict[str, str] = dict(aliases) if aliases is not None else {}
         self.logins: list[tuple[str, str, str]] = []
         self.created: list[tuple[str, str]] = []
-        self.created_room = "!created:nkmrk.com"
         self.resolved: list[str] = []
         self.script: list[tuple[str, list[Obj]]] = []
         self.sync_calls: list[tuple[str, str | None, int]] = []
@@ -43,7 +43,7 @@ class FakeMatrix:
 
     def create_room(self, alias_localpart: str, invite: str) -> str:
         self.created.append((alias_localpart, invite))
-        return self.created_room
+        return f"!{alias_localpart}:example.com"
 
     def sync(
         self, room: str, since: str | None, timeout_ms: int
