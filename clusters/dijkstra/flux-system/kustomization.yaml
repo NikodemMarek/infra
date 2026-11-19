@@ -3,3 +3,15 @@ kind: Kustomization
 resources:
   - gotk-components.yaml
   - gotk-sync.yaml
+commonAnnotations:
+  kustomize.toolkit.fluxcd.io/substitute: disabled
+patches:
+  - target:
+      kind: Kustomization
+      name: flux-system
+    patch: |
+      - op: add
+        path: /spec/postBuild
+        value:
+          substitute:
+            DOMAIN: nkmrk.com

@@ -9,7 +9,7 @@ spec:
       namespace: default
       sectionName: internal
   hostnames:
-    - "photos.nkmrk.com"
+    - "photos.${DOMAIN}"
   rules:
     - matches:
         - path:

@@ -9,7 +9,7 @@ spec:
       namespace: default
       sectionName: internal
   hostnames:
-    - "radarr.nkmrk.com"
+    - "radarr.${DOMAIN}"
   rules:
     - matches:
         - path:

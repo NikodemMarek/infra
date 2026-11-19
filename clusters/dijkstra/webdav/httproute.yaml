@@ -9,7 +9,7 @@ spec:
       namespace: default
       sectionName: websecure
   hostnames:
-    - "books.nkmrk.com"
+    - "books.${DOMAIN}"
   rules:
     - matches:
         - path:

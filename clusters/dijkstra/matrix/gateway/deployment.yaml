@@ -45,7 +45,7 @@ spec:
             - name: MATRIX_HOMESERVER
               value: http://synapse.matrix.svc.cluster.local:8008
             - name: MATRIX_OWNER
-              value: "@nikodem:nkmrk.com"
+              value: "@nikodem:${DOMAIN}"
             - name: MATRIX_USER
               value: agents
             - name: MATRIX_PASSWORD_FILE

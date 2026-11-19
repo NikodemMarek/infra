@@ -3,6 +3,8 @@ kind: ConfigMap
 metadata:
   name: gutenberg-scripts
   namespace: cron
+  annotations:
+    kustomize.toolkit.fluxcd.io/substitute: disabled
 data:
   run.sh: |
     #!/bin/sh

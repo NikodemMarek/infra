@@ -9,7 +9,7 @@ spec:
       namespace: default
       sectionName: internal
   hostnames:
-    - "sonarr.nkmrk.com"
+    - "sonarr.${DOMAIN}"
   rules:
     - matches:
         - path:

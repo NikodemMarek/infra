@@ -3,6 +3,8 @@ kind: Deployment
 metadata:
   name: wireguard
   namespace: wireguard
+  annotations:
+    kustomize.toolkit.fluxcd.io/substitute: disabled
   labels:
     app: wireguard
 spec:

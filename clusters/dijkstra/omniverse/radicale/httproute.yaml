@@ -9,7 +9,7 @@ spec:
       namespace: default
       sectionName: internal
   hostnames:
-    - "radicale.nkmrk.com"
+    - "radicale.${DOMAIN}"
   rules:
     - matches:
         - path:

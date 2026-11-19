@@ -9,7 +9,7 @@ spec:
       namespace: default
       sectionName: internal
   hostnames:
-    - "matrix.nkmrk.com"
+    - "matrix.${DOMAIN}"
   rules:
     - matches:
         - path:

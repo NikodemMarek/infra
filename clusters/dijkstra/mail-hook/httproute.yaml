@@ -9,7 +9,7 @@ spec:
       namespace: default
       sectionName: websecure
   hostnames:
-    - "mail-hook.nkmrk.com"
+    - "mail-hook.${DOMAIN}"
   rules:
     - matches:
         - path:

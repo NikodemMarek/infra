@@ -9,7 +9,7 @@ spec:
       namespace: default
       sectionName: internal
   hostnames:
-    - "omniverse.nkmrk.com"
+    - "omniverse.${DOMAIN}"
   rules:
     - matches:
         - path:

@@ -9,7 +9,7 @@ spec:
       namespace: default
       sectionName: internal
   hostnames:
-    - "bazarr.nkmrk.com"
+    - "bazarr.${DOMAIN}"
   rules:
     - matches:
         - path:
@@ -30,7 +30,7 @@ spec:
       namespace: default
       sectionName: internal
   hostnames:
-    - "prowlarr.nkmrk.com"
+    - "prowlarr.${DOMAIN}"
   rules:
     - matches:
         - path:

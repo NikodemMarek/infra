@@ -9,7 +9,7 @@ spec:
       namespace: default
       sectionName: websecure
   hostnames:
-    - "movies.nkmrk.com"
+    - "movies.${DOMAIN}"
   rules:
     - matches:
         - path:
@@ -30,7 +30,7 @@ spec:
       namespace: default
       sectionName: websecure
   hostnames:
-    - "seerr.nkmrk.com"
+    - "seerr.${DOMAIN}"
   rules:
     - matches:
         - path:

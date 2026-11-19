@@ -5,10 +5,10 @@ metadata:
   namespace: matrix
 data:
   homeserver.yaml: |
-    server_name: nkmrk.com
-    public_baseurl: https://matrix.nkmrk.com/
+    server_name: ${DOMAIN}
+    public_baseurl: https://matrix.${DOMAIN}/
     pid_file: /data/homeserver.pid
-    signing_key_path: /data/nkmrk.com.signing.key
+    signing_key_path: /data/${DOMAIN}.signing.key
     media_store_path: /data/media_store
 
     listeners:

@@ -9,7 +9,7 @@ spec:
       namespace: default
       sectionName: internal
   hostnames:
-    - "ollama.nkmrk.com"
+    - "ollama.${DOMAIN}"
   rules:
     - matches:
         - path:

@@ -9,7 +9,7 @@ spec:
       namespace: default
       sectionName: internal
   hostnames:
-    - "lidarr.nkmrk.com"
+    - "lidarr.${DOMAIN}"
   rules:
     - matches:
         - path:

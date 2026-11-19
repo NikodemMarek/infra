@@ -9,7 +9,7 @@ spec:
       namespace: default
       sectionName: internal
   hostnames:
-    - "audiomuse-ai.nkmrk.com"
+    - "audiomuse-ai.${DOMAIN}"
   rules:
     - matches:
         - path:

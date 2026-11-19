@@ -3,6 +3,8 @@ kind: ConfigMap
 metadata:
   name: mail-hook
   namespace: mail-hook
+  annotations:
+    kustomize.toolkit.fluxcd.io/substitute: disabled
 data:
   connect.yaml: |
     http:
