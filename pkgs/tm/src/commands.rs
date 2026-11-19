@@ -55,11 +55,6 @@ pub fn execute(request: Request, json: bool) -> Output {
     }
 }
 
-/// The checks every command does first: TM_DIR is set and exists and TM_TODAY is valid.
-pub fn check_env() -> std::result::Result<(), String> {
-    Store::open().map(|_| ())
-}
-
 /// Returns whether the command failed without an error message (lint found problems).
 fn run(store: &mut Store, request: Request, json: bool, out: &mut String) -> Result<bool> {
     match request {
