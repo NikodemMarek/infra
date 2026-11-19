@@ -34,3 +34,13 @@ spec:
       ports:
         - protocol: TCP
           port: 4222
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mail-hook
+          podSelector:
+            matchLabels:
+              app: mail-hook
+      ports:
+        - protocol: TCP
+          port: 4222

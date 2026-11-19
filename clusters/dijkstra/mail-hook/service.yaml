@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mail-hook
+  namespace: mail-hook
+spec:
+  selector:
+    app: mail-hook
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
