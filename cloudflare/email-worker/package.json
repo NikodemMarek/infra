@@ -1,0 +1,11 @@
+{
+  "name": "mail-hook",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "postal-mime": "^2.4.0"
+  }
+}
