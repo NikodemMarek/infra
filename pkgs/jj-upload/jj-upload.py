@@ -41,8 +41,6 @@ Config (all optional, set with `jj config set --user <key> <value>`):
   upload.host            forge host for API calls          (default: from remote URL)
   upload.project         group/project (owner/repo) path   (default: from remote URL)
   upload.draft           open new MRs as drafts            (default: false)
-
-Env: JJ_UPLOAD_GLAB / JJ_UPLOAD_GH override the CLI binaries.
 """
 
 import argparse
@@ -185,9 +183,8 @@ def parse_remote_url(url):
 
 
 def forge_target(remote):
-    # upload.gitlab-* are the old names of upload.host / upload.project
-    host = jj_config("upload.host") or jj_config("upload.gitlab-host")
-    project = jj_config("upload.project") or jj_config("upload.gitlab-project")
+    host = jj_config("upload.host")
+    project = jj_config("upload.project")
     if not (host and project):
         url = None
         for line in jj("git", "remote", "list").splitlines():
@@ -291,7 +288,7 @@ class GitLab(Forge):
         self.prefix = f"projects/{urllib.parse.quote(project, safe='')}"
         self.base = f"{self.prefix}/merge_requests"
         self.recent_path = f"{self.base}?state=all&order_by=updated_at&sort=desc&per_page=100"
-        self.bin = os.environ.get("JJ_UPLOAD_GLAB", "glab")
+        self.bin = "glab"
 
     def api(self, method, path, **fields):
         cmd = [self.bin, "api", "--hostname", self.host, "-X", method, path]
@@ -357,7 +354,7 @@ class GitHub(Forge):
         self.base = f"repos/{project}/pulls"
         self.recent_path = f"{self.base}?state=all&sort=updated&direction=desc&per_page=100"
         self.owner = project.split("/")[0]
-        self.bin = os.environ.get("JJ_UPLOAD_GH", "gh")
+        self.bin = "gh"
 
     def api(self, method, path, **fields):
         cmd = [self.bin, "api", "--hostname", self.host, "-X", method, path]
@@ -414,8 +411,6 @@ FORGES = {f.name: f for f in (GitLab, GitHub)}
 def make_forge(remote):
     host, project = forge_target(remote)
     kind = jj_config("upload.forge")
-    if not kind and (jj_config("upload.gitlab-host") or jj_config("upload.gitlab-project")):
-        kind = "gitlab"
     if not kind:
         # unrecognised hosts default to gitlab, like before forges were pluggable
         kind = next((n for n in FORGES if n in host.lower()), "gitlab")
