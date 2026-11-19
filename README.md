@@ -255,6 +255,8 @@ Importing existing things:
 
 `-generate-config-out` does not overwrite: delete `generated.tf` before generating again.
 
+Cloudflare: add records in `tofu/cloudflare.tf`, not in the dashboard.
+
 ## Infra
 
 `clusters/dijkstra` is a k3s cluster over tailscale:
