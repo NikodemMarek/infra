@@ -1,35 +1,51 @@
-# `jw`: the python script does the work; the fish function cds where it says.
-# fzf, shpool, bash, direnv, cksum and knowledge are pinned; jj and claude come from the user's PATH,
-# and so does claude-bare, which knowledge uses.
+# `jw`: the binary does the work; the fish function cds where it says.
+# fzf, shpool, direnv, cksum and knowledge are on a PATH suffix, so the user's own win; jj and claude come from
+# the user's PATH, and so does claude-bare, which knowledge uses.
 {
   lib,
-  runCommand,
-  python3,
+  rustPlatform,
+  makeWrapper,
+  jujutsu,
+  git,
   fzf,
   shpool,
-  bash,
   direnv,
   coreutils,
   knowledge,
   projectsRoot ? "~/projects",
 }:
 assert lib.assertMsg (builtins.match "[~/][A-Za-z0-9._/-]*" projectsRoot != null) "jw: projectsRoot must be ~/... or an absolute path of [A-Za-z0-9._/-]";
-  runCommand "jw" {} ''
-    cp ${./jw.py} jw.py
-    cp ${./test_jw.py} test_jw.py
-    ${python3}/bin/python3 -m unittest
-    install -Dm755 ${./jw.py} $out/bin/jw
-    substituteInPlace $out/bin/jw \
-      --replace-fail "#!/usr/bin/env python3" "#!${python3}/bin/python3" \
-      --replace-fail 'FZF = "fzf"' 'FZF = "${fzf}/bin/fzf"' \
-      --replace-fail 'SHPOOL = "shpool"' 'SHPOOL = "${shpool}/bin/shpool"' \
-      --replace-fail 'BASH = "bash"' 'BASH = "${bash}/bin/bash"' \
-      --replace-fail 'DIRENV = "direnv"' 'DIRENV = "${direnv}/bin/direnv"' \
-      --replace-fail 'CKSUM = "cksum"' 'CKSUM = "${coreutils}/bin/cksum"' \
-      --replace-fail 'KNOWLEDGE = "knowledge"' 'KNOWLEDGE = "${knowledge}/bin/knowledge"' \
-      --replace-fail 'ROOT = os.path.expanduser("~/projects")' 'ROOT = os.path.expanduser("${projectsRoot}")'
-    install -Dm644 ${./jw.fish} $out/share/fish/vendor_functions.d/jw.fish
-    install -Dm644 ${./completions.fish} $out/share/fish/vendor_completions.d/jw.fish
-    substituteInPlace $out/share/fish/vendor_completions.d/jw.fish \
-      --replace-fail '~/projects/*/.jj' '${projectsRoot}/*/.jj'
-  ''
+  rustPlatform.buildRustPackage {
+    pname = "jw";
+    version = "0.1.0";
+
+    src = lib.fileset.toSource {
+      root = ./.;
+      fileset = lib.fileset.unions [
+        ./Cargo.toml
+        ./Cargo.lock
+        ./src
+        ./tests
+      ];
+    };
+
+    cargoLock.lockFile = ./Cargo.lock;
+
+    nativeBuildInputs = [makeWrapper];
+    nativeCheckInputs = [jujutsu git];
+
+    postInstall = ''
+      wrapProgram $out/bin/jw \
+        --set JW_PROJECTS_ROOT ${projectsRoot} \
+        --suffix PATH : ${lib.makeBinPath [fzf shpool direnv coreutils knowledge]}
+      install -Dm644 ${./jw.fish} $out/share/fish/vendor_functions.d/jw.fish
+      install -Dm644 ${./completions.fish} $out/share/fish/vendor_completions.d/jw.fish
+      substituteInPlace $out/share/fish/vendor_completions.d/jw.fish \
+        --replace-fail '~/projects/*/.jj' '${projectsRoot}/*/.jj'
+    '';
+
+    meta = {
+      description = "Quick jj workspaces for the repos under one root, and Claude sessions in them";
+      mainProgram = "jw";
+    };
+  }
