@@ -57,6 +57,7 @@
   matrix-gateway = pkgs.callPackage ./matrix-gateway {};
   mail-hook = pkgs.callPackage ./mail-hook {};
   mail-hook-handler = pkgs.callPackage ./mail-hook/handler.nix {};
+  mail-hook-image = pkgs.callPackage ./mail-hook/image.nix {};
   tm = pkgs.callPackage ./tm {};
   matrix-gateway-image = pkgs.callPackage ./matrix-gateway/image.nix {};
   shani-image = pkgs.callPackage ./shani/image.nix {};
