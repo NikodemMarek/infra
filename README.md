@@ -23,7 +23,6 @@ modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-noti
 pkgs/                  wrapped packages (package + bundled config) and own tools (pkgs/agent-skills/skills: Agent Skills, shared by claude and agent-skills)
 overlays/              exposes pkgs/ (the wrapped packages, shadowing the nixpkgs ones, and the tools), flake inputs as packages, deploy-rs
 clusters/dijkstra/     Kubernetes manifests, reconciled by Flux
-tailscale/policy.json  tailnet policy
 tofu/                  OpenTofu config of the external infrastructure: Cloudflare, Tailscale, Oracle Cloud
 ```
 
@@ -257,6 +256,12 @@ Importing existing things:
 
 Cloudflare: add records in `tofu/cloudflare.tf`, not in the dashboard.
 
+Tailscale:
+
+- Edit the policy only in `tofu/tailscale-policy.json`: the next apply reverts console edits.
+- The `tests` block makes Tailscale reject a policy that breaks server connectivity.
+- Auth keys stay manual.
+
 ## Infra
 
 `clusters/dijkstra` is a k3s cluster over tailscale:
@@ -268,7 +273,7 @@ Cloudflare: add records in `tofu/cloudflare.tf`, not in the dashboard.
 
 Node config is in `host/features/optional/k3s.nix` plus the per-host `services.k3s` blocks. The token comes from Bitwarden (`K3S_TOKEN`). `regis` also exports NFS (`nfs.nix`), used for app volumes.
 
-The tailnet policy is `tailscale/policy.json`. Change it in the repo, then paste it into the Tailscale console (Access controls > JSON editor) and save; don't edit it in the console.
+The tailnet policy is `tofu/tailscale-policy.json`, applied with `tofu apply`; don't edit it in the console. The console's JSON editor (Access controls) is the break-glass if an apply locks the cluster out.
 
 The age key Flux decrypts sops manifests with is applied as `flux-system/sops-age` by the k3s server (`services.flux-sops-age`, `modules/host/flux-sops-age.nix`). It is the Bitwarden item `infra/dijkstra/FLUX_SOPS_AGE_KEY` (profile `dijkstra`) and must match `&dijkstra_cluster` in `.sops.yaml`, which the unit checks before applying. Enable it only on the k3s server: moving the server role means moving the flag.
 
