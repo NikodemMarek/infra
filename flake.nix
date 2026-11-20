@@ -116,7 +116,6 @@
           profiles.system = {
             user = "root";
             sshUser = "maintenance";
-            interactiveSudo = true;
             path = cfg.pkgs.deploy-rs.lib.activate.nixos cfg;
           };
         }
