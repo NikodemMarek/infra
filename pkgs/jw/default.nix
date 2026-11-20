@@ -36,7 +36,7 @@ assert lib.assertMsg (builtins.match "[~/][A-Za-z0-9._/-]*" projectsRoot != null
 
     postInstall = ''
       wrapProgram $out/bin/jw \
-        --set JW_PROJECTS_ROOT ${projectsRoot} \
+        --set JW_PROJECTS_ROOT '${projectsRoot}' \
         --suffix PATH : ${lib.makeBinPath [fzf shpool direnv coreutils knowledge]}
       install -Dm644 ${./jw.fish} $out/share/fish/vendor_functions.d/jw.fish
       install -Dm644 ${./completions.fish} $out/share/fish/vendor_completions.d/jw.fish
