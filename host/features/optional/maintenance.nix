@@ -1,9 +1,26 @@
 {config, ...}: {
   # The hash must exist before users are created, otherwise the deploy user
-  # has no password and interactive sudo breaks
+  # has no password and sudo breaks
   secrets.users_maintenance_password.neededForUsers = true;
 
   nix.settings.trusted-users = ["maintenance" "@wheel"];
+
+  security.sudo.extraRules = [
+    {
+      users = ["maintenance"];
+      runAs = "root";
+      commands = [
+        {
+          command = "/nix/store/*/activate-rs";
+          options = ["NOPASSWD"];
+        }
+        {
+          command = "/run/current-system/sw/bin/rm /tmp/deploy-rs-canary-*";
+          options = ["NOPASSWD"];
+        }
+      ];
+    }
+  ];
 
   users = {
     users = {
