@@ -2,6 +2,7 @@
   stdenv,
   fetchFromGitHub,
   kernel,
+  kernelModuleMakeFlags,
 }:
 stdenv.mkDerivation {
   pname = "realtek-r8126";
@@ -16,20 +17,19 @@ stdenv.mkDerivation {
 
   nativeBuildInputs = kernel.moduleBuildDependencies;
 
-  # Build directly in the src subdirectory where the kernel source files live
-  buildPhase = ''
-    runHook preBuild
-    make -C ${kernel.dev}/lib/modules/${kernel.modDirVersion}/build M=$(pwd)/src modules
-    runHook postBuild
-  '';
+  makeFlags =
+    kernelModuleMakeFlags
+    ++ [
+      "-C"
+      "${kernel.dev}/lib/modules/${kernel.modDirVersion}/build"
+      "M=$(PWD)/src"
+      "INSTALL_MOD_PATH=${placeholder "out"}"
+      "INSTALL_MOD_DIR=kernel/drivers/net/ethernet/realtek"
+      "INSTALL_MOD_STRIP=1"
+      "DEPMOD=true"
+    ];
 
-  installPhase = ''
-    runHook preInstall
-    mkdir -p $out/lib/modules/${kernel.modDirVersion}/kernel/drivers/net/ethernet/realtek/
+  buildFlags = ["modules"];
 
-    # The compiled module lives inside src/
-    cp src/r8126.ko $out/lib/modules/${kernel.modDirVersion}/kernel/drivers/net/ethernet/realtek/
-
-    runHook postInstall
-  '';
+  installTargets = ["modules_install"];
 }
