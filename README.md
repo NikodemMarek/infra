@@ -19,7 +19,7 @@ host/
     global/            always on: networking, nix, openssh, sops
     optional/          opt-in features: k3s, tailscale, docker, libvirt, maintenance, ...
     disko/             disk layouts, parametrised by device (and swap size)
-modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-notifier.nix, flux-sops-age.nix, agents.nix (the NATS event handler user services, the knowledge curator timer, the `jw-reap` timer that stops idle and finished agent sessions and removes the merged workspaces of finished ones, and the shpool user service)
+modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-notifier.nix, flux-sops-age.nix, cluster-secrets.nix, agents.nix (the NATS event handler user services, the knowledge curator timer, the `jw-reap` timer that stops idle and finished agent sessions and removes the merged workspaces of finished ones, and the shpool user service)
 pkgs/                  wrapped packages (package + bundled config) and own tools (pkgs/agent-skills/skills: Agent Skills, shared by claude and agent-skills)
 overlays/              exposes pkgs/ (the wrapped packages, shadowing the nixpkgs ones, and the tools), flake inputs as packages, deploy-rs
 clusters/dijkstra/     Kubernetes manifests, reconciled by Flux
@@ -96,7 +96,7 @@ host-deploy geralt roach
 
 Modules never talk to sops directly. They go through a small contract:
 
-- `modules/host/secrets.nix` defines `config.secrets.<name>` with `owner`, `group`, `mode`, `neededForUsers` and `path` (defaults to `/run/secrets/<name>`). Consumers read only `config.secrets.<name>.path`. `profile` (default: the host's name) names the profile that holds the secret, for one that lives elsewhere, e.g. `profile = "dijkstra"` for a cluster-wide secret (`dijkstra/<KEY>` in the project `hosts`).
+- `modules/host/secrets.nix` defines `config.secrets.<name>` with `owner`, `group`, `mode`, `neededForUsers` and `path` (defaults to `/run/secrets/<name>`). Consumers read only `config.secrets.<name>.path`. `profile` (default: the host's name) names the profile that holds the secret, for one that lives elsewhere, e.g. `profile = "dijkstra"` for a cluster-wide secret (`dijkstra/<KEY>` in the project `hosts`). `wholeProfile` makes the secret every key of `profile` as one JSON object (keys lowercased), and only the profile must exist in `secretspec.toml`. `restartUnits` lists units to restart when the secret changes (passed to `sops.secrets`).
 - `host/features/global/sops.nix` is the only place that knows the provider is sops-nix: it maps every `config.secrets` entry to `sops.secrets` and reads `<host>.yaml` from the `secrets` flake input. The age identity is `/persist/data/etc/ssh/ssh_host_ed25519_key`.
 - `secretspec.toml` is the inventory. The profile named after the host lists its secrets as uppercased names. Evaluation fails if the secrets used by modules and the profile diverge (missing, unused or badly named; names match `^[a-z0-9_]+$`). Secrets with another `profile` must exist in that profile, which is not required to be used completely by the host.
 - The values live in the Bitwarden Secrets Manager project `hosts`, one secret per value named `<profile>/<KEY>`. BWS lowercases names, so matching is case-insensitive. The scripts need `BWS_ACCESS_TOKEN`: the machine account `ci-hosts` (read access to `hosts`) or a local token.
@@ -462,7 +462,9 @@ The same pre-hook and restore procedure applies to `audiomuse-postgres` (databas
 
 ### Kubernetes secrets
 
-Encrypted with SOPS using the cluster's age key (`.sops.yaml`); Flux decrypts them when applying (`sops-age` secret). Files must match `*.enc.*`. Only `data` and `stringData` are encrypted.
+Two paths exist while the move to Bitwarden Secrets Manager is under way. `triss` applies the Secret `secrets` of every namespace with a profile `dijkstra-<ns>` itself (`services.cluster-secrets`, unit `cluster-secrets`): the whole profile is the host secret `dijkstra_<ns>` (`-` as `_`) built by `secrets-build` from `dijkstra-<ns>/<KEY>` in the project `hosts`, applied server-side with the annotation `kustomize.toolkit.fluxcd.io/prune: disabled`. To add a key, add it to the profile and to `hosts`, then deploy `triss`.
+
+The SOPS files below are being phased out. They are encrypted with the cluster's age key (`.sops.yaml`); Flux decrypts them when applying (`sops-age` secret). Files must match `*.enc.*`. Only `data` and `stringData` are encrypted.
 
 They are generated from Bitwarden by `cluster-secrets-build`, one namespace at a time. The secretspec profile `dijkstra-<ns>` is the Secret `secrets` of namespace `<ns>`, written to `clusters/dijkstra/secrets/<ns>.enc.yaml`. The profile `dijkstra` itself is cluster-level (the age key) and is never rendered.
 

@@ -10,6 +10,9 @@
 #   `composed` secret are inputs and are not part of it. A secret that lives in
 #   another profile (e.g. a cluster-wide one) names it with `profile`; it must
 #   be in that profile, which in turn is not required to be fully used.
+#   With `wholeProfile` the secret is the entire profile as one JSON object
+#   (keys lowercased) and only the profile must exist. `restartUnits` are
+#   restarted by the provider when the secret changes.
 #
 # Names are flat lowercase snake_case, matching `^[a-z0-9_]+$`: no `/` or `-`.
 # That keeps them flat keys in the provider's store.
@@ -29,7 +32,7 @@
   ...
 }: let
   inherit (lib) mkOption literalExpression;
-  inherit (lib.types) attrsOf submodule str bool;
+  inherit (lib.types) attrsOf listOf submodule str bool;
 
   secret = submodule ({
     name,
@@ -59,6 +62,16 @@
         type = str;
         default = host;
         defaultText = literalExpression "config.networking.hostName";
+      };
+      wholeProfile = mkOption {
+        description = "The secret is every key of `profile` as one JSON object (keys lowercased), not a single key";
+        type = bool;
+        default = false;
+      };
+      restartUnits = mkOption {
+        description = "Units to restart when the secret changes";
+        type = listOf str;
+        default = [];
       };
       path = mkOption {
         type = str;
@@ -99,7 +112,11 @@
 
     missing =
       map (name: "\"${name}\" is used by ${definedIn name} but missing from profile ${used.${name}.profile} in secretspec.toml")
-      (lib.filter (name: !(lib.elem name (map lib.toLower (keysOf used.${name}.profile)))) (lib.attrNames used));
+      (lib.filter (name: !used.${name}.wholeProfile && !(lib.elem name (map lib.toLower (keysOf used.${name}.profile)))) (lib.attrNames used));
+
+    missingProfile =
+      map (name: "\"${name}\" is used by ${definedIn name} but profile ${used.${name}.profile} is missing from secretspec.toml")
+      (lib.filter (name: used.${name}.wholeProfile && !(profiles ? ${used.${name}.profile})) (lib.attrNames used));
 
     # only the host's own profile must be used completely
     usedByHost = lib.filter (name: used.${name}.profile == host) (lib.attrNames used);
@@ -107,7 +124,7 @@
       map (key: "\"${key}\" in profile ${host} of secretspec.toml is not used by any module")
       (lib.filter (key: !(lib.elem (lib.toLower key) usedByHost)) keys);
   in
-    invalid ++ missing ++ unused;
+    invalid ++ missing ++ missingProfile ++ unused;
 in {
   options.secrets = mkOption {
     description = "Secrets the host's modules use, provided as files. Names must match the host's profile in secretspec.toml";

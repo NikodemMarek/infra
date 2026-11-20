@@ -223,19 +223,30 @@ in {
         # [json key] value of one secret
         secret() { printf '%s' "$1" | jq -r --arg k "$2" '.[$k]'; }
 
+        # [host profile names] the secrets `names` (json list) of the profile from bws as json
+        profile_part() {
+          printf '%s' "$hosts" | jq --arg p "$2" --argjson names "$3" --argjson composed "$composed" -f ${profileSecrets} | jq --argjson names "$3" -f ${selectSecrets} || {
+            echo "$1: profile $2" >&2
+            exit 1
+          }
+        }
+
         # [host] the host's secrets from bws as json, exactly the ones its config declares,
-        # each taken from the profile that holds it
+        # each taken from the profile that holds it; a whole profile secret is all the keys of
+        # its profile as one json string
         fetch_secrets() {
-          local profile_of profiles p names part parts=""
+          local used p name names part parts=""
           # assigned first, set -e ignores a failing $(...) inside the arguments below
-          profile_of=$(nix eval --json ".#nixosConfigurations.$1.config.secrets" --apply 'builtins.mapAttrs (_: s: s.profile)')
-          profiles=$(printf '%s' "$profile_of" | jq -r '[.[]] | unique[]')
-          for p in $profiles; do
-            names=$(printf '%s' "$profile_of" | jq -c --arg p "$p" '[to_entries[] | select(.value == $p) | .key]')
-            part=$(printf '%s' "$hosts" | jq --arg p "$p" --argjson names "$names" --argjson composed "$composed" -f ${profileSecrets} | jq --argjson names "$names" -f ${selectSecrets}) || {
-              echo "$1: profile $p" >&2
-              exit 1
-            }
+          used=$(nix eval --json ".#nixosConfigurations.$1.config.secrets" --apply 'builtins.mapAttrs (_: s: {inherit (s) profile wholeProfile;})')
+          for p in $(printf '%s' "$used" | jq -r '[.[] | select(.wholeProfile | not) | .profile] | unique[]'); do
+            names=$(printf '%s' "$used" | jq -c --arg p "$p" '[to_entries[] | select((.value.wholeProfile | not) and .value.profile == $p) | .key]')
+            part=$(profile_part "$1" "$p" "$names")
+            parts+=$part$'\n'
+          done
+          for name in $(printf '%s' "$used" | jq -r 'to_entries[] | select(.value.wholeProfile) | .key'); do
+            p=$(printf '%s' "$used" | jq -r --arg n "$name" '.[$n].profile')
+            names=$(printf '%s' "$specs" | jq -c --arg p "$p" '.[$p] | keys | map(ascii_downcase)')
+            part=$(profile_part "$1" "$p" "$names" | jq --arg n "$name" '{($n): tojson}')
             parts+=$part$'\n'
           done
           printf '%s' "$parts" | jq -s 'add // {}'
@@ -315,9 +326,9 @@ in {
 
         # fetched once for all hosts
         hosts=$(nix run "$DEVENV_ROOT#bws-project" -- hosts)
+        specs=$(nix eval --impure --json --expr '(builtins.fromTOML (builtins.readFile ./secretspec.toml)).profiles')
         # {"<profile>": {"<KEY>": "<template>"}} of the composed secrets
-        composed=$(nix eval --impure --json --expr '(builtins.fromTOML (builtins.readFile ./secretspec.toml)).profiles' \
-          | jq 'map_values(with_entries(select(.value.composed) | .value |= .composed))')
+        composed=$(printf '%s' "$specs" | jq 'map_values(with_entries(select(.value.composed) | .value |= .composed))')
 
         # plaintext only ever lives in memory and pipes, never touches the disk
         for h in "$@"; do
