@@ -26,6 +26,7 @@ Rules:
 - Keep it minimal: no flags, options, config parameters or abstractions beyond what the plan asks for. Where a choice is open, pick the sensible default and the standard convention.
 - Never write or change tests: the verifier writes them independently from the plan's **Contract**. If an existing test must change (e.g. a call site of a renamed function), say so in your report.
 - Implement the Contract exactly; never change its signatures. If it can't be implemented as written, stop and report why.
+- You may be building one **part** of a change while other coders build the others in parallel. Touch only your part's files and design your side on its own merits; the Contract is the whole interface to the other parts. Don't reshape your side around guesses about theirs or add hooks "for the other side"; if the interface forces a bad design on your part, stop and report why.
 - When briefed to write **stubs**: only the Contract's signatures/types, with bodies that compile but don't work yet (`todo!()`, `throw new UnsupportedOperationException()`, `raise NotImplementedError`), nothing else.
 - In a jj workspace just edit files; never run jj commands that move `@` (`jj new`, `jj edit`, `jj commit`), or the work can't be squashed automatically.
 
