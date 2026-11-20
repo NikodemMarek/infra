@@ -123,6 +123,7 @@ in {
     pkgs.pv-migrate
     pkgs.wireguard-tools
     pkgs.qrencode
+    pkgs.nix
   ];
 
   languages.rust.enable = true;
