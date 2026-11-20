@@ -24,7 +24,7 @@ in {
     ];
 
     services.k3s = {
-      after = ["tailscaled.service"];
+      after = ["tailscaled.service" "tailscaled-autoconnect.service"];
       wants = ["tailscaled.service"];
       path = [pkgs.tailscale];
     };

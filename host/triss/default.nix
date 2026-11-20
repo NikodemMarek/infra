@@ -8,7 +8,7 @@
 
     ../features
     ../features/optional/systemd-boot.nix
-    ../features/optional/tailscale.nix
+    ../features/optional/tailscale-server.nix
     ../features/optional/maintenance.nix
     ../features/optional/k3s.nix
   ];
