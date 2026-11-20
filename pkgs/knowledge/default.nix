@@ -3,7 +3,6 @@
   python3Packages,
   git,
 }:
-
 python3Packages.buildPythonApplication {
   pname = "knowledge";
   version = "0.1.0";
@@ -18,8 +17,8 @@ python3Packages.buildPythonApplication {
     ];
   };
 
-  build-system = [ python3Packages.setuptools ];
-  nativeBuildInputs = [ python3Packages.mypy ];
+  build-system = [python3Packages.setuptools];
+  nativeBuildInputs = [python3Packages.mypy];
 
   # types are part of the build: a mypy --strict error fails it
   preBuild = ''
@@ -30,14 +29,14 @@ python3Packages.buildPythonApplication {
     python3Packages.pytestCheckHook
     git
   ];
-  pythonImportsCheck = [ "knowledge" ];
+  pythonImportsCheck = ["knowledge"];
 
   # git first: the memory repo must be handled by the git this was tested with
   makeWrapperArgs = [
     "--prefix"
     "PATH"
     ":"
-    (lib.makeBinPath [ git ])
+    (lib.makeBinPath [git])
   ];
 
   meta = {

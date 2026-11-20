@@ -15,18 +15,15 @@
   jujutsu,
   stdenvNoCC,
   makeWrapper,
-}:
-
-let
-  shellHook =
-    {
-      name,
-      src,
-      runtimeInputs,
-      bashOptions ? null,
-      # placeholder -> replacement, applied to the script text
-      replacements ? { },
-    }:
+}: let
+  shellHook = {
+    name,
+    src,
+    runtimeInputs,
+    bashOptions ? null,
+    # placeholder -> replacement, applied to the script text
+    replacements ? {},
+  }:
     writeShellApplication (
       {
         inherit name runtimeInputs;
@@ -34,7 +31,7 @@ let
           builtins.readFile src
         );
       }
-      // lib.optionalAttrs (bashOptions != null) { inherit bashOptions; }
+      // lib.optionalAttrs (bashOptions != null) {inherit bashOptions;}
     );
 
   guardWrites = shellHook {
@@ -90,7 +87,7 @@ let
     version = "0.1.0";
 
     dontUnpack = true;
-    nativeBuildInputs = [ makeWrapper ];
+    nativeBuildInputs = [makeWrapper];
 
     doCheck = true;
     checkPhase = ''
@@ -107,11 +104,11 @@ let
       substituteInPlace $out/bin/claude-route-event \
         --replace-fail "#!/usr/bin/env python3" "#!${python3}/bin/python3"
       wrapProgram $out/bin/claude-route-event --suffix PATH : ${
-          lib.makeBinPath [
-            jw
-            event-bus
-          ]
-        }
+        lib.makeBinPath [
+          jw
+          event-bus
+        ]
+      }
       runHook postInstall
     '';
 
@@ -153,7 +150,7 @@ let
   eventQueue = shellHook {
     name = "claude-event-queue";
     src = ./event-queue.sh;
-    runtimeInputs = [ coreutils ];
+    runtimeInputs = [coreutils];
     bashOptions = [
       "nounset"
       "pipefail"
@@ -227,7 +224,7 @@ let
     version = "0.1.0";
 
     dontUnpack = true;
-    nativeBuildInputs = [ makeWrapper ];
+    nativeBuildInputs = [makeWrapper];
 
     installPhase = ''
       runHook preInstall
@@ -236,38 +233,38 @@ let
         --replace-fail "#!/usr/bin/env python3" "#!${python3}/bin/python3"
       wrapProgram $out/bin/claude-jj-workspace \
         --suffix PATH : ${
-          lib.makeBinPath [
-            jujutsu
-            git
-            mcpDefaults
-          ]
-        }
+        lib.makeBinPath [
+          jujutsu
+          git
+          mcpDefaults
+        ]
+      }
       runHook postInstall
     '';
 
     meta.mainProgram = "claude-jj-workspace";
   };
 in
-symlinkJoin {
-  name = "claude-hooks";
-  paths = [
-    guardWrites
-    verifierGuard
-    sudoGuard
-    architectAutocommit
-    routeEvent
-    askpass
-    permissionHook
-    eventQueue
-    statusHook
-    stopHook
-    promptHook
-    mcpDefaults
-    jjWorkspace
-  ];
+  symlinkJoin {
+    name = "claude-hooks";
+    paths = [
+      guardWrites
+      verifierGuard
+      sudoGuard
+      architectAutocommit
+      routeEvent
+      askpass
+      permissionHook
+      eventQueue
+      statusHook
+      stopHook
+      promptHook
+      mcpDefaults
+      jjWorkspace
+    ];
 
-  meta = {
-    description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop and UserPromptSubmit hooks (queued follow-up prompts of event-started sessions, waiting notification), the status hook (session record status), jj workspaces for isolated agents, project MCP servers seeded as disabled";
-    platforms = lib.platforms.unix;
-  };
-}
+    meta = {
+      description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop and UserPromptSubmit hooks (queued follow-up prompts of event-started sessions, waiting notification), the status hook (session record status), jj workspaces for isolated agents, project MCP servers seeded as disabled";
+      platforms = lib.platforms.unix;
+    };
+  }

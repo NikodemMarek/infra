@@ -3,7 +3,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from editing_claude import EditingClaude
 
 
@@ -12,13 +11,17 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """No test touches the real home, memory, state, lock directories, router or git identity."""
     for name in [n for n in os.environ if n.startswith("KNOWLEDGE_")]:
         monkeypatch.delenv(name)
-    monkeypatch.delenv("CLAUDECODE", raising=False)  # set when the tests run inside Claude Code
+    monkeypatch.delenv(
+        "CLAUDECODE", raising=False
+    )  # set when the tests run inside Claude Code
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
     monkeypatch.setenv("CLAUDE_MEMORY_DIR", str(tmp_path / "memory"))
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)  # the user's hooks, signing and identity stay out
+    monkeypatch.setenv(
+        "GIT_CONFIG_GLOBAL", os.devnull
+    )  # the user's hooks, signing and identity stay out
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     for who in ("AUTHOR", "COMMITTER"):
         monkeypatch.setenv(f"GIT_{who}_NAME", "Test")

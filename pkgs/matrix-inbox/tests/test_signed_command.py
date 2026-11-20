@@ -2,12 +2,23 @@ import base64
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
 from matrix_inbox.data import Json, dumps
 from matrix_inbox.signed import Command, open_command, open_reply
 
-FIELDS: dict[str, Json] = {"kind": "matrix.command", "to": "yenn", "text": "fix it", "event_id": "$c1", "ts": 1700000000000}
-REPLY_FIELDS: dict[str, Json] = {"to": "yenn", "ref": "/r/x/reply", "text": "y", "body": "B", "event_id": "$e1"}
+FIELDS: dict[str, Json] = {
+    "kind": "matrix.command",
+    "to": "yenn",
+    "text": "fix it",
+    "event_id": "$c1",
+    "ts": 1700000000000,
+}
+REPLY_FIELDS: dict[str, Json] = {
+    "to": "yenn",
+    "ref": "/r/x/reply",
+    "text": "y",
+    "body": "B",
+    "event_id": "$e1",
+}
 
 
 def msg_of(fields: dict[str, Json]) -> str:
@@ -22,27 +33,37 @@ def envelope(msg: str, sig: str, type_: str = "matrix.command", **extra: Json) -
     return dumps({"type": type_, "msg": msg, "sig": sig, **extra})
 
 
-def sealed(key: Ed25519PrivateKey, fields: dict[str, Json] | None = None, type_: str = "matrix.command") -> str:
+def sealed(
+    key: Ed25519PrivateKey,
+    fields: dict[str, Json] | None = None,
+    type_: str = "matrix.command",
+) -> str:
     msg = msg_of(FIELDS if fields is None else fields)
     return envelope(msg, sign(key, msg), type_)
 
 
 def test_valid_command_opens() -> None:
     key = Ed25519PrivateKey.generate()
-    assert open_command(sealed(key), key.public_key()) == Command("yenn", "fix it", "$c1", 1700000000000)
+    assert open_command(sealed(key), key.public_key()) == Command(
+        "yenn", "fix it", "$c1", 1700000000000
+    )
 
 
 def test_command_with_unicode_and_newlines() -> None:
     key = Ed25519PrivateKey.generate()
     text = 'ż\nó — "q"'
-    assert open_command(sealed(key, {**FIELDS, "text": text}), key.public_key()) == Command("yenn", text, "$c1", 1700000000000)
+    assert open_command(
+        sealed(key, {**FIELDS, "text": text}), key.public_key()
+    ) == Command("yenn", text, "$c1", 1700000000000)
 
 
 def test_extra_keys_ignored() -> None:
     key = Ed25519PrivateKey.generate()
     msg = msg_of({**FIELDS, "extra": 1})
     line = envelope(msg, sign(key, msg), other="x")
-    assert open_command(line, key.public_key()) == Command("yenn", "fix it", "$c1", 1700000000000)
+    assert open_command(line, key.public_key()) == Command(
+        "yenn", "fix it", "$c1", 1700000000000
+    )
 
 
 def test_wrong_key() -> None:
@@ -68,7 +89,10 @@ def test_bad_sig(sig: str) -> None:
 
 def test_sig_of_another_message() -> None:
     key = Ed25519PrivateKey.generate()
-    assert open_command(envelope(msg_of(FIELDS), sign(key, "other")), key.public_key()) is None
+    assert (
+        open_command(envelope(msg_of(FIELDS), sign(key, "other")), key.public_key())
+        is None
+    )
 
 
 def test_envelope_type_changed_to_reply() -> None:
@@ -85,7 +109,10 @@ def test_envelope_type_other(type_: str) -> None:
 def test_envelope_type_missing() -> None:
     key = Ed25519PrivateKey.generate()
     msg = msg_of(FIELDS)
-    assert open_command(dumps({"msg": msg, "sig": sign(key, msg)}), key.public_key()) is None
+    assert (
+        open_command(dumps({"msg": msg, "sig": sign(key, msg)}), key.public_key())
+        is None
+    )
 
 
 def test_open_command_rejects_a_sealed_reply() -> None:
@@ -151,13 +178,35 @@ def test_msg_not_json() -> None:
 def test_msg_or_sig_not_a_string_or_missing() -> None:
     key = Ed25519PrivateKey.generate()
     sig = sign(key, msg_of(FIELDS))
-    assert open_command(dumps({"type": "matrix.command", "msg": FIELDS, "sig": sig}), key.public_key()) is None
-    assert open_command(dumps({"type": "matrix.command", "msg": msg_of(FIELDS), "sig": 5}), key.public_key()) is None
-    assert open_command(dumps({"type": "matrix.command", "msg": msg_of(FIELDS)}), key.public_key()) is None
-    assert open_command(dumps({"type": "matrix.command", "sig": sig}), key.public_key()) is None
+    assert (
+        open_command(
+            dumps({"type": "matrix.command", "msg": FIELDS, "sig": sig}),
+            key.public_key(),
+        )
+        is None
+    )
+    assert (
+        open_command(
+            dumps({"type": "matrix.command", "msg": msg_of(FIELDS), "sig": 5}),
+            key.public_key(),
+        )
+        is None
+    )
+    assert (
+        open_command(
+            dumps({"type": "matrix.command", "msg": msg_of(FIELDS)}), key.public_key()
+        )
+        is None
+    )
+    assert (
+        open_command(dumps({"type": "matrix.command", "sig": sig}), key.public_key())
+        is None
+    )
 
 
-@pytest.mark.parametrize("line", ["nil body", "", "[1]", '"s"', "5", "null", "{", '{"msg":'])
+@pytest.mark.parametrize(
+    "line", ["nil body", "", "[1]", '"s"', "5", "null", "{", '{"msg":']
+)
 def test_malformed_line(line: str) -> None:
     key = Ed25519PrivateKey.generate()
     assert open_command(line, key.public_key()) is None

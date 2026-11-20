@@ -35,7 +35,13 @@ def _deliver(gateway: Gateway, line: str) -> None:
             gateway.on_send(line, txn)
             return
         except MatrixError as e:
-            log.warning("posting %s failed (attempt %d of %d): %s", txn, attempt, SEND_ATTEMPTS, e)
+            log.warning(
+                "posting %s failed (attempt %d of %d): %s",
+                txn,
+                attempt,
+                SEND_ATTEMPTS,
+                e,
+            )
             if attempt < SEND_ATTEMPTS:
                 time.sleep(SEND_RETRY_SECONDS)
     log.error("dropped %s", txn)
@@ -56,7 +62,9 @@ def _pump(gateway: Gateway, sub: NatsSub) -> NoReturn:
 
 
 def main() -> None:
-    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(levelname)s %(message)s")
+    logging.basicConfig(
+        stream=sys.stderr, level=logging.INFO, format="%(levelname)s %(message)s"
+    )
     if sys.argv[1:] == ["keygen"]:
         keygen()
         return
@@ -69,7 +77,10 @@ def main() -> None:
     password_file = os.environ.get("MATRIX_PASSWORD_FILE")
     key_file = os.environ.get("MATRIX_SIGNING_KEY_FILE")
     if not homeserver or not owner or not user or not password_file or not key_file:
-        _fail("set MATRIX_HOMESERVER, MATRIX_OWNER, MATRIX_USER, MATRIX_PASSWORD_FILE and MATRIX_SIGNING_KEY_FILE", 2)
+        _fail(
+            "set MATRIX_HOMESERVER, MATRIX_OWNER, MATRIX_USER, MATRIX_PASSWORD_FILE and MATRIX_SIGNING_KEY_FILE",
+            2,
+        )
     nats_url = os.environ.get("NATS_URL") or DEFAULT_NATS_URL
     try:
         password = Path(password_file).read_text().strip()
@@ -77,10 +88,14 @@ def main() -> None:
     except OSError as e:
         _fail(f"cannot read a secret file: {e}", 2)
     try:
-        key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(key_text, validate=True))
+        key = Ed25519PrivateKey.from_private_bytes(
+            base64.b64decode(key_text, validate=True)
+        )
     except ValueError as e:
         _fail(f"invalid signing key: {e}", 2)
-    gateway = Gateway(HttpMatrix(homeserver), NatsBus(nats_url), owner, user, password, key)
+    gateway = Gateway(
+        HttpMatrix(homeserver), NatsBus(nats_url), owner, user, password, key
+    )
     try:
         while True:
             try:
@@ -89,7 +104,9 @@ def main() -> None:
             except MatrixError as e:
                 log.warning("start failed: %s", e)
                 time.sleep(RETRY_SECONDS)
-        threading.Thread(target=_pump, args=(gateway, NatsSub(nats_url)), daemon=True).start()
+        threading.Thread(
+            target=_pump, args=(gateway, NatsSub(nats_url)), daemon=True
+        ).start()
         while True:
             try:
                 gateway.step()

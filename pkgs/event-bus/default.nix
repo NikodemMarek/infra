@@ -5,7 +5,6 @@
   jq,
   coreutils,
 }:
-
 # Events over plain NATS (local nats-server, no JetStream, $NATS_URL or 127.0.0.1:4222).
 # `event-pub TYPE` reads a JSON object from stdin (empty means {}), sets its `type` to
 # TYPE and publishes it on `events.TYPE`.
@@ -96,12 +95,11 @@ let
       exit 1
     '';
   };
-
 in
-symlinkJoin {
-  name = "event-bus";
-  paths = [
-    eventPub
-    eventSubscribe
-  ];
-}
+  symlinkJoin {
+    name = "event-bus";
+    paths = [
+      eventPub
+      eventSubscribe
+    ];
+  }

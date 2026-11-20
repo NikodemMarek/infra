@@ -17,14 +17,18 @@ from pathlib import Path
 from . import config, data, secrets
 
 NAME_TIME = "%Y%m%dT%H%M%SZ"  # the start of a note's file name; the rest is 8 hex
-_WORKSPACE = re.compile(r"/[^/]+\.agents/gl-")  # the workspace of an agent that an event launched
+_WORKSPACE = re.compile(
+    r"/[^/]+\.agents/gl-"
+)  # the workspace of an agent that an event launched
 _ORIGIN = re.compile(r"origin: (\S+)")
 
 
 def write(text: str, origin: str, cwd: Path) -> Path:
     """Queue a note; the file. Raises ValueError, writing nothing, if the text holds a hard secret."""
     if secrets.has_hard(secrets.scan(text)):
-        raise ValueError("the note looks like it holds a secret (a token, a key or a credential)")
+        raise ValueError(
+            "the note looks like it holds a secret (a token, a key or a credential)"
+        )
     inbox = config.inbox_dir()
     created = not inbox.exists()
     config.ensure_private(inbox)
@@ -80,6 +84,8 @@ def oldest_date() -> datetime.datetime | None:
     if not files:
         return None
     try:
-        return datetime.datetime.strptime(files[0].name[:16], NAME_TIME).replace(tzinfo=datetime.UTC)
+        return datetime.datetime.strptime(files[0].name[:16], NAME_TIME).replace(
+            tzinfo=datetime.UTC
+        )
     except ValueError:  # not a name of ours: the file's own time
         return datetime.datetime.fromtimestamp(files[0].stat().st_mtime, datetime.UTC)

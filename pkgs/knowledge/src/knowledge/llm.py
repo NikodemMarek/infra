@@ -65,7 +65,11 @@ def build_argv(
             "default",
         )
     else:
-        rules = ("--allowedTools", tools, "--disallowedTools", DISALLOWED_TOOLS) if tools else ()
+        rules = (
+            ("--allowedTools", tools, "--disallowedTools", DISALLOWED_TOOLS)
+            if tools
+            else ()
+        )
     return [
         binary,
         "-p",
@@ -118,9 +122,19 @@ class ClaudeCli:
         self.edits = tuple(edits)
 
     def run(self, system: str, message: str, add_dirs: Sequence[Path]) -> str:
-        argv = build_argv(self.binary, system, add_dirs, self.model, self.effort, self.tools, self.edits)
+        argv = build_argv(
+            self.binary,
+            system,
+            add_dirs,
+            self.model,
+            self.effort,
+            self.tools,
+            self.edits,
+        )
         # CLAUDECODE is dropped: a nested launch from inside Claude Code
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"} | {"KNOWLEDGE_CURATOR": "1"}
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"} | {
+            "KNOWLEDGE_CURATOR": "1"
+        }
         try:
             proc = subprocess.run(
                 argv,
@@ -150,9 +164,13 @@ class ClaudeCli:
         except ParseError as e:
             raise LlmError(f"unexpected claude output: {e}") from e
         if is_error:
-            raise LlmError(f"claude reported an error ({subtype}): {_tail(result or '')}")
+            raise LlmError(
+                f"claude reported an error ({subtype}): {_tail(result or '')}"
+            )
         if result is None:
             raise LlmError("claude's output has no result")
         if denials:
-            raise LlmError(f"claude was denied {len(denials)} tool call(s): {_tail(data.dumps(denials))}")
+            raise LlmError(
+                f"claude was denied {len(denials)} tool call(s): {_tail(data.dumps(denials))}"
+            )
         return result

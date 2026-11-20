@@ -5,7 +5,6 @@
   event-bus,
   jw,
 }:
-
 # event handler: a task.new event starts an agent session with `jw agent -d`
 # and reports task.started, or task.failed with what is needed to retry.
 # Event data is untrusted: image paths are kept only if they are regular files

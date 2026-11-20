@@ -6,27 +6,30 @@
 # shown meanwhile and whichever answer comes first wins; no answer in time = no output = local dialog.
 # stdout carries only a decision; never exits 2 (blocking code).
 # Deliberately no errexit (the package sets only nounset + pipefail): every failure maps to exit 0.
-[ -n "${AGENT_SESSION:-}" ] || { cat >/dev/null; exit 0; }
+[ -n "${AGENT_SESSION:-}" ] || {
+	cat >/dev/null
+	exit 0
+}
 w="${CLAUDE_INBOX_WAIT:-600}"
 if ! [[ "$w" =~ ^[1-9][0-9]{0,5}$ ]]; then
-  exec claude-route-event
+	exec claude-route-event
 fi
 if [ "$w" -gt 600 ]; then
-  w=600
+	w=600
 fi
 
 input="$(cat)"
 reader=""
 dir="$(mktemp -d "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/claude-hook-XXXXXX")" || {
-  printf '%s' "$input" | claude-route-event >&2
-  exit 0
+	printf '%s' "$input" | claude-route-event >&2
+	exit 0
 }
 trap 'kill "$reader" 2>/dev/null; rm -rf "$dir"' EXIT
 trap 'exit 1' INT TERM HUP
 # Without a FIFO there is nothing to wait on: route the notification only.
 mkfifo -m 600 "$dir/reply" || {
-  printf '%s' "$input" | claude-route-event >&2
-  exit 0
+	printf '%s' "$input" | claude-route-event >&2
+	exit 0
 }
 
 # Reader first, then post: the answer can arrive as soon as the event is queued. The FIFO is an argument
@@ -34,13 +37,13 @@ mkfifo -m 600 "$dir/reply" || {
 exec 3< <(exec timeout --foreground "$w" head -n1 -- "$dir/reply")
 reader=$!
 printf '%s' "$input" |
-  jq -c --arg reply "$dir/reply" --argjson timeout "$w" '. + {reply: $reply, timeout: $timeout}' |
-  claude-route-event >&2 || exit 0
+	jq -c --arg reply "$dir/reply" --argjson timeout "$w" '. + {reply: $reply, timeout: $timeout}' |
+	claude-route-event >&2 || exit 0
 
 IFS= read -r line <&3
 exec 3<&-
 if [ -z "$line" ]; then
-  exit 0
+	exit 0
 fi
 
 # Only the decision comes from the reply; the tool input is Claude's own. The one exception is

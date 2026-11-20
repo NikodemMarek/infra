@@ -4,34 +4,34 @@
   color: @text;
 }
 * button {
-    background: none;
-    box-shadow: none;
-    text-shadow: none;
-    padding: 0px;
-    outline: 0;
-    border: 0;
-    border-radius: 0;
+  background: none;
+  box-shadow: none;
+  text-shadow: none;
+  padding: 0px;
+  outline: 0;
+  border: 0;
+  border-radius: 0;
 }
 * slider {
-    min-height: 0px;
-    min-width: 0px;
-    opacity: 0;
-    background-image: none;
-    border: none;
-    box-shadow: none;
-    background: none;
+  min-height: 0px;
+  min-width: 0px;
+  opacity: 0;
+  background-image: none;
+  border: none;
+  box-shadow: none;
+  background: none;
 }
 * trough {
-    min-height: 80px;
-    min-width: 5px;
-    border-radius: 5px;
-    border: none;
-    background: @crust;
+  min-height: 80px;
+  min-width: 5px;
+  border-radius: 5px;
+  border: none;
+  background: @crust;
 }
 * highlight {
-    min-width: 5px;
-    border-radius: 5px;
-    border: none;
+  min-width: 5px;
+  border-radius: 5px;
+  border: none;
 }
 
 window#waybar {
@@ -39,90 +39,89 @@ window#waybar {
 }
 
 #clock {
-    background-color: @mantle;
-    padding: 5px 0;
-    border-radius: 50px;
+  background-color: @mantle;
+  padding: 5px 0;
+  border-radius: 50px;
 }
 
 #battery {
-    background-color: @mantle;
-    padding: 5px 0;
-    border-radius: 50px;
-    color: @peach;
+  background-color: @mantle;
+  padding: 5px 0;
+  border-radius: 50px;
+  color: @peach;
 }
 
 #network {
-    background-color: @mantle;
-    padding: 5px 0;
-    border-radius: 50px;
-    color: @green;
+  background-color: @mantle;
+  padding: 5px 0;
+  border-radius: 50px;
+  color: @green;
 }
 
 #bluetooth {
-    background-color: @mantle;
-    padding: 5px 0;
-    border-radius: 50px;
-    color: @blue;
+  background-color: @mantle;
+  padding: 5px 0;
+  border-radius: 50px;
+  color: @blue;
 }
 
 #custom-wireguard {
-    background-color: @mantle;
-    padding: 5px 0;
-    border-radius: 50px;
-    color: @lavender;
+  background-color: @mantle;
+  padding: 5px 0;
+  border-radius: 50px;
+  color: @lavender;
 }
 
 #workspaces {
-    background-color: @mantle;
-    padding: 5px 0;
-    border-radius: 50px;
+  background-color: @mantle;
+  padding: 5px 0;
+  border-radius: 50px;
 }
 
 #brightness {
-    background-color: @mantle;
-    padding: 5px 0;
-    border-radius: 50px;
+  background-color: @mantle;
+  padding: 5px 0;
+  border-radius: 50px;
 }
 #brightness #backlight {
-    color: @yellow;
+  color: @yellow;
 }
 #brightness #backlight-slider highlight {
-    background: @yellow;
+  background: @yellow;
 }
 
 #audio {
-    background-color: @mantle;
-    padding: 5px 0;
-    border-radius: 50px;
+  background-color: @mantle;
+  padding: 5px 0;
+  border-radius: 50px;
 }
 #audio #pulseaudio {
-    color: @sky;
+  color: @sky;
 }
 #audio #pulseaudio-slider highlight {
-    background: @sky;
+  background: @sky;
 }
 
 #powermenu {
-    background-color: @mantle;
-    padding: 5px 0;
-    border-radius: 50px;
+  background-color: @mantle;
+  padding: 5px 0;
+  border-radius: 50px;
 }
 #powermenu #custom-power {
-    color: @red;
+  color: @red;
 }
 #powermenu #custom-quit {
-    color: @peach;
+  color: @peach;
 }
 #powermenu #custom-lock {
-    color: @yellow;
+  color: @yellow;
 }
 #powermenu #custom-reboot {
-    color: @mauve;
+  color: @mauve;
 }
 #powermenu #custom-sleep {
-    color: @lavender;
+  color: @lavender;
 }
 #powermenu #custom-hibernate {
-    color: @sapphire;
+  color: @sapphire;
 }
-

@@ -12,19 +12,19 @@ input=$(cat)
 state="${1:-}"
 args=()
 if [ "$state" = waiting ]; then
-  tool=$(jq -r '.tool_name | strings' <<<"$input" 2>/dev/null)
-  if [ "$tool" = AskUserQuestion ]; then
-    args=(--waiting-for question)
-  elif [ -n "$tool" ]; then
-    args=(--waiting-for "permission: $tool")
-  else
-    args=(--waiting-for permission)
-  fi
+	tool=$(jq -r '.tool_name | strings' <<<"$input" 2>/dev/null)
+	if [ "$tool" = AskUserQuestion ]; then
+		args=(--waiting-for question)
+	elif [ -n "$tool" ]; then
+		args=(--waiting-for "permission: $tool")
+	else
+		args=(--waiting-for permission)
+	fi
 fi
 if [ "$state" != busy ]; then
-  t=$(jq -r '.transcript_path | strings' <<<"$input" 2>/dev/null)
-  if [ -f "$t" ] && [ -r "$t" ]; then
-    expires=$(tac "$t" | jq -nRr '
+	t=$(jq -r '.transcript_path | strings' <<<"$input" 2>/dev/null)
+	if [ -f "$t" ] && [ -r "$t" ]; then
+		expires=$(tac "$t" | jq -nRr '
       def ts: try (.timestamp | sub("\\.[0-9]+";"") | fromdateiso8601) catch null;
       last(label $out | foreach (inputs | fromjson? | objects | select(.type=="assistant" and .isSidechain != true)) as $e (
         {};
@@ -36,8 +36,8 @@ if [ "$state" != busy ]; then
         else . end;
         if .stop then break $out elif .found then . else empty end
       )) | .ts + .ttl' 2>/dev/null)
-    [ -n "$expires" ] && args+=(--cache-expires-at "$expires")
-  fi
+		[ -n "$expires" ] && args+=(--cache-expires-at "$expires")
+	fi
 fi
 jw session status "$state" "${args[@]}" >/dev/null 2>&1
 exit 0

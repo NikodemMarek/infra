@@ -1,5 +1,4 @@
 import pytest
-
 from fakes import item, permission, question
 from matrix_inbox import logic
 from matrix_inbox.data import Obj, ParseError, dumps, loads
@@ -14,8 +13,8 @@ DENY = '{"behavior":"deny"}'
     ("text", "expected"),
     [
         ("a\x1bb", "a�b"),
-        ("a‮b", "a�b"),
-        ("a​b", "a�b"),
+        ("a‮b", "a�b"),  # noqa: PLE2502
+        ("a\u200bb", "a�b"),
         ("a\x7fb", "a�b"),
         ("a\rb", "a�b"),
         ("a b", "a�b"),
@@ -64,25 +63,37 @@ def test_claimant() -> None:
 
 
 def test_detail_bash_command() -> None:
-    assert logic.detail({"tool_name": "Bash", "tool_input": {"command": "ls -la"}}) == ("ls -la", False)
+    assert logic.detail({"tool_name": "Bash", "tool_input": {"command": "ls -la"}}) == (
+        "ls -la",
+        False,
+    )
 
 
 def test_detail_truncates_long_command() -> None:
-    text, truncated = logic.detail({"tool_name": "Bash", "tool_input": {"command": "x" * 2500}})
+    text, truncated = logic.detail(
+        {"tool_name": "Bash", "tool_input": {"command": "x" * 2500}}
+    )
     assert truncated
     assert text == "x" * 2000 + "\n[500 more chars]"
 
 
 def test_detail_boundary() -> None:
-    assert logic.detail({"tool_name": "Bash", "tool_input": {"command": "x" * 2000}}) == ("x" * 2000, False)
-    assert logic.detail({"tool_name": "Bash", "tool_input": {"command": "x" * 2001}}) == (
+    assert logic.detail(
+        {"tool_name": "Bash", "tool_input": {"command": "x" * 2000}}
+    ) == ("x" * 2000, False)
+    assert logic.detail(
+        {"tool_name": "Bash", "tool_input": {"command": "x" * 2001}}
+    ) == (
         "x" * 2000 + "\n[1 more chars]",
         True,
     )
 
 
 def test_detail_other_tool_dumps_json() -> None:
-    assert logic.detail({"tool_name": "Edit", "tool_input": {"file_path": "/x"}}) == ('{\n  "file_path": "/x"\n}', False)
+    assert logic.detail({"tool_name": "Edit", "tool_input": {"file_path": "/x"}}) == (
+        '{\n  "file_path": "/x"\n}',
+        False,
+    )
     assert logic.detail({"tool_name": "Edit", "tool_input": {"b": 1, "a": "é"}}) == (
         '{\n  "a": "é",\n  "b": 1\n}',
         False,
@@ -95,20 +106,33 @@ def test_detail_without_tool_input() -> None:
 
 
 def test_detail_bash_without_string_command_dumps_json() -> None:
-    assert logic.detail({"tool_name": "Bash", "tool_input": {"command": 5}}) == ('{\n  "command": 5\n}', False)
+    assert logic.detail({"tool_name": "Bash", "tool_input": {"command": 5}}) == (
+        '{\n  "command": 5\n}',
+        False,
+    )
 
 
 def test_detail_sanitizes() -> None:
-    assert logic.detail({"tool_name": "Bash", "tool_input": {"command": "a\x1bb"}}) == ("a�b", False)
+    assert logic.detail({"tool_name": "Bash", "tool_input": {"command": "a\x1bb"}}) == (
+        "a�b",
+        False,
+    )
 
 
 def test_render_permission() -> None:
-    assert logic.render(permission()) == "infra · s-1: Bash\nList files\n\nls -la\n\nReply y to allow or n to deny."
+    assert (
+        logic.render(permission())
+        == "infra · s-1: Bash\nList files\n\nls -la\n\nReply y to allow or n to deny."
+    )
 
 
 def test_render_ignores_source_key_order_and_number_spelling() -> None:
-    first = loads('{"type":"claude.permission_request","reply":"/r","tool_name":"Edit","tool_input":{"a":1.0,"b":2}}')
-    second = loads('{"tool_input":{"b":2,"a":1.00},"tool_name":"Edit","reply":"/r","type":"claude.permission_request"}')
+    first = loads(
+        '{"type":"claude.permission_request","reply":"/r","tool_name":"Edit","tool_input":{"a":1.0,"b":2}}'
+    )
+    second = loads(
+        '{"tool_input":{"b":2,"a":1.00},"tool_name":"Edit","reply":"/r","type":"claude.permission_request"}'
+    )
     assert isinstance(first, dict)
     assert isinstance(second, dict)
     assert logic.render(first) == logic.render(second)
@@ -116,13 +140,24 @@ def test_render_ignores_source_key_order_and_number_spelling() -> None:
 
 def test_render_permission_truncated_hint() -> None:
     body = logic.render(permission(command="x" * 2500))
-    assert body == "infra · s-1: Bash\nList files\n\n" + "x" * 2000 + "\n[500 more chars]\n\n" + TOO_LONG
+    assert (
+        body
+        == "infra · s-1: Bash\nList files\n\n"
+        + "x" * 2000
+        + "\n[500 more chars]\n\n"
+        + TOO_LONG
+    )
 
 
 def test_render_permission_with_huge_title_keeps_detail_and_hint() -> None:
     assert logic.TITLE_MAX == 200
     body = logic.render(permission(title="t" * 15000))
-    assert body == "infra · s-1: Bash\n" + "t" * 200 + "\n\nls -la\n\nReply y to allow or n to deny."
+    assert (
+        body
+        == "infra · s-1: Bash\n"
+        + "t" * 200
+        + "\n\nls -la\n\nReply y to allow or n to deny."
+    )
     assert not body.endswith("[truncated]")
 
 
@@ -137,7 +172,10 @@ def test_render_permission_title_capped_single_line() -> None:
 def test_render_permission_defaults() -> None:
     event: Obj = {"type": "claude.permission_request", "reply": "/r"}
     body = logic.render(event)
-    assert body == "?: ?\nclaude.permission_request\n\n{}\n\nReply y to allow or n to deny."
+    assert (
+        body
+        == "?: ?\nclaude.permission_request\n\n{}\n\nReply y to allow or n to deny."
+    )
 
 
 def test_render_session_falls_back_to_shpool() -> None:
@@ -154,7 +192,9 @@ def test_render_title_sanitized_single_line() -> None:
 
 
 def test_render_header_fields_sanitized() -> None:
-    body = logic.render(permission(project="in\nfra", session="s\x1b1", tool_name="Ba\tsh"))
+    body = logic.render(
+        permission(project="in\nfra", session="s\x1b1", tool_name="Ba\tsh")
+    )
     assert body.splitlines()[0] == "in fra · s�1: Ba sh"
 
 
@@ -168,7 +208,12 @@ def test_render_question() -> None:
         "type": "claude.question",
         "project": "infra",
         "tool_input": {
-            "questions": [{"question": "Which db?", "options": [{"label": "A"}, {"label": "B", "description": "fast"}]}]
+            "questions": [
+                {
+                    "question": "Which db?",
+                    "options": [{"label": "A"}, {"label": "B", "description": "fast"}],
+                }
+            ]
         },
         "reply": "/r",
     }
@@ -184,7 +229,12 @@ def test_render_question_header_session_and_multiselect() -> None:
         "session": "s-9",
         "tool_input": {
             "questions": [
-                {"header": "DB", "question": "Which?", "multiSelect": True, "options": [{"label": "A"}, {"label": "B"}]}
+                {
+                    "header": "DB",
+                    "question": "Which?",
+                    "multiSelect": True,
+                    "options": [{"label": "A"}, {"label": "B"}],
+                }
             ]
         },
         "reply": "/r",
@@ -205,7 +255,10 @@ def test_render_multiple_questions() -> None:
                 {
                     "question": "Which colors?",
                     "multiSelect": True,
-                    "options": [{"label": "red", "description": "warm"}, {"label": "blue"}],
+                    "options": [
+                        {"label": "red", "description": "warm"},
+                        {"label": "blue"},
+                    ],
                 },
                 {"question": "Anything else?"},
             ]
@@ -278,14 +331,21 @@ def one_question(multi: bool = False, options: bool = True) -> Obj:
 
 
 def test_parse_question_number() -> None:
-    assert logic.parse_question(one_question(), "2") == '{"behavior":"allow","answers":{"Which db?":"B"}}'
+    assert (
+        logic.parse_question(one_question(), "2")
+        == '{"behavior":"allow","answers":{"Which db?":"B"}}'
+    )
     assert logic.parse_question(one_question(), " 3 \n") == answers(("Which db?", "C"))
 
 
 def test_parse_question_free_text() -> None:
-    assert logic.parse_question(one_question(), "my own") == answers(("Which db?", "my own"))
+    assert logic.parse_question(one_question(), "my own") == answers(
+        ("Which db?", "my own")
+    )
     assert logic.parse_question(one_question(), "1 2") == answers(("Which db?", "1 2"))
-    assert logic.parse_question(one_question(), "l1\nl2") == answers(("Which db?", "l1\nl2"))
+    assert logic.parse_question(one_question(), "l1\nl2") == answers(
+        ("Which db?", "l1\nl2")
+    )
 
 
 def test_parse_question_free_text_is_one_line_json() -> None:
@@ -301,38 +361,68 @@ def test_parse_question_empty() -> None:
 
 
 def test_parse_question_multiselect() -> None:
-    assert logic.parse_question(one_question(multi=True), "1, 3") == answers(("Which db?", "A, C"))
-    assert logic.parse_question(one_question(multi=True), "3,1") == answers(("Which db?", "C, A"))
-    assert logic.parse_question(one_question(multi=True), "1,1") == answers(("Which db?", "A"))
-    assert logic.parse_question(one_question(multi=True), "2") == answers(("Which db?", "B"))
+    assert logic.parse_question(one_question(multi=True), "1, 3") == answers(
+        ("Which db?", "A, C")
+    )
+    assert logic.parse_question(one_question(multi=True), "3,1") == answers(
+        ("Which db?", "C, A")
+    )
+    assert logic.parse_question(one_question(multi=True), "1,1") == answers(
+        ("Which db?", "A")
+    )
+    assert logic.parse_question(one_question(multi=True), "2") == answers(
+        ("Which db?", "B")
+    )
 
 
 def test_parse_question_several_numbers_need_multiselect() -> None:
-    assert logic.parse_question(one_question(), "1,2") == Refusal("Question 1: pick one option.")
+    assert logic.parse_question(one_question(), "1,2") == Refusal(
+        "Question 1: pick one option."
+    )
 
 
 def test_parse_question_multiselect_only_when_literally_true() -> None:
     tool_input: Obj = {
-        "questions": [{"question": "Q", "multiSelect": "true", "options": [{"label": "A"}, {"label": "B"}]}]
+        "questions": [
+            {
+                "question": "Q",
+                "multiSelect": "true",
+                "options": [{"label": "A"}, {"label": "B"}],
+            }
+        ]
     }
-    assert logic.parse_question(tool_input, "1,2") == Refusal("Question 1: pick one option.")
+    assert logic.parse_question(tool_input, "1,2") == Refusal(
+        "Question 1: pick one option."
+    )
 
 
 def test_parse_question_out_of_range() -> None:
-    assert logic.parse_question(one_question(), "4") == Refusal("Question 1: there is no option 4.")
-    assert logic.parse_question(one_question(), "0") == Refusal("Question 1: there is no option 0.")
-    assert logic.parse_question(one_question(multi=True), "1,7") == Refusal("Question 1: there is no option 7.")
+    assert logic.parse_question(one_question(), "4") == Refusal(
+        "Question 1: there is no option 4."
+    )
+    assert logic.parse_question(one_question(), "0") == Refusal(
+        "Question 1: there is no option 0."
+    )
+    assert logic.parse_question(one_question(multi=True), "1,7") == Refusal(
+        "Question 1: there is no option 7."
+    )
 
 
-@pytest.mark.parametrize("text", ["5" * 5000, "1000", "1,1000"], ids=["5000-digits", "1000", "1,1000"])
-def test_parse_question_number_with_more_than_three_digits_is_refused(text: str) -> None:
+@pytest.mark.parametrize(
+    "text", ["5" * 5000, "1000", "1,1000"], ids=["5000-digits", "1000", "1,1000"]
+)
+def test_parse_question_number_with_more_than_three_digits_is_refused(
+    text: str,
+) -> None:
     result = logic.parse_question(one_question(multi=True), text)
     assert isinstance(result, Refusal)
     assert result.reason.startswith("Question 1: there is no option ")
 
 
 def test_parse_question_numbers_are_text_without_options() -> None:
-    assert logic.parse_question(one_question(options=False), "1") == answers(("Which db?", "1"))
+    assert logic.parse_question(one_question(options=False), "1") == answers(
+        ("Which db?", "1")
+    )
     tool_input: Obj = {"questions": [{"question": "Q", "options": [{"nolabel": 1}]}]}
     assert logic.parse_question(tool_input, "1") == answers(("Q", "1"))
 
@@ -344,15 +434,25 @@ def test_parse_question_two_questions() -> None:
             {"question": "Why?", "options": [{"label": "x"}]},
         ]
     }
-    assert logic.parse_question(tool_input, "1\n\nfoo") == answers(("Which db?", "A"), ("Why?", "foo"))
-    assert logic.parse_question(tool_input, "  2  \n 1 ") == answers(("Which db?", "B"), ("Why?", "x"))
+    assert logic.parse_question(tool_input, "1\n\nfoo") == answers(
+        ("Which db?", "A"), ("Why?", "foo")
+    )
+    assert logic.parse_question(tool_input, "  2  \n 1 ") == answers(
+        ("Which db?", "B"), ("Why?", "x")
+    )
 
 
 def test_parse_question_two_questions_wrong_line_count() -> None:
     tool_input: Obj = {"questions": [{"question": "Q1"}, {"question": "Q2"}]}
-    assert logic.parse_question(tool_input, "1") == Refusal("Reply with 2 lines, one per question.")
-    assert logic.parse_question(tool_input, "a\nb\nc") == Refusal("Reply with 2 lines, one per question.")
-    assert logic.parse_question(tool_input, "") == Refusal("Reply with 2 lines, one per question.")
+    assert logic.parse_question(tool_input, "1") == Refusal(
+        "Reply with 2 lines, one per question."
+    )
+    assert logic.parse_question(tool_input, "a\nb\nc") == Refusal(
+        "Reply with 2 lines, one per question."
+    )
+    assert logic.parse_question(tool_input, "") == Refusal(
+        "Reply with 2 lines, one per question."
+    )
 
 
 def test_parse_question_two_questions_refusal_names_question() -> None:
@@ -362,8 +462,12 @@ def test_parse_question_two_questions_refusal_names_question() -> None:
             {"question": "Q2", "options": [{"label": "A"}, {"label": "B"}]},
         ]
     }
-    assert logic.parse_question(tool_input, "1\n3") == Refusal("Question 2: there is no option 3.")
-    assert logic.parse_question(tool_input, "1\n1,2") == Refusal("Question 2: pick one option.")
+    assert logic.parse_question(tool_input, "1\n3") == Refusal(
+        "Question 2: there is no option 3."
+    )
+    assert logic.parse_question(tool_input, "1\n1,2") == Refusal(
+        "Question 2: pick one option."
+    )
 
 
 INVALID_TOOL_INPUTS: list[Obj] = [
@@ -380,7 +484,9 @@ INVALID_TOOL_INPUTS: list[Obj] = [
 
 @pytest.mark.parametrize("tool_input", INVALID_TOOL_INPUTS)
 def test_parse_question_invalid(tool_input: Obj) -> None:
-    assert logic.parse_question(tool_input, "1") == Refusal("This question cannot be answered here.")
+    assert logic.parse_question(tool_input, "1") == Refusal(
+        "This question cannot be answered here."
+    )
 
 
 def test_loads_invalid_utf8_raises_parse_error() -> None:

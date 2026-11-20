@@ -46,7 +46,9 @@ def _message(subject: str, body: str) -> str:
 
 
 class Git:
-    def __init__(self, repo: Path, lock_path: Path, lock_timeout: float = LOCK_WAIT) -> None:
+    def __init__(
+        self, repo: Path, lock_path: Path, lock_timeout: float = LOCK_WAIT
+    ) -> None:
         self.repo = repo
         self.lock_path = lock_path
         self.lock_timeout = lock_timeout
@@ -61,13 +63,20 @@ class Git:
         env = {**inherited, "GIT_TERMINAL_PROMPT": "0", "GIT_LITERAL_PATHSPECS": "1"}
         try:
             proc = subprocess.run(
-                cmd, capture_output=True, timeout=timeout, check=False, stdin=subprocess.DEVNULL, env=env
+                cmd,
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+                stdin=subprocess.DEVNULL,
+                env=env,
             )
         except subprocess.TimeoutExpired as e:
             raise GitError(shown, f"timed out after {timeout:g}s") from e
         except OSError as e:
             raise GitError(shown, f"cannot run git: {e}") from e
-        except ValueError as e:  # an argument subprocess refuses, e.g. "embedded null byte"
+        except (
+            ValueError
+        ) as e:  # an argument subprocess refuses, e.g. "embedded null byte"
             raise GitError(shown, f"invalid argument: {e}") from e
         return _Result(
             proc.returncode,
@@ -87,7 +96,12 @@ class Git:
         """The repo-relative paths, deduplicated and checked: nothing outside the repo, nothing in `.git`."""
         for p in paths:
             parts = Path(p).parts
-            if not p or Path(p).is_absolute() or ".." in parts or any(part.lower() == ".git" for part in parts):
+            if (
+                not p
+                or Path(p).is_absolute()
+                or ".." in parts
+                or any(part.lower() == ".git" for part in parts)
+            ):
                 raise ValueError(f"not a path inside the repo: {p!r}")
         seen: dict[str, None] = {p: None for p in paths}
         return list(seen)
@@ -103,7 +117,10 @@ class Git:
         """The repo must be a git repository of its own, not a directory inside another one."""
         top = self.run("rev-parse", "--show-toplevel").strip()
         if Path(top).resolve() != self.repo.resolve():
-            raise GitError("rev-parse", f"{self.repo} is not the top of a git repository (found {top})")
+            raise GitError(
+                "rev-parse",
+                f"{self.repo} is not the top of a git repository (found {top})",
+            )
 
     def head(self) -> str:
         return self.run("rev-parse", "HEAD").strip()
@@ -116,19 +133,33 @@ class Git:
         if not paths:
             return None
         in_index = self._listed("ls-files", "-z", "--", *paths)
-        in_head = self._listed("ls-tree", "-r", "--name-only", "-z", "HEAD", "--", *paths)
-        known = [p for p in paths if (self.repo / p).exists(follow_symlinks=False) or p in in_index or p in in_head]
+        in_head = self._listed(
+            "ls-tree", "-r", "--name-only", "-z", "HEAD", "--", *paths
+        )
+        known = [
+            p
+            for p in paths
+            if (self.repo / p).exists(follow_symlinks=False)
+            or p in in_index
+            or p in in_head
+        ]
         if not known:
             return None
         # `add` refuses a path that is gone from the index and the disk; that deletion is staged already
-        addable = [p for p in known if (self.repo / p).exists(follow_symlinks=False) or p in in_index]
+        addable = [
+            p
+            for p in known
+            if (self.repo / p).exists(follow_symlinks=False) or p in in_index
+        ]
         if addable:
             self.run("add", "-A", "--", *addable)
         diff = self._proc("diff", "--cached", "--quiet", "--", *known)
         if diff.code == 0:
             return None
         if diff.code != 1:
-            raise GitError("diff", " ".join(diff.err.split()) or f"exit status {diff.code}")
+            raise GitError(
+                "diff", " ".join(diff.err.split()) or f"exit status {diff.code}"
+            )
         self.run("commit", "-q", "--no-verify", "-m", message, "--", *known)
         return self.head()
 
@@ -142,7 +173,9 @@ class Git:
         """Back to HEAD (the caller holds the lock); only a path of `created` is ever deleted from the disk."""
         if not paths:
             return
-        in_head = self._listed("ls-tree", "-r", "--name-only", "-z", "HEAD", "--", *paths)
+        in_head = self._listed(
+            "ls-tree", "-r", "--name-only", "-z", "HEAD", "--", *paths
+        )
         tracked = [p for p in paths if p in in_head]
         others = [p for p in paths if p not in in_head]
         if tracked:

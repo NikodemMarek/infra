@@ -2,7 +2,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from knowledge import locks
 from knowledge.gitops import Git, GitError
 from knowledge.locks import FileLock, LockTimeout
@@ -97,7 +96,10 @@ def test_commit_without_changes_is_none(git: Git, memory_repo: Path):
 def test_commit_writes_the_body(git: Git, memory_repo: Path):
     put(memory_repo, "global/a.md", "a\n")
     git.commit(["global/a.md"], "knowledge: create global/a.md", body="why it was kept")
-    assert sh(memory_repo, "log", "-n1", "--format=%B") == "knowledge: create global/a.md\n\nwhy it was kept"
+    assert (
+        sh(memory_repo, "log", "-n1", "--format=%B")
+        == "knowledge: create global/a.md\n\nwhy it was kept"
+    )
 
 
 def test_commit_ignores_a_failing_hook(git: Git, memory_repo: Path):
@@ -119,9 +121,8 @@ def test_commit_rejects_paths_outside_the_repo(git: Git):
 def test_commit_times_out_when_the_lock_is_held(git: Git, memory_repo: Path):
     put(memory_repo, "global/a.md", "a\n")
     before = commit_count(memory_repo)
-    with FileLock(locks.memory_lock()):
-        with pytest.raises(LockTimeout):
-            git.commit(["global/a.md"], "a")
+    with FileLock(locks.memory_lock()), pytest.raises(LockTimeout):
+        git.commit(["global/a.md"], "a")
     assert commit_count(memory_repo) == before
     assert git.commit(["global/a.md"], "a") is not None
 
@@ -155,19 +156,29 @@ def test_restore_resets_modified_and_removes_untracked(git: Git, memory_repo: Pa
     assert sh(memory_repo, "status", "--porcelain") == "?? global/other.md"
 
 
-def test_restore_keeps_a_file_that_is_not_in_head_unless_it_was_created(git: Git, memory_repo: Path):
+def test_restore_keeps_a_file_that_is_not_in_head_unless_it_was_created(
+    git: Git, memory_repo: Path
+):
     put(memory_repo, "global/mine.md", "made by the caller\n")
     put(memory_repo, "global/yours.md", "was here before\n")
     put(memory_repo, "global/staged.md", "staged by someone\n")
     sh(memory_repo, "add", "global/staged.md")
-    git.restore(["global/mine.md", "global/yours.md", "global/staged.md"], created=["global/mine.md"])
+    git.restore(
+        ["global/mine.md", "global/yours.md", "global/staged.md"],
+        created=["global/mine.md"],
+    )
     assert not (memory_repo / "global" / "mine.md").exists()
     assert (memory_repo / "global" / "yours.md").read_text() == "was here before\n"
     assert (memory_repo / "global" / "staged.md").read_text() == "staged by someone\n"
-    assert sh(memory_repo, "status", "--porcelain", "-uall") == "?? global/staged.md\n?? global/yours.md"
+    assert (
+        sh(memory_repo, "status", "--porcelain", "-uall")
+        == "?? global/staged.md\n?? global/yours.md"
+    )
 
 
-def test_restore_ignores_created_paths_that_are_not_asked_for(git: Git, memory_repo: Path):
+def test_restore_ignores_created_paths_that_are_not_asked_for(
+    git: Git, memory_repo: Path
+):
     put(memory_repo, "global/new.md", "new\n")
     git.restore([], created=["global/new.md"])
     git.restore(["README.md"], created=["global/new.md"])
@@ -176,15 +187,17 @@ def test_restore_ignores_created_paths_that_are_not_asked_for(git: Git, memory_r
 
 def test_restore_takes_the_memory_lock(git: Git, memory_repo: Path):
     put(memory_repo, "global/new.md", "new\n")
-    with FileLock(locks.memory_lock()):
-        with pytest.raises(LockTimeout):
-            git.restore(["global/new.md"], created=["global/new.md"])
+    with FileLock(locks.memory_lock()), pytest.raises(LockTimeout):
+        git.restore(["global/new.md"], created=["global/new.md"])
     assert (memory_repo / "global" / "new.md").exists()
     git.restore(["global/new.md"], created=["global/new.md"])
     assert not (memory_repo / "global" / "new.md").exists()
 
 
-@pytest.mark.parametrize("path", [".git/config", ".git", "global/.git/x", "./.git/hooks/pre-commit", ".GIT/config"])
+@pytest.mark.parametrize(
+    "path",
+    [".git/config", ".git", "global/.git/x", "./.git/hooks/pre-commit", ".GIT/config"],
+)
 def test_paths_inside_dot_git_are_refused(git: Git, path: str):
     with pytest.raises(ValueError):
         git.commit([path], "x")
@@ -199,7 +212,9 @@ def test_a_dot_git_look_alike_is_an_ordinary_path(git: Git, memory_repo: Path):
     assert git.commit(["global/.gitkeep"], "keep") is not None
 
 
-def test_git_ignores_variables_that_point_elsewhere(git: Git, memory_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_git_ignores_variables_that_point_elsewhere(
+    git: Git, memory_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setenv("GIT_DIR", str(tmp_path / "elsewhere"))
     monkeypatch.setenv("GIT_WORK_TREE", str(tmp_path / "elsewhere"))
     monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / "elsewhere.index"))
@@ -209,9 +224,14 @@ def test_git_ignores_variables_that_point_elsewhere(git: Git, memory_repo: Path,
     monkeypatch.setenv("GIT_PREFIX", "sub/")
     git.ensure_repo()
     put(memory_repo, "global/a.md", "a\n")
-    sha = git.commit(["global/a.md"], "a")  # (the plain `sh` helper would see the variables too)
+    sha = git.commit(
+        ["global/a.md"], "a"
+    )  # (the plain `sh` helper would see the variables too)
     assert sha is not None and sha == git.head()
-    assert git.run("log", "-n1", "--format=%s", "--name-only").split() == ["a", "global/a.md"]
+    assert git.run("log", "-n1", "--format=%s", "--name-only").split() == [
+        "a",
+        "global/a.md",
+    ]
     assert not (tmp_path / "elsewhere").exists()
 
 

@@ -28,7 +28,11 @@ def text(value):
 def event_type(arg, inp):
     if arg:
         return arg
-    return "claude.question" if inp.get("tool_name") == "AskUserQuestion" else "claude.permission_request"
+    return (
+        "claude.question"
+        if inp.get("tool_name") == "AskUserQuestion"
+        else "claude.permission_request"
+    )
 
 
 def title(inp, etype):
@@ -40,26 +44,38 @@ def title(inp, etype):
     questions = tool_input.get("questions")
     first = questions[0] if isinstance(questions, list) and questions else None
     question = text(first.get("question")) if isinstance(first, dict) else ""
-    bash = text(tool_input.get("description")) or text(tool_input.get("command")).strip().split("\n")[0]
+    bash = (
+        text(tool_input.get("description"))
+        or text(tool_input.get("command")).strip().split("\n")[0]
+    )
     file_path = text(tool_input.get("file_path"))
     if cwd and file_path.startswith(cwd + "/"):
-        file_path = file_path[len(cwd) + 1:]
+        file_path = file_path[len(cwd) + 1 :]
     url = text(tool_input.get("url"))
 
-    return (text(inp.get("title"))
-            or question
-            or (bash if tool == "Bash" else "")
-            or (tool and file_path and f"{tool} {file_path}")
-            or (tool and url and f"{tool} {url}")
-            or tool
-            or etype)
+    return (
+        text(inp.get("title"))
+        or question
+        or (bash if tool == "Bash" else "")
+        or (tool and file_path and f"{tool} {file_path}")
+        or (tool and url and f"{tool} {url}")
+        or tool
+        or etype
+    )
 
 
 def jj_info(cwd):
     """Parsed `jw info` of cwd; best effort, None on any failure."""
     try:
-        p = subprocess.run(["jw", "info"], cwd=cwd, capture_output=True, text=True,
-                           stdin=subprocess.DEVNULL, timeout=2)
+        p = subprocess.run(
+            ["jw", "info"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=2,
+            check=False,
+        )
         return json.loads(p.stdout) if p.returncode == 0 else None
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
@@ -67,7 +83,12 @@ def jj_info(cwd):
 
 def enrich(inp, etype):
     cwd = text(inp.get("cwd"))
-    event = {**inp, "type": etype, "project": cwd.split("/")[-1] or None, "title": title(inp, etype)}
+    event = {
+        **inp,
+        "type": etype,
+        "project": cwd.split("/")[-1] or None,
+        "title": title(inp, etype),
+    }
     if os.environ.get("SHPOOL_SESSION_NAME"):
         event["shpool"] = os.environ["SHPOOL_SESSION_NAME"]
     if os.environ.get("AGENT_SESSION"):
@@ -79,24 +100,40 @@ def enrich(inp, etype):
 
 
 def publish(event):
-    subprocess.run(["event-pub", event["type"]], input=json.dumps(event).encode(),
-                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=5, check=True)
+    subprocess.run(
+        ["event-pub", event["type"]],
+        input=json.dumps(event).encode(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        timeout=5,
+        check=True,
+    )
 
 
 def main():
     try:
         inp = json.load(sys.stdin)
         if not isinstance(inp, dict):
-            raise ValueError("not a JSON object")
+            raise ValueError("not a JSON object")  # noqa: TRY004
     except ValueError:
         print("claude-route-event: invalid input", file=sys.stderr)
         return 1
     event = enrich(inp, event_type(sys.argv[1] if len(sys.argv) > 1 else "", inp))
     try:
         publish(event)
-    except (subprocess.SubprocessError, OSError) as e:  # event-pub failed, timed out or is missing
-        why = e.stderr.decode(errors="replace").strip() if isinstance(e, subprocess.CalledProcessError) else ""
-        print(f"claude-route-event: cannot publish {event['type']}: {why or e}", file=sys.stderr)
+    except (
+        subprocess.SubprocessError,
+        OSError,
+    ) as e:  # event-pub failed, timed out or is missing
+        why = (
+            e.stderr.decode(errors="replace").strip()
+            if isinstance(e, subprocess.CalledProcessError)
+            else ""
+        )
+        print(
+            f"claude-route-event: cannot publish {event['type']}: {why or e}",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

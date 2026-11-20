@@ -8,9 +8,8 @@
   # Filter tabs, Tab cycles through them: a list of `{ name; kinds ? null; }`. `kinds` are the
   # session record kinds the tab shows (`review`, `note`, `task`, ...); null or absent = every kind no
   # other tab lists. Read from $AGENT_INBOX_TABS (JSON), which a value in the environment overrides.
-  tabs ? [ ],
+  tabs ? [],
 }:
-
 rustPlatform.buildRustPackage {
   pname = "agent-inbox";
   version = "0.1.0";
@@ -32,7 +31,7 @@ rustPlatform.buildRustPackage {
   # event-pub or xdg-open of the user's own PATH wins. zellij and shpool come from PATH too: they must match the
   # running server and daemon.
   postInstall = ''
-    wrapProgram $out/bin/agent-inbox --suffix PATH : ${lib.makeBinPath [jw xdg-utils event-bus]} ${lib.optionalString (tabs != [ ]) "--set-default AGENT_INBOX_TABS ${lib.escapeShellArg (builtins.toJSON tabs)}"}
+    wrapProgram $out/bin/agent-inbox --suffix PATH : ${lib.makeBinPath [jw xdg-utils event-bus]} ${lib.optionalString (tabs != []) "--set-default AGENT_INBOX_TABS ${lib.escapeShellArg (builtins.toJSON tabs)}"}
   '';
 
   meta = {

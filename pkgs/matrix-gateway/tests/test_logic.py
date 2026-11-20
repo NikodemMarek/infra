@@ -5,7 +5,6 @@ import re
 import pytest
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
 from matrix_gateway.data import Obj, ParseError, loads
 from matrix_gateway.logic import (
     ROUTE,
@@ -28,8 +27,8 @@ BOT = "@agents:nkmrk.com"
     ("text", "expected"),
     [
         ("a\x1bb", "a�b"),
-        ("a‮b", "a�b"),
-        ("a​b", "a�b"),
+        ("a‮b", "a�b"),  # noqa: PLE2502
+        ("a\u200bb", "a�b"),
         ("a\x7fb", "a�b"),
         ("a\rb", "a�b"),
         ("a b", "a�b"),
@@ -68,7 +67,10 @@ def j(**kw: object) -> str:
 @pytest.mark.parametrize(
     ("line", "expected"),
     [
-        ('{"to":"yenn","ref":"/r/x/reply","body":"hi"}', Send("hi", "yenn", "/r/x/reply")),
+        (
+            '{"to":"yenn","ref":"/r/x/reply","body":"hi"}',
+            Send("hi", "yenn", "/r/x/reply"),
+        ),
         ('{"reply_to":"$e1","body":"ok","to":"yenn"}', Send("ok", reply_to="$e1")),
         ('{"reply_to":"$e1","body":"ok"}', Send("ok", reply_to="$e1")),
         (j(to="a", ref="r", body="x" * 20000), Send("x" * 20000, "a", "r")),
@@ -76,7 +78,15 @@ def j(**kw: object) -> str:
         (j(to="0a-b", ref="r" * 1024, body="x"), Send("x", "0a-b", "r" * 1024)),
         (j(reply_to="$" + "e" * 254, body="x"), Send("x", reply_to="$" + "e" * 254)),
     ],
-    ids=["routed", "notice-ignores-route", "notice", "body-20000", "to-63", "ref-1024", "reply-to-255"],
+    ids=[
+        "routed",
+        "notice-ignores-route",
+        "notice",
+        "body-20000",
+        "to-63",
+        "ref-1024",
+        "reply-to-255",
+    ],
 )
 def test_parse_send_valid(line: str, expected: Send) -> None:
     assert parse_send(line) == expected
@@ -115,7 +125,9 @@ INVALID = [
 ]
 
 
-@pytest.mark.parametrize("line", INVALID, ids=[f"invalid{i}" for i in range(len(INVALID))])
+@pytest.mark.parametrize(
+    "line", INVALID, ids=[f"invalid{i}" for i in range(len(INVALID))]
+)
 def test_parse_send_invalid(line: str) -> None:
     assert parse_send(line) is None
 
@@ -155,7 +167,9 @@ def test_seal_verifies() -> None:
     env = json.loads(out)
     assert set(env) == {"type", "msg", "sig"}
     assert env["type"] == "matrix.reply"
-    key.public_key().verify(base64.b64decode(env["sig"], validate=True), env["msg"].encode("utf-8"))
+    key.public_key().verify(
+        base64.b64decode(env["sig"], validate=True), env["msg"].encode("utf-8")
+    )
     assert json.loads(env["msg"]) == {
         "to": "yenn",
         "ref": "/r/x",
@@ -176,7 +190,9 @@ def test_seal_msg_is_sorted_compact() -> None:
 def test_seal_wrong_key_fails() -> None:
     env = json.loads(seal(Ed25519PrivateKey.generate(), "yenn", "r", "t", "b", "$e"))
     with pytest.raises(InvalidSignature):
-        Ed25519PrivateKey.generate().public_key().verify(base64.b64decode(env["sig"]), env["msg"].encode())
+        Ed25519PrivateKey.generate().public_key().verify(
+            base64.b64decode(env["sig"]), env["msg"].encode()
+        )
 
 
 def parent(sender: str = BOT, **route_value: object) -> Obj:
@@ -208,7 +224,9 @@ def test_route_none(p: Obj) -> None:
     assert route(p, BOT) is None
 
 
-@pytest.mark.parametrize("text", ["[" * 100000, '{"a":' * 100000], ids=["array", "object"])
+@pytest.mark.parametrize(
+    "text", ["[" * 100000, '{"a":' * 100000], ids=["array", "object"]
+)
 def test_loads_deep_nesting_is_parse_error(text: str) -> None:
     with pytest.raises(ParseError):
         loads(text)
@@ -229,7 +247,9 @@ LONE_SURROGATE = [
 ]
 
 
-@pytest.mark.parametrize("line", LONE_SURROGATE, ids=[f"surrogate{i}" for i in range(len(LONE_SURROGATE))])
+@pytest.mark.parametrize(
+    "line", LONE_SURROGATE, ids=[f"surrogate{i}" for i in range(len(LONE_SURROGATE))]
+)
 def test_parse_send_lone_surrogate(line: str) -> None:
     assert parse_send(line) is None
 
@@ -255,7 +275,19 @@ def test_parse_command(body: str, expected: tuple[str, str]) -> None:
 
 @pytest.mark.parametrize(
     "body",
-    ["!yenn", "!yenn   ", "yenn fix", "! yenn x", "!yenn: x", "!a.b x", "!-x y", "!" + "a" * 64 + " x", "", "!", "!!"],
+    [
+        "!yenn",
+        "!yenn   ",
+        "yenn fix",
+        "! yenn x",
+        "!yenn: x",
+        "!a.b x",
+        "!-x y",
+        "!" + "a" * 64 + " x",
+        "",
+        "!",
+        "!!",
+    ],
 )
 def test_parse_command_none(body: str) -> None:
     assert parse_command(body) is None
@@ -268,7 +300,9 @@ def test_seal_command_verifies() -> None:
     env = json.loads(out)
     assert set(env) == {"type", "msg", "sig"}
     assert env["type"] == "matrix.command"
-    key.public_key().verify(base64.b64decode(env["sig"], validate=True), env["msg"].encode("utf-8"))
+    key.public_key().verify(
+        base64.b64decode(env["sig"], validate=True), env["msg"].encode("utf-8")
+    )
     assert json.loads(env["msg"]) == {
         "kind": "matrix.command",
         "to": "yenn",
@@ -281,4 +315,6 @@ def test_seal_command_verifies() -> None:
 def test_seal_command_wrong_key_fails() -> None:
     env = json.loads(seal_command(Ed25519PrivateKey.generate(), "yenn", "t", "$e", 1))
     with pytest.raises(InvalidSignature):
-        Ed25519PrivateKey.generate().public_key().verify(base64.b64decode(env["sig"]), env["msg"].encode())
+        Ed25519PrivateKey.generate().public_key().verify(
+            base64.b64decode(env["sig"]), env["msg"].encode()
+        )

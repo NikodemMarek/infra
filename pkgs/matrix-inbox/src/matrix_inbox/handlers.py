@@ -4,7 +4,16 @@ import sys
 from typing import Protocol
 
 from .data import Obj, dumps, get_obj, get_str
-from .logic import Refusal, claimant, detail, offered, parse_permission, parse_question, render, sanitize
+from .logic import (
+    Refusal,
+    claimant,
+    detail,
+    offered,
+    parse_permission,
+    parse_question,
+    render,
+    sanitize,
+)
 from .signed import Command, Reply
 
 MAX_AGE = 300  # seconds
@@ -37,7 +46,10 @@ class Bus(Protocol):
 def post(event: Obj, host: str, bus: Bus) -> None:
     if not offered(event):
         return
-    bus.publish("matrix.send", dumps({"to": host, "ref": get_str(event, "reply"), "body": render(event)}))
+    bus.publish(
+        "matrix.send",
+        dumps({"to": host, "ref": get_str(event, "reply"), "body": render(event)}),
+    )
 
 
 def _notice(bus: Bus, event_id: str, text: str) -> None:
@@ -71,11 +83,17 @@ def answer(reply: Reply, host: str, local: Local, bus: Bus) -> None:
         return
     waiting = _waiting(items, reply.ref)
     if waiting is None:
-        _notice(bus, reply.event_id, "No longer waiting: answered elsewhere or expired.")
+        _notice(
+            bus, reply.event_id, "No longer waiting: answered elsewhere or expired."
+        )
         return
     item_id, event = waiting
     if render(event) != reply.body:
-        _notice(bus, reply.event_id, "Refusing: the message does not match the waiting request.")
+        _notice(
+            bus,
+            reply.event_id,
+            "Refusing: the message does not match the waiting request.",
+        )
         return
     text = reply.text.strip()
     if get_str(event, "type") == "claude.permission_request":
@@ -101,15 +119,24 @@ class Tasks(Protocol):
         ...
 
 
-def command(cmd: Command, host: str, now: float, seen: Seen, tasks: Tasks, bus: Bus) -> None:
+def command(
+    cmd: Command, host: str, now: float, seen: Seen, tasks: Tasks, bus: Bus
+) -> None:
     if cmd.to != host:
-        print("matrix-inbox-command: ignoring a command for another host", file=sys.stderr)
+        print(
+            "matrix-inbox-command: ignoring a command for another host", file=sys.stderr
+        )
         return
     if abs(now - cmd.ts / 1000) > MAX_AGE:
-        print("matrix-inbox-command: ignoring a stale or future-dated command", file=sys.stderr)
+        print(
+            "matrix-inbox-command: ignoring a stale or future-dated command",
+            file=sys.stderr,
+        )
         return
     if not seen.claim(cmd.event_id):
-        print("matrix-inbox-command: ignoring an already handled command", file=sys.stderr)
+        print(
+            "matrix-inbox-command: ignoring an already handled command", file=sys.stderr
+        )
         return
     outcome = tasks.start(cmd.text) or {}
     kind = get_str(outcome, "type")

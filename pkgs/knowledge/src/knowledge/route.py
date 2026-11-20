@@ -30,7 +30,11 @@ class Answer:
 def _brief(lines: Iterable[str]) -> str:
     """The lines as one line of at most DESCRIPTION_CHARS."""
     text = " ".join(" ".join(lines).split())
-    return text if len(text) <= DESCRIPTION_CHARS else text[: DESCRIPTION_CHARS - 3].rstrip() + "..."
+    return (
+        text
+        if len(text) <= DESCRIPTION_CHARS
+        else text[: DESCRIPTION_CHARS - 3].rstrip() + "..."
+    )
 
 
 def _readme_rank(p: Path) -> tuple[int, str]:
@@ -42,7 +46,11 @@ def readme_head(repo: Path) -> str:
     try:
         # the shortest name: README.md, not a translation like README-zh.md
         readme = min(
-            (p for p in repo.iterdir() if p.name.lower().startswith("readme") and p.is_file()),
+            (
+                p
+                for p in repo.iterdir()
+                if p.name.lower().startswith("readme") and p.is_file()
+            ),
             key=_readme_rank,
         )
         with readme.open("rb") as f:
@@ -55,7 +63,12 @@ def readme_head(repo: Path) -> str:
         line = raw_line.strip()
         if line.startswith(_FENCES):
             fenced = not fenced
-        elif not fenced and line and not line.startswith(_SKIPPED_STARTS) and not set(line) <= _UNDERLINE:
+        elif (
+            not fenced
+            and line
+            and not line.startswith(_SKIPPED_STARTS)
+            and not set(line) <= _UNDERLINE
+        ):
             kept.append(line)
     return _brief(kept)
 
@@ -90,7 +103,9 @@ def message(task: str, candidates: Sequence[Path], memory: Path) -> str:
     lines: list[str] = []
     for repo in candidates:
         description = describe(repo, memory, rows)
-        lines.append(f"- {repo.name}: {description}" if description else f"- {repo.name}")
+        lines.append(
+            f"- {repo.name}: {description}" if description else f"- {repo.name}"
+        )
     return "\n".join(["Task:", task, "", "Repositories (name: what it is):", *lines])
 
 

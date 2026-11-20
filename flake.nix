@@ -69,7 +69,7 @@
   } @ inputs: let
     inherit (self) outputs;
 
-    lib = nixpkgs.lib;
+    inherit (nixpkgs) lib;
 
     allOverlays = import ./overlays {inherit inputs;};
 
@@ -89,8 +89,9 @@
     overlays = allOverlays;
     # everything the additions overlay adds; flake packages must be derivations, so
     # the jail function is left out; the event handlers are `.#event-handlers.<name>`
-    packages = forEachSystem (pkgs:
-      removeAttrs (builtins.intersectAttrs (allOverlays.additions pkgs pkgs) pkgs) ["jail"]);
+    packages =
+      forEachSystem (pkgs:
+        removeAttrs (builtins.intersectAttrs (allOverlays.additions pkgs pkgs) pkgs) ["jail"]);
 
     nixosConfigurations = let
       mkHost = host: system:

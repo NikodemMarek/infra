@@ -4,7 +4,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from editing_claude import EditingClaude
 from knowledge import config, prompts, skills
 
@@ -31,11 +30,15 @@ def old(path: Path) -> None:
 
 
 def test_frontmatter_forms():
-    assert skills._frontmatter("---\nname: jj\ndescription: Use when using jj.\n---\nbody: not this\n") == {
+    assert skills._frontmatter(
+        "---\nname: jj\ndescription: Use when using jj.\n---\nbody: not this\n"
+    ) == {
         "name": "jj",
         "description": "Use when using jj.",
     }
-    assert skills._frontmatter('---\nname: "q"\ndescription: >\n  folded\n  text\nother: x\n---\n') == {
+    assert skills._frontmatter(
+        '---\nname: "q"\ndescription: >\n  folded\n  text\nother: x\n---\n'
+    ) == {
         "name": "q",
         "description": "folded text",
         "other": "x",
@@ -56,9 +59,17 @@ def test_prints_the_drafts_it_created_or_changed_and_commits_nothing(
     skill("jj", "---\nname: jj\ndescription: Use when working with jj.\n---")
     skill("plain", "---\ndescription: Without a name.\n---")
     head = sh(memory_repo, "rev-parse", "HEAD")
-    editing_claude.plan(writes={"skill-ideas/new.md": "---\nname: new\n---\nrules\n", "skill-ideas/improved.md": "v2\n"})
+    editing_claude.plan(
+        writes={
+            "skill-ideas/new.md": "---\nname: new\n---\nrules\n",
+            "skill-ideas/improved.md": "v2\n",
+        }
+    )
     assert skills.run() == 0
-    assert capsys.readouterr().out.splitlines() == [str(ideas / "improved.md"), str(ideas / "new.md")]
+    assert capsys.readouterr().out.splitlines() == [
+        str(ideas / "improved.md"),
+        str(ideas / "new.md"),
+    ]
     assert sh(memory_repo, "rev-parse", "HEAD") == head
     assert sh(memory_repo, "log", "--format=%s").splitlines() == ["init"]
 
@@ -77,13 +88,20 @@ def test_the_call(memory_repo: Path, editing_claude: EditingClaude):
     args = editing_claude.argv()
     assert Path(str(editing_claude.call()["cwd"])).resolve() == memory_repo.resolve()
     assert args[args.index("--tools") + 1] == "Read,Grep,Glob,Edit,Write"
-    assert args[args.index("--allowedTools") + 1] == f"Edit(/{memory_repo.resolve()}/skill-ideas/**)"
+    assert (
+        args[args.index("--allowedTools") + 1]
+        == f"Edit(/{memory_repo.resolve()}/skill-ideas/**)"
+    )
     assert args[args.index("--permission-mode") + 1] == "default"
     assert "skill ideas" in args[args.index("--append-system-prompt") + 1]
 
 
 def test_a_long_skill_body_is_cut(memory_repo: Path, editing_claude: EditingClaude):
-    skill("big", "---\nname: big\ndescription: Use when big.\n---\n" + "x" * (skills.MAX_BODY + 100))
+    skill(
+        "big",
+        "---\nname: big\ndescription: Use when big.\n---\n"
+        + "x" * (skills.MAX_BODY + 100),
+    )
     assert skills.run() == 0
     stdin = editing_claude.stdin()
     assert "x" * skills.MAX_BODY in stdin
@@ -95,13 +113,17 @@ def test_the_prompt_does_not_ask_to_read_a_deployed_skill():
     assert "SKILL.md first" not in prompts.read(skills.PROMPT)
 
 
-def test_no_deployed_skills_and_no_drafts_yet(memory_repo: Path, editing_claude: EditingClaude):
+def test_no_deployed_skills_and_no_drafts_yet(
+    memory_repo: Path, editing_claude: EditingClaude
+):
     assert skills.run() == 0
     assert (memory_repo / "skill-ideas").is_dir()
     assert "(none)" in editing_claude.stdin()
 
 
-def test_a_failed_call_exits_1(memory_repo: Path, editing_claude: EditingClaude, caplog: pytest.LogCaptureFixture):
+def test_a_failed_call_exits_1(
+    memory_repo: Path, editing_claude: EditingClaude, caplog: pytest.LogCaptureFixture
+):
     editing_claude.plan(writes={"skill-ideas/new.md": "x\n"}, denials=("Edit",))
     with caplog.at_level(logging.ERROR):
         assert skills.run() == 1

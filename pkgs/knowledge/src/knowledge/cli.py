@@ -24,14 +24,32 @@ def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="knowledge", description=__doc__)
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="command", required=True)
-    sub.add_parser("submit", help="queue a note for the curator: the note is read from stdin, its path is printed")
-    sub.add_parser("curate", help="merge the queued notes into the scope files: one model call, checks, a commit (run by a timer)")
-    sub.add_parser("skills", help="draft skill ideas from the memory into skill-ideas/ and print their paths (on demand)")
-    router = sub.add_parser(
-        "route", help="pick the repo a task belongs in among the repo directories on stdin (one per line); prints one JSON line"
+    sub.add_parser(
+        "submit",
+        help="queue a note for the curator: the note is read from stdin, its path is printed",
     )
-    router.add_argument("task", nargs="*", metavar="TASK", help="the task; put -- before one that starts with a dash")
-    hook = sub.add_parser("hook", help="a Claude Code hook: reads the hook input on stdin, prints its JSON output, always exits 0")
+    sub.add_parser(
+        "curate",
+        help="merge the queued notes into the scope files: one model call, checks, a commit (run by a timer)",
+    )
+    sub.add_parser(
+        "skills",
+        help="draft skill ideas from the memory into skill-ideas/ and print their paths (on demand)",
+    )
+    router = sub.add_parser(
+        "route",
+        help="pick the repo a task belongs in among the repo directories on stdin (one per line); prints one JSON line",
+    )
+    router.add_argument(
+        "task",
+        nargs="*",
+        metavar="TASK",
+        help="the task; put -- before one that starts with a dash",
+    )
+    hook = sub.add_parser(
+        "hook",
+        help="a Claude Code hook: reads the hook input on stdin, prints its JSON output, always exits 0",
+    )
     hook.add_argument(
         "hook_name",
         choices=hooks.HOOKS,
@@ -64,7 +82,9 @@ def _route(args: Args) -> str:
     task = " ".join(args.task)
     if not task.strip():
         raise UsageError("pass the task as arguments")
-    candidates = [Path(line.strip()) for line in data.read_stdin().splitlines() if line.strip()]
+    candidates = [
+        Path(line.strip()) for line in data.read_stdin().splitlines() if line.strip()
+    ]
     if not candidates:
         raise UsageError("pass the repo directories on stdin, one per line")
     _memory()
@@ -112,7 +132,12 @@ def main() -> None:
     except (ParseError, UsageError) as e:
         log.error("%s", e)
         sys.exit(2)
-    except (OSError, ValueError, locks.LockTimeout, llm.LlmError) as e:  # ValueError: text that cannot be written out
+    except (
+        OSError,
+        ValueError,
+        locks.LockTimeout,
+        llm.LlmError,
+    ) as e:  # ValueError: text that cannot be written out
         log.error("%s", e)
         sys.exit(1)
     if code:

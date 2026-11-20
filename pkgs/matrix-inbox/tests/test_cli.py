@@ -8,18 +8,25 @@ from pathlib import Path
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
 from fakes import FakeBus, FakeSeen, FakeTasks
 from matrix_inbox import cli
 from matrix_inbox.data import Json, dumps
 from matrix_inbox.handlers import BusError, Seen, Tasks
 from matrix_inbox.signed import Command
 
-FIELDS: dict[str, Json] = {"to": "yenn", "ref": "/r/x/reply", "text": "y", "body": "B", "event_id": "$e1"}
+FIELDS: dict[str, Json] = {
+    "to": "yenn",
+    "ref": "/r/x/reply",
+    "text": "y",
+    "body": "B",
+    "event_id": "$e1",
+}
 
 
 def public_b64(key: Ed25519PrivateKey) -> str:
-    raw = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    raw = key.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
     return base64.b64encode(raw).decode()
 
 
@@ -61,7 +68,10 @@ def feed(stdin: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):  # type:
         fd = os.open(path, os.O_RDONLY)
         os.dup2(fd, 0)
         os.close(fd)
-        monkeypatch.setattr("sys.stdin", io.TextIOWrapper(open(0, "rb", closefd=False), encoding="utf-8"))
+        monkeypatch.setattr(
+            "sys.stdin",
+            io.TextIOWrapper(open(0, "rb", closefd=False), encoding="utf-8"),  # noqa: SIM115
+        )
 
     return set_stdin
 
@@ -74,35 +84,68 @@ def run_answer() -> int:
     return code
 
 
-def test_key_unset_exits_2(guarded: None, feed, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:  # type: ignore[no-untyped-def]
+def test_key_unset_exits_2(
+    guarded: None,
+    feed,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     monkeypatch.delenv("MATRIX_GATEWAY_KEY", raising=False)
     feed(signed_line(Ed25519PrivateKey.generate()))
     assert run_answer() == 2
-    assert "set MATRIX_GATEWAY_KEY to the gateway's public key" in capsys.readouterr().err
+    assert (
+        "set MATRIX_GATEWAY_KEY to the gateway's public key" in capsys.readouterr().err
+    )
 
 
 @pytest.mark.parametrize(
     "value",
-    ["", "!!!not base64", "AAAA", base64.b64encode(b"x" * 31).decode(), base64.b64encode(b"x" * 33).decode()],
+    [
+        "",
+        "!!!not base64",
+        "AAAA",
+        base64.b64encode(b"x" * 31).decode(),
+        base64.b64encode(b"x" * 33).decode(),
+    ],
     ids=["empty", "not-base64", "short", "31-bytes", "33-bytes"],
 )
-def test_key_invalid_exits_2(value: str, guarded: None, feed, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:  # type: ignore[no-untyped-def]
+def test_key_invalid_exits_2(
+    value: str,
+    guarded: None,
+    feed,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     monkeypatch.setenv("MATRIX_GATEWAY_KEY", value)
     feed(signed_line(Ed25519PrivateKey.generate()))
     assert run_answer() == 2
-    assert "set MATRIX_GATEWAY_KEY to the gateway's public key" in capsys.readouterr().err
+    assert (
+        "set MATRIX_GATEWAY_KEY to the gateway's public key" in capsys.readouterr().err
+    )
 
 
-@pytest.mark.parametrize("kind", ["unsigned", "plain", "empty", "wrong-key", "tampered"])
-def test_bad_line_is_dropped_with_exit_1(kind: str, guarded: None, feed, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:  # type: ignore[no-untyped-def]
+@pytest.mark.parametrize(
+    "kind", ["unsigned", "plain", "empty", "wrong-key", "tampered"]
+)
+def test_bad_line_is_dropped_with_exit_1(
+    kind: str,
+    guarded: None,
+    feed,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     key = Ed25519PrivateKey.generate()
     monkeypatch.setenv("MATRIX_GATEWAY_KEY", public_b64(key))
     lines = {
-        "unsigned": dumps({"type": "matrix.reply", "msg": dumps(FIELDS, sort_keys=True)}),
+        "unsigned": dumps(
+            {"type": "matrix.reply", "msg": dumps(FIELDS, sort_keys=True)}
+        ),
         "plain": "nil body",
         "empty": "",
         "wrong-key": signed_line(Ed25519PrivateKey.generate()),
-        "tampered": signed_line(key).replace('\\"text\\":\\"y\\"', '\\"text\\":\\"z\\"'),
+        "tampered": signed_line(key).replace(
+            '\\"text\\":\\"y\\"', '\\"text\\":\\"z\\"'
+        ),
     }
     feed(lines[kind] + "\n")
     assert run_answer() == 1
@@ -148,7 +191,12 @@ def guarded_command(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.argv", ["matrix-inbox-command"])
 
 
-def test_command_key_unset_exits_2(guarded_command: None, feed, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:  # type: ignore[no-untyped-def]
+def test_command_key_unset_exits_2(
+    guarded_command: None,
+    feed,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     monkeypatch.delenv("MATRIX_GATEWAY_KEY", raising=False)
     feed(command_line(Ed25519PrivateKey.generate()))
     assert run_command_cli() == 2
@@ -157,30 +205,57 @@ def test_command_key_unset_exits_2(guarded_command: None, feed, monkeypatch: pyt
 
 @pytest.mark.parametrize(
     "value",
-    ["", "!!!not base64", "AAAA", base64.b64encode(b"x" * 31).decode(), base64.b64encode(b"x" * 33).decode()],
+    [
+        "",
+        "!!!not base64",
+        "AAAA",
+        base64.b64encode(b"x" * 31).decode(),
+        base64.b64encode(b"x" * 33).decode(),
+    ],
     ids=["empty", "not-base64", "short", "31-bytes", "33-bytes"],
 )
-def test_command_key_invalid_exits_2(value: str, guarded_command: None, feed, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:  # type: ignore[no-untyped-def]
+def test_command_key_invalid_exits_2(
+    value: str,
+    guarded_command: None,
+    feed,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     monkeypatch.setenv("MATRIX_GATEWAY_KEY", value)
     feed(command_line(Ed25519PrivateKey.generate()))
     assert run_command_cli() == 2
     assert KEY_HINT in capsys.readouterr().err
 
 
-def test_command_args_exit_2(guarded_command: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_command_args_exit_2(
+    guarded_command: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr("sys.argv", ["matrix-inbox-command", "extra"])
     assert run_command_cli() == 2
 
 
-@pytest.mark.parametrize("kind", ["unsigned", "plain", "empty", "wrong-key", "tampered", "reply-envelope"])
-def test_command_bad_line_is_dropped_with_exit_1(kind: str, guarded_command: None, feed, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:  # type: ignore[no-untyped-def]
+@pytest.mark.parametrize(
+    "kind", ["unsigned", "plain", "empty", "wrong-key", "tampered", "reply-envelope"]
+)
+def test_command_bad_line_is_dropped_with_exit_1(
+    kind: str,
+    guarded_command: None,
+    feed,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     key = Ed25519PrivateKey.generate()
     monkeypatch.setenv("MATRIX_GATEWAY_KEY", public_b64(key))
     valid = command_line(key)
     tampered = valid.replace('\\"text\\":\\"fix it\\"', '\\"text\\":\\"rm -rf\\"')
     assert tampered != valid
     lines = {
-        "unsigned": dumps({"type": "matrix.command", "msg": dumps({"kind": "matrix.command"}, sort_keys=True)}),
+        "unsigned": dumps(
+            {
+                "type": "matrix.command",
+                "msg": dumps({"kind": "matrix.command"}, sort_keys=True),
+            }
+        ),
         "plain": "nil body",
         "empty": "",
         "wrong-key": command_line(Ed25519PrivateKey.generate()),
@@ -200,7 +275,15 @@ class Wired:
         self.calls: list[tuple[Command, str, float, Seen, Tasks, FakeBus]] = []
         self.error: Exception | None = None
 
-    def run(self, cmd: Command, host: str, now: float, seen: Seen, tasks: Tasks, bus: FakeBus) -> None:
+    def run(
+        self,
+        cmd: Command,
+        host: str,
+        now: float,
+        seen: Seen,
+        tasks: Tasks,
+        bus: FakeBus,
+    ) -> None:
         self.calls.append((cmd, host, now, seen, tasks, bus))
         if self.error is not None:
             raise self.error
@@ -213,7 +296,9 @@ def wired(feed, monkeypatch: pytest.MonkeyPatch) -> Callable[..., Wired]:  # typ
         monkeypatch.setenv("MATRIX_GATEWAY_KEY", public_b64(key))
         monkeypatch.setattr("sys.argv", ["matrix-inbox-command"])
         monkeypatch.setattr(cli, "_host", lambda: "yenn")
-        w = Wired(FakeSeen(error=seen_error), FakeTasks({"type": "task.started"}), FakeBus())
+        w = Wired(
+            FakeSeen(error=seen_error), FakeTasks({"type": "task.started"}), FakeBus()
+        )
         monkeypatch.setattr(cli, "SeenDir", lambda path: w.seen)
         monkeypatch.setattr(cli, "ProcessTasks", lambda: w.tasks)
         monkeypatch.setattr(cli, "NatsBus", lambda url: w.bus)
@@ -237,15 +322,22 @@ def test_command_valid_runs_with_host_and_command(wired: Callable[..., Wired]) -
     assert seen is w.seen and tasks is w.tasks and bus is w.bus
 
 
-def test_command_bus_error_exits_1_with_one_line(wired: Callable[..., Wired], capsys: pytest.CaptureFixture[str]) -> None:
+def test_command_bus_error_exits_1_with_one_line(
+    wired: Callable[..., Wired], capsys: pytest.CaptureFixture[str]
+) -> None:
     w = wired()
     w.error = BusError("message bus unavailable")
     assert run_command_cli() == 1
     assert capsys.readouterr().err == COMMAND_ERR + "message bus unavailable\n"
 
 
-@pytest.mark.parametrize("error", [PermissionError(13, "Permission denied"), FileNotFoundError(2, "No such file")])
-def test_command_oserror_exits_1_with_one_line(error: OSError, wired: Callable[..., Wired], capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize(
+    "error",
+    [PermissionError(13, "Permission denied"), FileNotFoundError(2, "No such file")],
+)
+def test_command_oserror_exits_1_with_one_line(
+    error: OSError, wired: Callable[..., Wired], capsys: pytest.CaptureFixture[str]
+) -> None:
     w = wired()
     w.error = error
     assert run_command_cli() == 1
@@ -255,7 +347,9 @@ def test_command_oserror_exits_1_with_one_line(error: OSError, wired: Callable[.
     assert "Traceback" not in err
 
 
-def test_command_seen_dir_oserror_exits_1_without_start(wired: Callable[..., Wired], capsys: pytest.CaptureFixture[str]) -> None:
+def test_command_seen_dir_oserror_exits_1_without_start(
+    wired: Callable[..., Wired], capsys: pytest.CaptureFixture[str]
+) -> None:
     w = wired(seen_error=OSError(30, "Read-only file system"), real_handler=True)
     assert run_command_cli() == 1
     err = capsys.readouterr().err

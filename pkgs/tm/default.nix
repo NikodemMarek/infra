@@ -2,7 +2,6 @@
   lib,
   rustPlatform,
 }:
-
 rustPlatform.buildRustPackage {
   pname = "tm";
   version = "0.1.0";

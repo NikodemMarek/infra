@@ -1,7 +1,6 @@
 {
   config,
   lib,
-  pkgs,
   modulesPath,
   ...
 }: {
@@ -14,17 +13,19 @@
     })
   ];
 
-  boot.initrd.availableKernelModules = ["nvme" "xhci_pci" "ahci" "usbhid"];
-  boot.initrd.kernelModules = [];
-  boot.kernelModules = [
-    "kvm-amd"
-    "vfio_pci"
-    "vfio"
-    "vfio_iommu_type1"
-  ];
-  boot.kernelParams = [];
-  boot.extraModprobeConfig = "";
-  boot.extraModulePackages = [];
+  boot = {
+    initrd.availableKernelModules = ["nvme" "xhci_pci" "ahci" "usbhid"];
+    initrd.kernelModules = [];
+    kernelModules = [
+      "kvm-amd"
+      "vfio_pci"
+      "vfio"
+      "vfio_iommu_type1"
+    ];
+    kernelParams = [];
+    extraModprobeConfig = "";
+    extraModulePackages = [];
+  };
 
   nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";
   hardware.cpu.amd.updateMicrocode = lib.mkDefault config.hardware.enableRedistributableFirmware;

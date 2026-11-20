@@ -53,7 +53,9 @@ class HttpMatrix:
     def __init__(self, homeserver: str) -> None:
         self._base = homeserver.rstrip("/") + "/_matrix/client/v3"
         self._token: str | None = None
-        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
+        self._opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _NoRedirect
+        )
 
     def _call(
         self,
@@ -73,7 +75,9 @@ class HttpMatrix:
             data = dumps(body).encode()
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
-            response = cast(http.client.HTTPResponse, self._opener.open(request, timeout=timeout))
+            response = cast(
+                http.client.HTTPResponse, self._opener.open(request, timeout=timeout)
+            )
             with response:
                 raw = response.read()
         except urllib.error.HTTPError as e:
@@ -118,11 +122,21 @@ class HttpMatrix:
             "room_alias_name": alias_localpart,
             "name": "Agents",
             "invite": [invite],
-            "initial_state": [{"type": "m.room.retention", "state_key": "", "content": {"max_lifetime": 259200000}}],
+            "initial_state": [
+                {
+                    "type": "m.room.retention",
+                    "state_key": "",
+                    "content": {"max_lifetime": 259200000},
+                }
+            ],
         }
-        return _field(self._call("POST", "/createRoom", body=body), "room_id", "create room")
+        return _field(
+            self._call("POST", "/createRoom", body=body), "room_id", "create room"
+        )
 
-    def sync(self, room: str, since: str | None, timeout_ms: int) -> tuple[str, list[Obj]]:
+    def sync(
+        self, room: str, since: str | None, timeout_ms: int
+    ) -> tuple[str, list[Obj]]:
         sync_filter: Obj = {
             "room": {
                 "rooms": [room],
@@ -140,7 +154,9 @@ class HttpMatrix:
         result = self._call("GET", "/sync", query, timeout=SYNC_TIMEOUT)
         joined = get_obj(get_obj(result, "rooms") or {}, "join") or {}
         timeline = get_obj(get_obj(joined, room) or {}, "timeline") or {}
-        return _field(result, "next_batch", "sync"), _objects(get_list(timeline, "events"))
+        return _field(result, "next_batch", "sync"), _objects(
+            get_list(timeline, "events")
+        )
 
     def get_event(self, room: str, event_id: str) -> Obj | None:
         try:
@@ -148,7 +164,9 @@ class HttpMatrix:
         except _NotFound:
             return None
 
-    def send(self, room: str, content: Obj, txn: str, event_type: str = "m.room.message") -> str:
+    def send(
+        self, room: str, content: Obj, txn: str, event_type: str = "m.room.message"
+    ) -> str:
         path = f"/rooms/{_quote(room)}/send/{_quote(event_type)}/{_quote(txn)}"
         return _field(self._call("PUT", path, body=content), "event_id", "send")
 
@@ -166,6 +184,7 @@ class NatsBus:
                 encoding="utf-8",
                 errors="replace",
                 timeout=PUBLISH_TIMEOUT,
+                check=False,
             )
         except (OSError, subprocess.SubprocessError) as e:
             raise BusError(f"nats pub: {e}") from e

@@ -18,9 +18,22 @@ in {
     pkgs.nfs-utils
   ];
 
-  systemd.tmpfiles.rules = [
-    "d /run/flannel 0755 root root -"
-  ];
+  systemd = {
+    tmpfiles.rules = [
+      "d /run/flannel 0755 root root -"
+    ];
+
+    services.k3s = {
+      after = ["tailscaled.service"];
+      wants = ["tailscaled.service"];
+      path = [pkgs.tailscale];
+    };
+
+    network.networks."05-k3s-interfaces" = {
+      matchConfig.Name = "veth*";
+      linkConfig.Unmanaged = true;
+    };
+  };
 
   # a switch reloads the firewall; flushing the whole ruleset would drop kube-proxy's service rules
   networking.nftables.flushRuleset = false;
@@ -42,12 +55,6 @@ in {
         "--flannel-iface=tailscale0"
       ]
       ++ lib.optional (!isServer) "--disable-apiserver-lb";
-  };
-
-  systemd.services.k3s = {
-    after = ["tailscaled.service"];
-    wants = ["tailscaled.service"];
-    path = [pkgs.tailscale];
   };
 
   persist.generated.directories = [
@@ -84,10 +91,5 @@ in {
     checkReversePath = "loose";
 
     trustedInterfaces = ["cni0"];
-  };
-
-  systemd.network.networks."05-k3s-interfaces" = {
-    matchConfig.Name = "veth*";
-    linkConfig.Unmanaged = true;
   };
 }

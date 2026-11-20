@@ -1,8 +1,5 @@
 # run with: sudo nix --experimental-features "nix-command flakes" run github:nix-community/disko -- --mode disko ./btrfs-single-partition.nix --arg device '"/dev/sda"'
-{
-  device,
-  ...
-}: {
+{device, ...}: {
   disko.devices = {
     disk.single = {
       inherit device;

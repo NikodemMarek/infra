@@ -1,5 +1,4 @@
 import pytest
-
 from fakes import HOST, FakeBus, FakeLocal, item, permission, question
 from matrix_inbox import handlers, logic
 from matrix_inbox.data import Obj, dumps, loads
@@ -16,10 +15,18 @@ ANSWERED = "✅ Answered."
 TOO_LONG = "Too long to approve here: reply n to deny, or answer it on the computer."
 
 
-def reply_to(event: Obj, text: str, ref: str | None = None, body: str | None = None, to: str = HOST) -> Reply:
+def reply_to(
+    event: Obj,
+    text: str,
+    ref: str | None = None,
+    body: str | None = None,
+    to: str = HOST,
+) -> Reply:
     ref_value = ref if ref is not None else event.get("reply")
     assert isinstance(ref_value, str)
-    return Reply(to, ref_value, text, logic.render(event) if body is None else body, EVENT_ID)
+    return Reply(
+        to, ref_value, text, logic.render(event) if body is None else body, EVENT_ID
+    )
 
 
 def run(reply: Reply, items: list[Obj]) -> tuple[FakeLocal, FakeBus]:
@@ -48,7 +55,11 @@ def test_post_permission() -> None:
     handlers.post(event, HOST, bus)
     assert len(bus.published) == 1
     assert bus.published[0][0] == "matrix.send"
-    assert parsed(bus.published[0][1]) == {"to": "yenn", "ref": "/r/claude-hook-x/reply", "body": logic.render(event)}
+    assert parsed(bus.published[0][1]) == {
+        "to": "yenn",
+        "ref": "/r/claude-hook-x/reply",
+        "body": logic.render(event),
+    }
 
 
 def test_post_question() -> None:
@@ -57,7 +68,11 @@ def test_post_question() -> None:
     handlers.post(event, "yenn", bus)
     assert len(bus.published) == 1
     assert bus.published[0][0] == "matrix.send"
-    assert parsed(bus.published[0][1]) == {"to": "yenn", "ref": "/r/q1", "body": logic.render(event)}
+    assert parsed(bus.published[0][1]) == {
+        "to": "yenn",
+        "ref": "/r/q1",
+        "body": logic.render(event),
+    }
 
 
 def test_post_is_one_line_and_not_ascii_escaped() -> None:
@@ -198,7 +213,9 @@ def test_answer_empty_inbox() -> None:
 
 def test_answer_claimant_event_not_offered() -> None:
     waiting: Obj = {"type": "claude.waiting", "reply": "/r/p"}
-    local, bus = run(Reply(HOST, "/r/p", "y", "whatever", EVENT_ID), [item("A", waiting)])
+    local, bus = run(
+        Reply(HOST, "/r/p", "y", "whatever", EVENT_ID), [item("A", waiting)]
+    )
     assert local.replies == []
     assert bus.notices() == [GONE]
 
@@ -230,7 +247,10 @@ def test_answer_body_of_a_later_item_with_same_ref_is_a_mismatch() -> None:
 def test_answer_body_differs_by_one_char() -> None:
     event = permission()
     body = logic.render(event)
-    local, bus = run(reply_to(event, "y", body=body[:-1] + ("!" if body[-1] != "!" else "?")), [item("A", event)])
+    local, bus = run(
+        reply_to(event, "y", body=body[:-1] + ("!" if body[-1] != "!" else "?")),
+        [item("A", event)],
+    )
     assert local.replies == []
     assert bus.notices() == [MISMATCH]
 
@@ -307,10 +327,17 @@ def test_answer_bus_error_on_notice_propagates(text: str) -> None:
     event = permission()
     local = FakeLocal([item("A", event)])
     with pytest.raises(BusError):
-        handlers.answer(reply_to(event, text), HOST, local, FakeBus(error=BusError("down")))
+        handlers.answer(
+            reply_to(event, text), HOST, local, FakeBus(error=BusError("down"))
+        )
 
 
 def test_answer_bus_error_on_gone_notice_propagates() -> None:
     event = permission()
     with pytest.raises(BusError):
-        handlers.answer(reply_to(event, "y", ref="/r/gone"), HOST, FakeLocal([]), FakeBus(error=BusError("down")))
+        handlers.answer(
+            reply_to(event, "y", ref="/r/gone"),
+            HOST,
+            FakeLocal([]),
+            FakeBus(error=BusError("down")),
+        )

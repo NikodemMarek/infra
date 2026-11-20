@@ -7,7 +7,7 @@
       inherit prev;
     };
 
-  inputs-packages = final: prev: {
+  inputs-packages = _: prev: {
     inherit (inputs.hyprland.packages.${prev.stdenv.hostPlatform.system}) hyprland xdg-desktop-portal-hyprland;
     neovim = inputs.neovim.packages.${prev.stdenv.hostPlatform.system}.default;
     inherit (inputs.zen-browser.packages.${prev.stdenv.hostPlatform.system}) zen-browser;

@@ -31,7 +31,9 @@ PROMPT = "curator.md"
 MARKER = "curate.running"  # in the state dir
 
 _CURATOR = re.compile(r"global\.md|(?:topic|lang|org)/.+|projects/[^/]+/facts\.md")
-_SCOPE_FILE = re.compile(r"global\.md|(?:topic|lang|org)/[^/]+\.md|projects/[^/]+/facts\.md")  # not a reference doc
+_SCOPE_FILE = re.compile(
+    r"global\.md|(?:topic|lang|org)/[^/]+\.md|projects/[^/]+/facts\.md"
+)  # not a reference doc
 
 
 def _files(git: Git) -> list[str]:
@@ -50,7 +52,13 @@ def _changed(git: Git, files: Sequence[str]) -> list[str]:
 
 def _edit_globs(memory: Path) -> list[str]:
     root = memory.resolve()
-    return [f"{root}/global.md", f"{root}/topic/**", f"{root}/lang/**", f"{root}/org/**", f"{root}/projects/*/facts.md"]
+    return [
+        f"{root}/global.md",
+        f"{root}/topic/**",
+        f"{root}/lang/**",
+        f"{root}/org/**",
+        f"{root}/projects/*/facts.md",
+    ]
 
 
 def _read(path: Path) -> str:
@@ -60,7 +68,9 @@ def _read(path: Path) -> str:
         return ""
 
 
-def _message(memory: Path, snapshot: Sequence[tuple[Path, str]], files: Sequence[str], nonce: str) -> str:
+def _message(
+    memory: Path, snapshot: Sequence[tuple[Path, str]], files: Sequence[str], nonce: str
+) -> str:
     """The notes (read here: the model needs no access to the inbox), the caps with the sizes, and CLAUDE.md.
 
     Every real note heading carries the nonce of this run, which no note text can know: a heading without it is note text."""
@@ -71,8 +81,17 @@ def _message(memory: Path, snapshot: Sequence[tuple[Path, str]], files: Sequence
         "",
     ]
     for path, text in snapshot:
-        lines += [f"### {path.stem} — origin: {notes.origin_of(path)} — nonce: {nonce}", "", text.strip(), ""]
-    scope_files = [rel for rel in files if _SCOPE_FILE.fullmatch(rel) is not None and (memory / rel).is_file()]
+        lines += [
+            f"### {path.stem} — origin: {notes.origin_of(path)} — nonce: {nonce}",
+            "",
+            text.strip(),
+            "",
+        ]
+    scope_files = [
+        rel
+        for rel in files
+        if _SCOPE_FILE.fullmatch(rel) is not None and (memory / rel).is_file()
+    ]
     sizes = [f"- {rel}: {(memory / rel).stat().st_size} B" for rel in scope_files]
     lines += [
         "# Caps",
@@ -123,7 +142,9 @@ def _curate(git: Git, memory: Path, pending: Sequence[Path]) -> int:
     marker = config.ensure_private(config.state_dir()) / MARKER
     marker.touch()
     try:
-        answer = ClaudeCli(edits=_edit_globs(memory)).run(prompts.read(PROMPT), message, [])
+        answer = ClaudeCli(edits=_edit_globs(memory)).run(
+            prompts.read(PROMPT), message, []
+        )
         problem = _problem(git, memory)
         if problem is None:
             git.commit(_files(git), f"curator: {len(pending)} notes", answer)
@@ -164,7 +185,10 @@ def run() -> int:
         git.ensure_repo()
         marker = config.state_dir() / MARKER
         if marker.exists():
-            log.warning("%s: an earlier run did not finish, reverting the curator paths (unchecked)", marker)
+            log.warning(
+                "%s: an earlier run did not finish, reverting the curator paths (unchecked)",
+                marker,
+            )
             files = _files(git)
             git.restore(files, files)  # a GitError ends the run with the marker kept
             marker.unlink()

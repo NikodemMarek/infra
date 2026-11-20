@@ -59,7 +59,9 @@ class FakeLocal:
 class FakeSeen:
     """The `Seen` of the tests: a set of claimed ids, or raises `error` when set."""
 
-    def __init__(self, claimed: set[str] | None = None, error: OSError | None = None) -> None:
+    def __init__(
+        self, claimed: set[str] | None = None, error: OSError | None = None
+    ) -> None:
         self.claimed: set[str] = set(claimed) if claimed is not None else set()
         self.error = error
         self.calls: list[str] = []
@@ -90,7 +92,9 @@ def item(item_id: str, event: Obj, received: float = 1.0) -> Obj:
     return {"id": item_id, "received": received, "event": event}
 
 
-def permission(reply: str | None = "/r/p", command: str = "ls -la", **extra: Json) -> Obj:
+def permission(
+    reply: str | None = "/r/p", command: str = "ls -la", **extra: Json
+) -> Obj:
     event: Obj = {
         "type": PERMISSION,
         "project": "infra",
@@ -106,10 +110,21 @@ def permission(reply: str | None = "/r/p", command: str = "ls -la", **extra: Jso
 
 
 def question(reply: str | None = "/r/q", multi: bool = False, **extra: Json) -> Obj:
-    q: Obj = {"question": "Which db?", "options": [{"label": "A"}, {"label": "B", "description": "fast"}, {"label": "C"}]}
+    q: Obj = {
+        "question": "Which db?",
+        "options": [
+            {"label": "A"},
+            {"label": "B", "description": "fast"},
+            {"label": "C"},
+        ],
+    }
     if multi:
         q["multiSelect"] = True
-    event: Obj = {"type": QUESTION, "project": "infra", "tool_input": {"questions": [q]}}
+    event: Obj = {
+        "type": QUESTION,
+        "project": "infra",
+        "tool_input": {"questions": [q]},
+    }
     if reply is not None:
         event["reply"] = reply
     event.update(extra)

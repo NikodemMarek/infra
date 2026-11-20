@@ -15,7 +15,11 @@ class LlmCall:
 class FakeLlm:
     """The `Llm` of the tests: `responder(message)` is the text the model answers, or `error` is raised."""
 
-    def __init__(self, responder: Callable[[str], str] | None = None, error: LlmError | None = None) -> None:
+    def __init__(
+        self,
+        responder: Callable[[str], str] | None = None,
+        error: LlmError | None = None,
+    ) -> None:
         self.responder = responder or _empty_answer
         self.error = error
         self.calls: list[LlmCall] = []

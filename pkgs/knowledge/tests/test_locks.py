@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-
 from knowledge import locks
 from knowledge.locks import FileLock, LockTimeout
 
@@ -29,17 +28,14 @@ def test_the_lock_dir_is_private(tmp_path: Path):
 
 def test_waiting_for_a_lock_times_out(tmp_path: Path):
     path = tmp_path / "a.lock"
-    with FileLock(path):
-        with pytest.raises(LockTimeout):
-            with FileLock(path, 0.05, poll=0.01):
-                pass
+    with FileLock(path), pytest.raises(LockTimeout), FileLock(path, 0.05, poll=0.01):
+        pass
     with FileLock(path, 0.05, poll=0.01):
         pass
 
 
 def test_the_lock_is_released_when_the_block_raises(tmp_path: Path):
     path = tmp_path / "a.lock"
-    with pytest.raises(RuntimeError):
-        with FileLock(path):
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError), FileLock(path):
+        raise RuntimeError("boom")
     assert FileLock(path).acquire()

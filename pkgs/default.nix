@@ -9,24 +9,24 @@
   pkgs,
   prev,
 }: {
-  zellij = pkgs.callPackage ./zellij {zellij = prev.zellij;};
-  hyprland = pkgs.callPackage ./hyprland {hyprland = prev.hyprland;};
-  hyprlock = pkgs.callPackage ./hyprlock {hyprlock = prev.hyprlock;};
-  hypridle = pkgs.callPackage ./hypridle {hypridle = prev.hypridle;};
-  hyprpaper = pkgs.callPackage ./hyprpaper {hyprpaper = prev.hyprpaper;};
-  rofi = pkgs.callPackage ./rofi {rofi = prev.rofi;};
-  dunst = pkgs.callPackage ./dunst {dunst = prev.dunst;};
-  jujutsu = pkgs.callPackage ./jujutsu {jujutsu = prev.jujutsu;};
-  waybar = pkgs.callPackage ./waybar {waybar = prev.waybar;};
-  kanshi = pkgs.callPackage ./kanshi {kanshi = prev.kanshi;};
-  obsidian = pkgs.callPackage ./obsidian {obsidian = prev.obsidian;};
-  zen-browser = pkgs.callPackage ./zen-browser {zen-browser = prev.zen-browser;};
-  heroic = pkgs.callPackage ./heroic {heroic = prev.heroic;};
-  moonlight-qt = pkgs.callPackage ./moonlight-qt {moonlight-qt = prev.moonlight-qt;};
-  prismlauncher = pkgs.callPackage ./prismlauncher {prismlauncher = prev.prismlauncher;};
-  glab = pkgs.callPackage ./glab {glab = prev.glab;};
-  gh = pkgs.callPackage ./gh {gh = prev.gh;};
-  nats-server = pkgs.callPackage ./nats-server {nats-server = prev.nats-server;};
+  zellij = pkgs.callPackage ./zellij {inherit (prev) zellij;};
+  hyprland = pkgs.callPackage ./hyprland {inherit (prev) hyprland;};
+  hyprlock = pkgs.callPackage ./hyprlock {inherit (prev) hyprlock;};
+  hypridle = pkgs.callPackage ./hypridle {inherit (prev) hypridle;};
+  hyprpaper = pkgs.callPackage ./hyprpaper {inherit (prev) hyprpaper;};
+  rofi = pkgs.callPackage ./rofi {inherit (prev) rofi;};
+  dunst = pkgs.callPackage ./dunst {inherit (prev) dunst;};
+  jujutsu = pkgs.callPackage ./jujutsu {inherit (prev) jujutsu;};
+  waybar = pkgs.callPackage ./waybar {inherit (prev) waybar;};
+  kanshi = pkgs.callPackage ./kanshi {inherit (prev) kanshi;};
+  obsidian = pkgs.callPackage ./obsidian {inherit (prev) obsidian;};
+  zen-browser = pkgs.callPackage ./zen-browser {inherit (prev) zen-browser;};
+  heroic = pkgs.callPackage ./heroic {inherit (prev) heroic;};
+  moonlight-qt = pkgs.callPackage ./moonlight-qt {inherit (prev) moonlight-qt;};
+  prismlauncher = pkgs.callPackage ./prismlauncher {inherit (prev) prismlauncher;};
+  glab = pkgs.callPackage ./glab {inherit (prev) glab;};
+  gh = pkgs.callPackage ./gh {inherit (prev) gh;};
+  nats-server = pkgs.callPackage ./nats-server {inherit (prev) nats-server;};
   # No nixpkgs `claude` (it wraps `claude-code`). The nulls pin the "use the
   # bundled default" arguments so a same-named top-level package (e.g. `skills`)
   # is never auto-injected by callPackage.
@@ -40,10 +40,10 @@
   # Standalone tools. claude takes knowledge, claude-hooks, claude-statusline
   # and jj-upload from the package set, so overrides of them propagate.
   # jj-upload needs the upstream jj: the wrapped one bundles jj-upload (recursion).
-  jj-upload = pkgs.callPackage ./jj-upload {jujutsu = prev.jujutsu;};
-  jw = pkgs.callPackage ./jw {jujutsu = prev.jujutsu;};
+  jj-upload = pkgs.callPackage ./jj-upload {inherit (prev) jujutsu;};
+  jw = pkgs.callPackage ./jw {inherit (prev) jujutsu;};
   jail = pkgs.callPackage ./jail {};
-  bitwarden-cli = pkgs.callPackage ./bitwarden-cli {bitwarden-cli = prev.bitwarden-cli;};
+  bitwarden-cli = pkgs.callPackage ./bitwarden-cli {inherit (prev) bitwarden-cli;};
   wallpaper = pkgs.callPackage ./wallpaper {};
   dictate = pkgs.callPackage ./dictate {};
   agent-skills = pkgs.callPackage ./agent-skills {};

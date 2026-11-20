@@ -74,7 +74,7 @@
   # The inventory of a profile: its keys in secretspec.toml, minus the ones that
   # only feed a `composed` secret (they are never written to the sops file).
   host = config.networking.hostName;
-  profiles = (builtins.fromTOML (builtins.readFile ../../secretspec.toml)).profiles;
+  inherit ((builtins.fromTOML (builtins.readFile ../../secretspec.toml))) profiles;
   keysOf = name: let
     profile = profiles.${name} or {};
     composed = lib.mapAttrsToList (_: spec: spec.composed or "") profile;

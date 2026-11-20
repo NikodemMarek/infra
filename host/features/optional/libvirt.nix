@@ -6,8 +6,16 @@
     pkgs.virt-manager
   ];
 
-  boot.kernelModules = ["kvm-amd"];
-  boot.kernelParams = ["amd_iommu=on"];
+  boot = {
+    kernelModules = ["kvm-amd"];
+    kernelParams = ["amd_iommu=on"];
+    initrd.kernelModules = [
+      "vfio_pci"
+      "vfio"
+      "vfio_iommu_type1"
+    ];
+  };
+
   virtualisation.libvirtd = {
     enable = true;
     qemu = {
@@ -16,12 +24,6 @@
       swtpm.enable = true;
     };
   };
-
-  boot.initrd.kernelModules = [
-    "vfio_pci"
-    "vfio"
-    "vfio_iommu_type1"
-  ];
 
   networking = {
     firewall.trustedInterfaces = ["virbr0"];

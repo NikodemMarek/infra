@@ -45,7 +45,9 @@ class FakeMatrix:
         self.created.append((alias_localpart, invite))
         return self.created_room
 
-    def sync(self, room: str, since: str | None, timeout_ms: int) -> tuple[str, list[Obj]]:
+    def sync(
+        self, room: str, since: str | None, timeout_ms: int
+    ) -> tuple[str, list[Obj]]:
         self.sync_calls.append((room, since, timeout_ms))
         if self.script:
             return self.script.pop(0)
@@ -57,7 +59,9 @@ class FakeMatrix:
             raise error
         return self.events.get(event_id)
 
-    def send(self, room: str, content: Obj, txn: str, event_type: str = "m.room.message") -> str:
+    def send(
+        self, room: str, content: Obj, txn: str, event_type: str = "m.room.message"
+    ) -> str:
         self.send_attempts.append(txn)
         if self.send_failures:
             raise self.send_failures.pop(0)
@@ -66,7 +70,12 @@ class FakeMatrix:
         return event_id
 
     def add_event(self, event_id: str, sender: str, content: Obj) -> None:
-        self.events[event_id] = {"event_id": event_id, "type": "m.room.message", "sender": sender, "content": content}
+        self.events[event_id] = {
+            "event_id": event_id,
+            "type": "m.room.message",
+            "sender": sender,
+            "content": content,
+        }
 
     def notices(self) -> list[Sent]:
         return [s for s in self.sent if s.content.get("msgtype") == "m.notice"]
@@ -104,4 +113,9 @@ def owner_message(
     content: Obj = {"msgtype": msgtype, "body": body}
     if relates:
         content["m.relates_to"] = relates
-    return {"type": event_type, "sender": sender, "event_id": event_id, "content": content}
+    return {
+        "type": event_type,
+        "sender": sender,
+        "event_id": event_id,
+        "content": content,
+    }

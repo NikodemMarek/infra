@@ -82,6 +82,12 @@ def open_command(line: str, key: Ed25519PublicKey) -> Command | None:
     text = get_str(fields, "text")
     event_id = get_str(fields, "event_id")
     ts = fields.get("ts")
-    if to is None or text is None or event_id is None or not isinstance(ts, int) or isinstance(ts, bool):
+    if (
+        to is None
+        or text is None
+        or event_id is None
+        or not isinstance(ts, int)
+        or isinstance(ts, bool)
+    ):
         return None
     return Command(to, text, event_id, ts)

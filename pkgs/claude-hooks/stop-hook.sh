@@ -10,14 +10,14 @@ input=$(cat)
 pointer=""
 dir="${CLAUDE_EVENT_SESSION_DIR:-}"
 if [ -n "$dir" ] && [ -d "$dir" ]; then
-  paths="$(claude-event-queue take "$dir")"
-  if [ -n "$paths" ]; then
-    pointer="New GitLab activity on this MR, read: ${paths//$'\n'/ }"
-  fi
+	paths="$(claude-event-queue take "$dir")"
+	if [ -n "$paths" ]; then
+		pointer="New GitLab activity on this MR, read: ${paths//$'\n'/ }"
+	fi
 fi
 if [ -n "$pointer" ]; then
-  jq -n --arg r "$pointer" '{decision:"block",reason:$r}'
-  exit 0
+	jq -n --arg r "$pointer" '{decision:"block",reason:$r}'
+	exit 0
 fi
 [ -n "${AGENT_SESSION:-}" ] || exit 0
 claude-status-hook idle <<<"$input"
@@ -27,5 +27,5 @@ jq -c '([.last_assistant_message | strings | split("\n")[] | select(startswith("
   | . + {title: $title, timeout: 86400}
   + (if (.session_id | type) == "string" and .session_id != "" then {key: .session_id} else {} end)
   + (if (.last_assistant_message | type) == "string" then {body: .last_assistant_message[0:1000]} else {} end)' <<<"$input" |
-  claude-route-event claude.waiting >&2
+	claude-route-event claude.waiting >&2
 exit 0

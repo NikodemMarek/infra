@@ -12,11 +12,15 @@ PERM = "claude.permission_request"
 
 class EventType(unittest.TestCase):
     def test_argument_wins(self):
-        self.assertEqual(event_type("sudo.password_request", {"tool_name": "AskUserQuestion"}),
-                         "sudo.password_request")
+        self.assertEqual(
+            event_type("sudo.password_request", {"tool_name": "AskUserQuestion"}),
+            "sudo.password_request",
+        )
 
     def test_question(self):
-        self.assertEqual(event_type("", {"tool_name": "AskUserQuestion"}), "claude.question")
+        self.assertEqual(
+            event_type("", {"tool_name": "AskUserQuestion"}), "claude.question"
+        )
 
     def test_default(self):
         self.assertEqual(event_type("", {"tool_name": "Bash"}), PERM)
@@ -33,20 +37,32 @@ class Title(unittest.TestCase):
         self.assertEqual(title({"title": 5, "tool_name": "Read"}, PERM), "Read")
 
     def test_question(self):
-        inp = {"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Which?"}]}}
+        inp = {
+            "tool_name": "AskUserQuestion",
+            "tool_input": {"questions": [{"question": "Which?"}]},
+        }
         self.assertEqual(title(inp, "claude.question"), "Which?")
 
     def test_malformed_questions(self):
         for questions in ([], [None], [{"question": ""}], [{"question": 1}], "x", None):
-            inp = {"tool_name": "AskUserQuestion", "tool_input": {"questions": questions}}
+            inp = {
+                "tool_name": "AskUserQuestion",
+                "tool_input": {"questions": questions},
+            }
             self.assertEqual(title(inp, "claude.question"), "AskUserQuestion")
 
     def test_bash_description(self):
-        inp = {"tool_name": "Bash", "tool_input": {"description": "List", "command": "ls"}}
+        inp = {
+            "tool_name": "Bash",
+            "tool_input": {"description": "List", "command": "ls"},
+        }
         self.assertEqual(title(inp, PERM), "List")
 
     def test_bash_command_first_line(self):
-        inp = {"tool_name": "Bash", "tool_input": {"description": "", "command": "echo a\necho b"}}
+        inp = {
+            "tool_name": "Bash",
+            "tool_input": {"description": "", "command": "echo a\necho b"},
+        }
         self.assertEqual(title(inp, PERM), "echo a")
 
     def test_bash_command_leading_blank_lines(self):
@@ -62,11 +78,19 @@ class Title(unittest.TestCase):
         self.assertEqual(title(inp, PERM), "Task")
 
     def test_file_path_relative_to_cwd(self):
-        inp = {"tool_name": "Edit", "cwd": "/a/b", "tool_input": {"file_path": "/a/b/src/x.py"}}
+        inp = {
+            "tool_name": "Edit",
+            "cwd": "/a/b",
+            "tool_input": {"file_path": "/a/b/src/x.py"},
+        }
         self.assertEqual(title(inp, PERM), "Edit src/x.py")
 
     def test_file_path_outside_cwd(self):
-        inp = {"tool_name": "Edit", "cwd": "/a/b", "tool_input": {"file_path": "/a/bc/x.py"}}
+        inp = {
+            "tool_name": "Edit",
+            "cwd": "/a/b",
+            "tool_input": {"file_path": "/a/bc/x.py"},
+        }
         self.assertEqual(title(inp, PERM), "Edit /a/bc/x.py")
 
     def test_file_path_without_cwd(self):
@@ -96,8 +120,16 @@ class Title(unittest.TestCase):
             self.assertEqual(title(inp, PERM), "Bash")
 
     def test_non_string_values(self):
-        inp = {"tool_name": "Bash", "cwd": 3, "tool_input": {"description": 1, "command": ["ls"],
-                                                             "file_path": 2, "url": {}}}
+        inp = {
+            "tool_name": "Bash",
+            "cwd": 3,
+            "tool_input": {
+                "description": 1,
+                "command": ["ls"],
+                "file_path": 2,
+                "url": {},
+            },
+        }
         self.assertEqual(title(inp, PERM), "Bash")
         self.assertEqual(title({"tool_name": 7}, PERM), PERM)
 
@@ -114,13 +146,17 @@ class Enrich(unittest.TestCase):
         self.assertIsNone(enrich({}, PERM)["project"])
 
     def test_env_added_when_set(self):
-        with mock.patch.dict(os.environ, {"SHPOOL_SESSION_NAME": "s1", "AGENT_SESSION": "s2"}):
+        with mock.patch.dict(
+            os.environ, {"SHPOOL_SESSION_NAME": "s1", "AGENT_SESSION": "s2"}
+        ):
             event = enrich({}, PERM)
         self.assertEqual(event["shpool"], "s1")
         self.assertEqual(event["session"], "s2")
 
     def test_env_absent_when_empty(self):
-        with mock.patch.dict(os.environ, {"SHPOOL_SESSION_NAME": "", "AGENT_SESSION": ""}):
+        with mock.patch.dict(
+            os.environ, {"SHPOOL_SESSION_NAME": "", "AGENT_SESSION": ""}
+        ):
             event = enrich({}, PERM)
         self.assertNotIn("shpool", event)
         self.assertNotIn("session", event)
@@ -131,7 +167,9 @@ class Enrich(unittest.TestCase):
             self.assertNotIn("session", enrich({}, PERM))
 
     def test_origin_file_never_set(self):
-        with mock.patch.dict(os.environ, {"CLAUDE_ORIGIN_FILE": "/o", "AGENT_SESSION": "s"}):
+        with mock.patch.dict(
+            os.environ, {"CLAUDE_ORIGIN_FILE": "/o", "AGENT_SESSION": "s"}
+        ):
             self.assertNotIn("origin_file", enrich({}, PERM))
 
 
@@ -142,8 +180,10 @@ class Main(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         path = os.path.join(tmp.name, "event-pub")
         with open(path, "w") as f:
-            f.write(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > '{tmp.name}/argv'\ncat > '{tmp.name}/stdin'\n"
-                    f"echo '{stderr}' >&2\nexit {code}\n")
+            f.write(
+                f"#!/bin/sh\nprintf '%s\\n' \"$@\" > '{tmp.name}/argv'\ncat > '{tmp.name}/stdin'\n"
+                f"echo '{stderr}' >&2\nexit {code}\n"
+            )
         os.chmod(path, 0o755)
         return tmp.name
 
@@ -151,13 +191,21 @@ class Main(unittest.TestCase):
         """Returns (exit code, stderr); stdout must stay empty. PATH holds only path_dir
         (plus the system dirs of sh/cat for the fake)."""
         out, err = io.StringIO(), io.StringIO()
-        path = os.pathsep.join([path_dir, os.environ["PATH"]]) if path_dir else "/nonexistent-bin"
-        with (mock.patch("sys.argv", list(argv)),
-              mock.patch("sys.stdin", io.StringIO(stdin)),
-              mock.patch("sys.stdout", out),
-              mock.patch("sys.stderr", err),
-              mock.patch.dict(os.environ, {"PATH": path, "SHPOOL_SESSION_NAME": "",
-                                           "AGENT_SESSION": ""})):
+        path = (
+            os.pathsep.join([path_dir, os.environ["PATH"]])
+            if path_dir
+            else "/nonexistent-bin"
+        )
+        with (
+            mock.patch("sys.argv", list(argv)),
+            mock.patch("sys.stdin", io.StringIO(stdin)),
+            mock.patch("sys.stdout", out),
+            mock.patch("sys.stderr", err),
+            mock.patch.dict(
+                os.environ,
+                {"PATH": path, "SHPOOL_SESSION_NAME": "", "AGENT_SESSION": ""},
+            ),
+        ):
             code = main()
         self.assertEqual(out.getvalue(), "")
         return code, err.getvalue()
@@ -186,12 +234,22 @@ class Main(unittest.TestCase):
         with open(os.path.join(d, "argv")) as f:
             self.assertEqual(f.read(), PERM + "\n")
         with open(os.path.join(d, "stdin")) as f:
-            self.assertEqual(json.load(f), {"cwd": "/nonexistent", "tool_name": "Read", "type": PERM,
-                                            "project": "nonexistent", "title": "Read"})
+            self.assertEqual(
+                json.load(f),
+                {
+                    "cwd": "/nonexistent",
+                    "tool_name": "Read",
+                    "type": PERM,
+                    "project": "nonexistent",
+                    "title": "Read",
+                },
+            )
 
     def test_explicit_type_is_the_argument(self):
         d = self.fake_pub()
-        code, _ = self.run_main('{"title": "T"}', d, ("claude-route-event", "sudo.password_request"))
+        code, _ = self.run_main(
+            '{"title": "T"}', d, ("claude-route-event", "sudo.password_request")
+        )
         self.assertEqual(code, 0)
         with open(os.path.join(d, "argv")) as f:
             self.assertEqual(f.read(), "sudo.password_request\n")
