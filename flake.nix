@@ -17,7 +17,7 @@
     };
 
     # Overridden at build time with `--override-input` (host-switch, host-deploy,
-    # install-remote) by the directory `secrets-build` writes, see devenv.nix
+    # install-remote) by the directory `secrets-build` writes, see pkgs/secrets-build
     secrets = {
       url = "path:./secrets-stub";
       flake = false;

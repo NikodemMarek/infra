@@ -1,6 +1,6 @@
 # Provider for the secrets contract (modules/host/secrets.nix): decrypts
 # <host>.yaml from the `secrets` flake input with sops-nix.
-# The file is generated from SecretSpec by `secrets-build` (see devenv.nix); the
+# The file is generated from SecretSpec by `secrets-build` (see pkgs/secrets-build); the
 # `host-switch`, `host-deploy` and `install-remote` scripts pass the directory
 # with `--override-input secrets`. It is never committed. Secret names are flat
 # top-level keys in it.

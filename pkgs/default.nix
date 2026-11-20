@@ -46,6 +46,7 @@
   bitwarden-cli = pkgs.callPackage ./bitwarden-cli {inherit (prev) bitwarden-cli;};
   bws = pkgs.callPackage ./bws {};
   bws-project = pkgs.callPackage ./bws-project {};
+  secrets-build = pkgs.callPackage ./secrets-build {};
   infra-tofu = pkgs.callPackage ./infra-tofu {};
   wallpaper = pkgs.callPackage ./wallpaper {};
   dictate = pkgs.callPackage ./dictate {};
