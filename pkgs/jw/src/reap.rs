@@ -5,7 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::agent::runtime_dir;
-use crate::cmd::which;
+use crate::cmd::{output_timeout, which};
 use crate::jj::Jj;
 use crate::msg::deliver;
 use crate::procs::{claude_sessions, descendants, in_use, live_claudes, session_top, Claude};
@@ -365,17 +365,40 @@ fn reap_record(name: &str, r: &Record, now: f64, seen: &mut HashSet<String>) {
         return;
     }
     if r.notified.is_none() && !claude_sessions(&path).is_empty() {
-        match Jj::in_dir(&path).stack_merged() {
-            None => eprintln!("jw: {name}: couldn't check the stack"),
-            Some(true) => {
-                if let Err(e) = deliver(name, WRAP_UP, "jw-reap", Duration::ZERO) {
-                    eprintln!("jw: {name}: {e}");
-                }
-                mark_record(name, |r| r.notified = Some(now));
-                println!("notified {name}");
+        let Some(states) = r
+            .mrs
+            .iter()
+            .map(|u| mr_state(u))
+            .collect::<Option<Vec<_>>>()
+        else {
+            eprintln!("jw: {name}: couldn't check its MRs");
+            return;
+        };
+        let newly = newly_merged(&r.mrs, &states, &r.merged_mrs);
+        let finished = mrs_merged(&states) && {
+            let stack = Jj::in_dir(&path).stack_merged();
+            if stack.is_none() {
+                eprintln!("jw: {name}: couldn't check the stack");
             }
-            Some(false) => {}
+            stack == Some(true)
+        };
+        let text = if finished {
+            WRAP_UP.to_string()
+        } else if newly.is_empty() {
+            return;
+        } else {
+            merged_message(&newly)
+        };
+        if let Err(e) = deliver(name, &text, "jw-reap", Duration::ZERO) {
+            eprintln!("jw: {name}: {e}");
         }
+        mark_record(name, |r| {
+            r.merged_mrs.extend(newly);
+            if finished {
+                r.notified = Some(now);
+            }
+        });
+        println!("notified {name}");
         return;
     }
     match retire(&home, &ws_name, true, FINISHED_IDLE) {
@@ -392,6 +415,46 @@ fn reap_record(name: &str, r: &Record, now: f64, seen: &mut HashSet<String>) {
             }
         }
     }
+}
+
+/// The state of the MR or PR at url, lowercased (open, opened, merged, closed); None if it couldn't be read.
+fn mr_state(url: &str) -> Option<String> {
+    let mut cmd = if url.contains("://github.com/") {
+        let mut c = Command::new("gh");
+        c.args(["pr", "view", url, "--json", "state", "--jq", ".state"]);
+        c
+    } else {
+        let (repo, iid) = url.split_once("/-/merge_requests/")?;
+        let mut c = Command::new("glab");
+        c.args([
+            "mr", "view", iid, "-R", repo, "-F", "json", "--jq", ".state",
+        ]);
+        c
+    };
+    let out = output_timeout(&mut cmd, None, Duration::from_secs(60)).ok()??;
+    let state = String::from_utf8_lossy(&out.stdout).trim().to_lowercase();
+    (out.status.success() && !state.is_empty()).then_some(state)
+}
+
+/// Whether a session's MRs are finished: none is open and at least one is merged.
+fn mrs_merged(states: &[String]) -> bool {
+    states.iter().all(|s| s == "merged" || s == "closed") && states.iter().any(|s| s == "merged")
+}
+
+/// The merged MRs among mrs (with their states) that the session hasn't been told about.
+fn newly_merged(mrs: &[String], states: &[String], told: &[String]) -> Vec<String> {
+    mrs.iter()
+        .zip(states)
+        .filter(|(u, s)| *s == "merged" && !told.contains(u))
+        .map(|(u, _)| u.clone())
+        .collect()
+}
+
+fn merged_message(urls: &[String]) -> String {
+    format!(
+        "Merged: {}. Run `jj upload` so what is still open is rebased onto trunk.",
+        urls.join(", ")
+    )
 }
 
 fn stuck(c: &Claude) -> bool {
@@ -493,4 +556,33 @@ pub fn cmd_reap() -> Result<(), String> {
         return Err(String::new());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{mrs_merged, newly_merged};
+
+    fn states(s: &[&str]) -> Vec<String> {
+        s.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn mrs_merged_needs_none_open_and_one_merged() {
+        let mut mixed = states(&["open"; 4]);
+        mixed.extend(states(&["closed"; 5]));
+        mixed.push("merged".into());
+        assert!(!mrs_merged(&mixed));
+        assert!(!mrs_merged(&states(&["opened", "merged"])));
+        assert!(mrs_merged(&states(&["closed", "closed", "merged"])));
+        assert!(!mrs_merged(&states(&["closed"])));
+        assert!(!mrs_merged(&[]));
+    }
+
+    #[test]
+    fn newly_merged_skips_told_and_unmerged() {
+        let mrs = states(&["a", "b", "c", "d"]);
+        let st = states(&["merged", "open", "merged", "closed"]);
+        assert_eq!(newly_merged(&mrs, &st, &states(&["a"])), states(&["c"]));
+        assert!(newly_merged(&mrs, &st, &states(&["a", "c"])).is_empty());
+    }
 }
