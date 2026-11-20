@@ -52,14 +52,14 @@ Cluster access: the dev shell sets `KUBECONFIG` to `kubeconfig.yaml` in the `def
 
 ## Dev shell
 
-`devenv` is loaded by direnv (`.envrc`), or run `devenv shell`. Entering the shell prints the script list and sets `KUBECONFIG=kubeconfig.yaml` (git-ignored). Scripts that touch secrets unlock Bitwarden (`bw`) once and lock it again on exit.
+`devenv` is loaded by direnv (`.envrc`), or run `devenv shell`. Entering the shell prints the script list and sets `KUBECONFIG=kubeconfig.yaml` (git-ignored). Scripts that build host secrets read them from Bitwarden Secrets Manager and need `BWS_ACCESS_TOKEN` (the machine account `ci-hosts`, or a local token). `cluster-secrets-build` unlocks Bitwarden (`bw`) once and locks it again on exit.
 
 | Script | What it does |
 |--------|--------------|
 | `host-switch [action]` | `nixos-rebuild <action>` (default `switch`) of the current host, with its secrets injected |
 | `host-deploy <node...>` | deploy-rs to the given nodes |
 | `install-remote <host> <user@ip>` | first install with nixos-anywhere + disko |
-| `secrets-build <outdir> <host...>` | build encrypted sops files from Bitwarden (used by the scripts above) |
+| `secrets-build <outdir> <host...>` | build encrypted sops files from the Bitwarden Secrets Manager project `hosts` (used by the scripts above), needs `BWS_ACCESS_TOKEN` |
 | `mkiso` / `writeiso /dev/XXX` | build the `alp` installer ISO / write it to a device |
 | `cluster-secrets-build [--check]` | build the cluster's Kubernetes secrets from Bitwarden (see Kubernetes secrets) |
 | `tofu <args>` | OpenTofu in `tofu/` with the secrets of the profile `tofu` from the Bitwarden Secrets Manager project `tofu`, needs `BWS_ACCESS_TOKEN` (see External infrastructure); `fmt`, `version`, `validate` and `init -backend=false` run without it |
@@ -71,8 +71,8 @@ Cluster access: the dev shell sets `KUBECONFIG` to `kubeconfig.yaml` in the `def
    ssh-keygen -t ed25519 -N "" -f host/<name>/ssh_host_ed25519_key
    ssh-to-age < host/<name>/ssh_host_ed25519_key.pub
    ```
-   Commit only the `.pub` (the host config reads it). The private half goes to Bitwarden as `HOST_SSH_ED25519_PRIV` (see Secrets). The private key is git-ignored (`host/*/ssh_host_ed25519_key`), but delete the local file after installing.
-3. Put the age key in `.sops.yaml` (an anchor under `&hosts` and a `host/<name>/.+$` creation rule) and add a `[profiles.<name>]` to `secretspec.toml` with the host's items in Bitwarden.
+   Commit only the `.pub` (the host config reads it). The private half goes to the Bitwarden Secrets Manager project `hosts` as `<name>/HOST_SSH_ED25519_PRIV` (see Secrets). The private key is git-ignored (`host/*/ssh_host_ed25519_key`), but delete the local file after installing.
+3. Put the age key in `.sops.yaml` (an anchor under `&hosts` and a `host/<name>/.+$` creation rule) and add a `[profiles.<name>]` to `secretspec.toml` with the host's secrets, and create them in the project `hosts` as `<name>/<KEY>`.
 4. Boot the target from the ISO: `mkiso`, then `writeiso /dev/sdX`. The ISO joins tailscale with an auth key read from `host/alp/key` (git-ignored, create it in the Tailscale console) and accepts the key of `yenn`'s user over ssh.
 5. For a host with a ZFS pool, put a disk key at `host/<name>/disk.key` (git-ignored; `regis`'s `tank` pool uses a raw key, `dd if=/dev/urandom of=host/regis/disk.key bs=32 count=1`). `install-remote` requires it only if the host's disko config has a zpool: it passes it to nixos-anywhere as `/tmp/disk.key` and also copies it to `/persist/data/etc/zfs/disk.key`. Other hosts need no disk key.
 6. Install:
@@ -80,7 +80,7 @@ Cluster access: the dev shell sets `KUBECONFIG` to `kubeconfig.yaml` in the `def
    install-remote <name> root@<ip>
    ```
    It builds the host's secrets, copies the host key to `/persist/data/etc/ssh/ssh_host_ed25519_key` on the new disk and runs nixos-anywhere with the disko script and the toplevel as store paths.
-7. Servers (hosts importing `tailscale-server.nix`) join the tailnet on first boot as `tag:server`, with the OAuth client secret from Bitwarden `infra/tailscale/TAILSCALE_AUTH_KEY`; the policy auto-approves the pod route k3s advertises. For a k3s node, install it without `k3s.nix` first (it needs the node's IP in `ips`), then add its tailnet IP (`tailscale ip -4`) to `ips` in `host/features/optional/k3s.nix`, add the import and `K3S_TOKEN` to its profile, and `host-deploy` it.
+7. Servers (hosts importing `tailscale-server.nix`) join the tailnet on first boot as `tag:server`, with the OAuth client secret from `tailscale/TAILSCALE_AUTH_KEY` in the project `hosts`; the policy auto-approves the pod route k3s advertises. For a k3s node, install it without `k3s.nix` first (it needs the node's IP in `ips`), then add its tailnet IP (`tailscale ip -4`) to `ips` in `host/features/optional/k3s.nix`, add the import (`K3S_TOKEN` comes from the profile `dijkstra`), and `host-deploy` it.
 
 ## Updating hosts
 
@@ -90,18 +90,19 @@ host-switch test       # any nixos-rebuild action
 host-deploy geralt roach
 ```
 
-`host-deploy` builds the secrets for the requested nodes, checks their ssh host keys, answers deploy-rs's sudo prompt with the `maintenance` password from Bitwarden (or asks), and runs `deploy --skip-checks`.
+`host-deploy` builds the secrets for the requested nodes, checks their ssh host keys, answers deploy-rs's sudo prompt with the `maintenance` password from the project `hosts` (`<node>/USERS_MAINTENANCE_PASSWORD`, or asks), and runs `deploy --skip-checks`.
 
 ## Secrets
 
 Modules never talk to sops directly. They go through a small contract:
 
-- `modules/host/secrets.nix` defines `config.secrets.<name>` with `owner`, `group`, `mode`, `neededForUsers` and `path` (defaults to `/run/secrets/<name>`). Consumers read only `config.secrets.<name>.path`. `profile` (default: the host's name) names the secretspec profile that holds the secret, for one that lives elsewhere, e.g. `profile = "dijkstra"` for a cluster-wide secret (Bitwarden items titled `infra/dijkstra/<KEY>`).
+- `modules/host/secrets.nix` defines `config.secrets.<name>` with `owner`, `group`, `mode`, `neededForUsers` and `path` (defaults to `/run/secrets/<name>`). Consumers read only `config.secrets.<name>.path`. `profile` (default: the host's name) names the profile that holds the secret, for one that lives elsewhere, e.g. `profile = "dijkstra"` for a cluster-wide secret (`dijkstra/<KEY>` in the project `hosts`).
 - `host/features/global/sops.nix` is the only place that knows the provider is sops-nix: it maps every `config.secrets` entry to `sops.secrets` and reads `<host>.yaml` from the `secrets` flake input. The age identity is `/persist/data/etc/ssh/ssh_host_ed25519_key`.
 - `secretspec.toml` is the inventory. The profile named after the host lists its secrets as uppercased names. Evaluation fails if the secrets used by modules and the profile diverge (missing, unused or badly named; names match `^[a-z0-9_]+$`). Secrets with another `profile` must exist in that profile, which is not required to be used completely by the host.
-- The values live in Bitwarden, one item per secret titled `infra/<profile>/<KEY>` (`bw://?folder=infra/{profile}` is a prefix of the item title, there are no Bitwarden folders).
+- The values live in the Bitwarden Secrets Manager project `hosts`, one secret per value named `<profile>/<KEY>`. BWS lowercases names, so matching is case-insensitive. The scripts need `BWS_ACCESS_TOKEN`: the machine account `ci-hosts` (read access to `hosts`) or a local token.
+- `cluster-secrets-build` still reads the vault (items `infra/<profile>/<KEY>`), so what both flows read (`FLUX_SOPS_AGE_KEY`, the keys of `dijkstra-velero`) must be in both stores until the cluster flow moves.
 
-`secrets-build <outdir> <host...>` exports each profile with `secretspec`, keeps exactly the secrets the config declares, verifies that ssh private keys match the `.pub` files in the repo and that the host's age key (and `FLUX_SOPS_AGE_KEY`, where a host gets it) matches `.sops.yaml`, hashes `USERS_*_PASSWORD` entries (login passwords) with `mkpasswd`, and writes `<outdir>/<host>.yaml` encrypted for the host (plaintext never touches disk). Keys marked `composed` in `secretspec.toml` (e.g. `CLOUD` in `dijkstra-velero`) are assembled from other keys; the inputs are not written.
+`secrets-build <outdir> <host...>` reads each profile from the project `hosts` (`bws-project`), keeps exactly the secrets the config declares, verifies that ssh private keys match the `.pub` files in the repo and that the host's age key (and `FLUX_SOPS_AGE_KEY`, where a host gets it) matches `.sops.yaml`, hashes `USERS_*_PASSWORD` entries (login passwords) with `mkpasswd`, and writes `<outdir>/<host>.yaml` encrypted for the host (plaintext never touches disk). Keys marked `composed` in `secretspec.toml` (e.g. `CLOUD` in `dijkstra-velero`) are assembled from other keys; the inputs are not written.
 
 The `secrets` flake input is `path:./secrets-stub`, a placeholder with no sops files. Every script that builds a host passes `--override-input secrets path:<outdir>`; to build by hand:
 
@@ -128,7 +129,7 @@ nixos-rebuild build --flake .#geralt --override-input secrets path:/tmp/s
    [profiles.geralt]
    MYSERVICE_TOKEN = { description = "myservice API token", required = true }
    ```
-3. Create the matching item in Bitwarden, titled `infra/geralt/MYSERVICE_TOKEN`.
+3. Create the matching secret in the Bitwarden Secrets Manager project `hosts`, named `geralt/MYSERVICE_TOKEN`.
 4. Check that the config and the inventory agree, then apply:
    ```sh
    nix eval .#nixosConfigurations.geralt.config.secrets --apply builtins.attrNames
@@ -255,7 +256,7 @@ Tailscale:
 
 - Edit the policy only in `tofu/tailscale-policy.json`: the next apply reverts console edits.
 - The `tests` block makes Tailscale reject a policy that breaks server connectivity.
-- The OAuth client hosts join with is made by hand (Tailscale console Settings > OAuth clients: scope Auth keys write, tag `tag:server`). Its secret goes to Bitwarden `infra/tailscale/TAILSCALE_AUTH_KEY`; deleting the client revokes it.
+- The OAuth client hosts join with is made by hand (Tailscale console Settings > OAuth clients: scope Auth keys write, tag `tag:server`). Its secret goes to the project `hosts` as `tailscale/TAILSCALE_AUTH_KEY`; deleting the client revokes it.
 
 Oracle Cloud:
 
@@ -275,11 +276,11 @@ Oracle Cloud:
 | `triss` | server (traefik and cloud controller disabled) |
 | `roach`, `regis` | agents, join `triss` through its tailscale address |
 
-Node config is in `host/features/optional/k3s.nix` plus the per-host `services.k3s` blocks. The token comes from Bitwarden (`K3S_TOKEN`). `regis` also exports NFS (`nfs.nix`), used for app volumes.
+Node config is in `host/features/optional/k3s.nix` plus the per-host `services.k3s` blocks. The token comes from the project `hosts` (`dijkstra/K3S_TOKEN`). `regis` also exports NFS (`nfs.nix`), used for app volumes.
 
 The tailnet policy is `tofu/tailscale-policy.json`, applied with `tofu apply`; don't edit it in the console. The console's JSON editor (Access controls) is the break-glass if an apply locks the cluster out.
 
-The age key Flux decrypts sops manifests with is applied as `flux-system/sops-age` by the k3s server (`services.flux-sops-age`, `modules/host/flux-sops-age.nix`). It is the Bitwarden item `infra/dijkstra/FLUX_SOPS_AGE_KEY` (profile `dijkstra`) and must match `&dijkstra_cluster` in `.sops.yaml`, which the unit checks before applying. Enable it only on the k3s server: moving the server role means moving the flag.
+The age key Flux decrypts sops manifests with is applied as `flux-system/sops-age` by the k3s server (`services.flux-sops-age`, `modules/host/flux-sops-age.nix`). It is `FLUX_SOPS_AGE_KEY` of the profile `dijkstra`, as `dijkstra/FLUX_SOPS_AGE_KEY` in the project `hosts` and, until the cluster flow moves, also as the Bitwarden item `infra/dijkstra/FLUX_SOPS_AGE_KEY`; it must match `&dijkstra_cluster` in `.sops.yaml`, which the unit checks before applying. Enable it only on the k3s server: moving the server role means moving the flag.
 
 Flux is bootstrapped in `clusters/dijkstra/flux-system` (do not edit `gotk-*.yaml`). It watches `main` of the GitHub repo and applies `./clusters/dijkstra`, so nothing is applied by hand: commit, push, wait. To apply immediately:
 
@@ -359,7 +360,7 @@ Peers have one of two tiers, set by their address. Limited peers (`10.13.13.2-12
 
 ### Backups
 
-Velero backs up the cluster daily at 18:00 Europe/Warsaw and keeps each backup for 30 days. The target is Garage on `regis` (`host/regis/garage.nix`): a single-node S3 store on the `tank/garage` dataset, bucket `velero` at `http://100.100.215.91:3900`, reachable only over `tailscale0` and `cni0`. Velero and Garage share one key pair, from Bitwarden `infra/dijkstra-velero/ACCESS_KEY_ID` and `SECRET_ACCESS_KEY`; Garage creates the layout, the bucket and the key on startup (`--single-node --default-bucket`).
+Velero backs up the cluster daily at 18:00 Europe/Warsaw and keeps each backup for 30 days. The target is Garage on `regis` (`host/regis/garage.nix`): a single-node S3 store on the `tank/garage` dataset, bucket `velero` at `http://100.100.215.91:3900`, reachable only over `tailscale0` and `cni0`. Velero and Garage share one key pair, from `ACCESS_KEY_ID` and `SECRET_ACCESS_KEY` of the profile `dijkstra-velero` (`dijkstra-velero/<KEY>` in the project `hosts` for Garage, the Bitwarden item `infra/dijkstra-velero/<KEY>` for Velero until the cluster flow moves); Garage creates the layout, the bucket and the key on startup (`--single-node --default-bucket`).
 
 - Backed up: every namespace except `kube-system`, `velero` and `flux-system`, without Secrets (they come from Bitwarden), and the pod volumes through kopia, except `local-storage` (the media on tank), `nfs`, emptyDir and PVCs labelled `backup: skip` (downloads, caches).
 - The beets library (`library.db`) lives on its own PVC `beets-data`, mounted only by the always-on beets pod, so Velero backs it up with the rest. To restore it, `velero restore` that PVC; delete a leftover `library.db-journal` next to it first, or sqlite rolls it back onto the restored file.
@@ -472,4 +473,4 @@ They are generated from Bitwarden by `cluster-secrets-build`, one namespace at a
 
 The namespace must be created by a `kind: Namespace` manifest in `clusters/dijkstra`. The script decrypts with the cluster key from Bitwarden (`FLUX_SOPS_AGE_KEY`), rewrites only files whose content or age recipient changed, lists each file as `new`, `changed`, `stale` or `unchanged` and never prints values. A key declared in the profile but missing from Bitwarden, or with an empty value, fails; Bitwarden items the profile does not declare are ignored. `cluster-secrets-build --check` writes nothing and exits 1 if any file is out of date; it needs Bitwarden and the cluster private key, so it runs only where those are available. To drop a namespace's secrets, remove its profile: the next run deletes the file.
 
-To rotate the cluster key: put the new age public key in the `&dijkstra_cluster` anchor of `.sops.yaml` and the new private key in the Bitwarden item `FLUX_SOPS_AGE_KEY`, delete `clusters/dijkstra/secrets/*.enc.yaml` (the script refuses to run against files encrypted to the old key), run `cluster-secrets-build`, deploy `triss` (`host-deploy triss`, `flux-sops-age` applies the new key), then commit and push.
+To rotate the cluster key: put the new age public key in the `&dijkstra_cluster` anchor of `.sops.yaml` and the new private key in `FLUX_SOPS_AGE_KEY` (both the Bitwarden item and `dijkstra/FLUX_SOPS_AGE_KEY` in the project `hosts`), delete `clusters/dijkstra/secrets/*.enc.yaml` (the script refuses to run against files encrypted to the old key), run `cluster-secrets-build`, deploy `triss` (`host-deploy triss`, `flux-sops-age` applies the new key), then commit and push.

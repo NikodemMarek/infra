@@ -12,7 +12,7 @@
   ip = ips.${config.networking.hostName};
   isServer = config.services.k3s.role == "server";
 in {
-  secrets.k3s_token = {};
+  secrets.k3s_token.profile = "dijkstra";
 
   environment.systemPackages = [
     pkgs.nfs-utils
