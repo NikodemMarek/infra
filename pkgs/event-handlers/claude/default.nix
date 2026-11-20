@@ -37,7 +37,7 @@
   # more tools on the PATH of the launcher and of the handler (whose environment
   # goes on into the shpool session), e.g. CLIs the prompts or the context tool
   # refer to
-  extraPackages ? [ ],
+  extraPackages ? [],
   # jq filter over the (gitlab) event producing the task text only: the context
   # tool, if any, appends the GitLab context (description, diff, threads, logs)
   # below it; `\(.url)` is literal inside a Nix ''string''. Do not put GitLab
@@ -50,9 +50,7 @@
   profile ? null,
   # relative to $HOME; the checkout is `<projectsDir>/<last segment of the project path>`
   projectsDir ? "projects",
-}:
-
-let
+}: let
   promptFile = writeText "event-handler-claude-${name}-prompt.jq" prompt;
 
   # fallback, if the context tool is missing or fails: the task after
@@ -142,14 +140,16 @@ let
   launcher = writeShellApplication {
     name = "event-claude-launch";
     # the user's own jj, if any, comes first on PATH: ours is appended below
-    runtimeInputs = [
-      claude
-      claude-hooks
-      util-linux
-      coreutils
-      glab
-      jq
-    ] ++ extraPackages;
+    runtimeInputs =
+      [
+        claude
+        claude-hooks
+        util-linux
+        coreutils
+        glab
+        jq
+      ]
+      ++ extraPackages;
     # --add-dir is variadic and would swallow a following positional: keep an option after it
     text = ''
       export GITLAB_HOST="$3"
@@ -220,165 +220,167 @@ let
     '';
   };
 in
-# event handler: with a contextTool, prepare a workspace and the
-# GitLab context, and open a shpool session there (`jw attach <name>`)
-# running Claude in auto mode. Without a contextTool the session runs a plain
-# claude in the main checkout, also in auto mode. It notifies only when it
-# starts a session or fails, not for events that go to a running session.
-writeShellApplication {
-  name = "event-handler-claude-${name}";
-  # glab, extraPackages: the environment, PATH included, goes into the shpool session via the job script
-  runtimeInputs = [
-    shpool
-    jq
-    util-linux
-    coreutils
-    glab
-    claude
-  ] ++ extraPackages;
-  text = ''
-    event=$(cat)
+  # event handler: with a contextTool, prepare a workspace and the
+  # GitLab context, and open a shpool session there (`jw attach <name>`)
+  # running Claude in auto mode. Without a contextTool the session runs a plain
+  # claude in the main checkout, also in auto mode. It notifies only when it
+  # starts a session or fails, not for events that go to a running session.
+  writeShellApplication {
+    name = "event-handler-claude-${name}";
+    # glab, extraPackages: the environment, PATH included, goes into the shpool session via the job script
+    runtimeInputs =
+      [
+        shpool
+        jq
+        util-linux
+        coreutils
+        glab
+        claude
+      ]
+      ++ extraPackages;
+    text = ''
+      event=$(cat)
 
-    dry_run=''${EVENT_HANDLER_DRY_RUN:-}
+      dry_run=''${EVENT_HANDLER_DRY_RUN:-}
 
-    notified=""
-    notify_once() {
-      if [[ -z "$dry_run" && -z "$notified" ]]; then
-        notified=1
-        ${lib.getExe notify} <<<"$event" || true
+      notified=""
+      notify_once() {
+        if [[ -z "$dry_run" && -z "$notified" ]]; then
+          notified=1
+          ${lib.getExe notify} <<<"$event" || true
+        fi
+      }
+      # only a started session or a failure notifies; events for a running session do not
+      trap 'if [[ $? -ne 0 ]]; then notify_once; fi' EXIT
+
+      repo=$(jq -r '.project // "" | split("/") | last // ""' <<<"$event")
+      dir="$HOME/${projectsDir}/$repo"
+      if [[ -z "$repo" || ! -d "$dir" ]]; then
+        echo "no checkout for project '$repo' at $dir, not starting claude" >&2
+        notify_once
+        exit 0
       fi
-    }
-    # only a started session or a failure notifies; events for a running session do not
-    trap 'if [[ $? -ne 0 ]]; then notify_once; fi' EXIT
 
-    repo=$(jq -r '.project // "" | split("/") | last // ""' <<<"$event")
-    dir="$HOME/${projectsDir}/$repo"
-    if [[ -z "$repo" || ! -d "$dir" ]]; then
-      echo "no checkout for project '$repo' at $dir, not starting claude" >&2
-      notify_once
-      exit 0
-    fi
+      task=$(jq -r -f ${promptFile} <<<"$event")
+      if [[ -z "$task" ]]; then
+        echo "empty prompt" >&2
+        exit 1
+      fi
+      name=$(jq -r --arg repo "$repo" '"\($repo)\(if .target_iid then "-\(.target_iid)" else "" end)-\(.type | split(".") | last)" | gsub("[^A-Za-z0-9_.-]"; "-")' <<<"$event")
+      host=$(jq -r '.host // ""' <<<"$event")
+      # event-subscribe sets ER_TYPE; sessions started here submit knowledge as untrusted
+      origin="event:''${ER_TYPE:-unknown}"
+      # fields of the session record (`jw session set`); the handler variant `name` is the kind that agent-inbox tabs match on
+      record_title=$(jq -r '(.title // "" | tostring) as $t
+        | (if .target_iid and .target_type == "MergeRequest" then "!\(.target_iid) \($t)"
+           elif .target_iid and .target_type == "Issue" then "#\(.target_iid) \($t)"
+           else $t end)
+        | gsub("\\s+"; " ") | gsub("^ | $"; "") | .[0:200]' <<<"$event")
+      record_description=$(jq -r '((.raw.target // .raw.merge_request // {}).description | strings // "")[0:8000]' <<<"$event")
+      # \z, not $: the regex of jq also matches before a trailing newline
+      record_url=$(jq -r '.url | strings | select(length <= 2048 and test("^https://[!-~]+\\z")) // ""' <<<"$event")
 
-    task=$(jq -r -f ${promptFile} <<<"$event")
-    if [[ -z "$task" ]]; then
-      echo "empty prompt" >&2
-      exit 1
-    fi
-    name=$(jq -r --arg repo "$repo" '"\($repo)\(if .target_iid then "-\(.target_iid)" else "" end)-\(.type | split(".") | last)" | gsub("[^A-Za-z0-9_.-]"; "-")' <<<"$event")
-    host=$(jq -r '.host // ""' <<<"$event")
-    # event-subscribe sets ER_TYPE; sessions started here submit knowledge as untrusted
-    origin="event:''${ER_TYPE:-unknown}"
-    # fields of the session record (`jw session set`); the handler variant `name` is the kind that agent-inbox tabs match on
-    record_title=$(jq -r '(.title // "" | tostring) as $t
-      | (if .target_iid and .target_type == "MergeRequest" then "!\(.target_iid) \($t)"
-         elif .target_iid and .target_type == "Issue" then "#\(.target_iid) \($t)"
-         else $t end)
-      | gsub("\\s+"; " ") | gsub("^ | $"; "") | .[0:200]' <<<"$event")
-    record_description=$(jq -r '((.raw.target // .raw.merge_request // {}).description | strings // "")[0:8000]' <<<"$event")
-    # \z, not $: the regex of jq also matches before a trailing newline
-    record_url=$(jq -r '.url | strings | select(length <= 2048 and test("^https://[!-~]+\\z")) // ""' <<<"$event")
-
-    prepared=0
-    cwd=""
-    context_dir=""
-    session_lock=""
-    sid=""
-    sdir=""
-    resume=""
-    ${prepareBlock}
-    # a workspace conversation gets a stable name, the same for every event of the workspace
-    if [[ -n "$sid" ]]; then
-      name=$(jq -rn --arg repo "$repo" --arg ws "$(basename -- "$cwd")" '"\($repo)-\($ws)" | gsub("[^A-Za-z0-9_.-]"; "-")')
-    fi
-    # queued: a claude session of this MR is live, its hooks deliver the queue
-    mode=start
-    if [[ "$resume" == true ]] && ! flock -n -s "$session_lock" true; then
-      mode=queued
-    fi
-    if [[ "$prepared" == 1 ]]; then
-      workdir=$cwd
-      cmd=(${lib.getExe launcher} "$context_dir" "$session_lock" "$host" "$origin")
+      prepared=0
+      cwd=""
+      context_dir=""
+      session_lock=""
+      sid=""
+      sdir=""
+      resume=""
+      ${prepareBlock}
+      # a workspace conversation gets a stable name, the same for every event of the workspace
       if [[ -n "$sid" ]]; then
-        cmd+=("$sid" "$sdir")
+        name=$(jq -rn --arg repo "$repo" --arg ws "$(basename -- "$cwd")" '"\($repo)-\($ws)" | gsub("[^A-Za-z0-9_.-]"; "-")')
       fi
-      shown_prompt=$(cat "$context_dir/prompt.md")
-    else
-      # the user's own checkout, with no workspace: the notice below tells claude not to modify files
-      workdir=$dir
-      notice="You are in the user's MAIN checkout, not the MR branch — do NOT modify files; only analyse and report."
-      shown_prompt="$notice"$'\n\n'"$(jq -r --arg task "$task" -f ${fallbackFile} <<<"$event")"
-      cmd=(env "KNOWLEDGE_ORIGIN=$origin" claude "$shown_prompt")
-    fi
-
-    if [[ -n "$dry_run" ]]; then
-      echo "cwd: $workdir"
+      # queued: a claude session of this MR is live, its hooks deliver the queue
+      mode=start
+      if [[ "$resume" == true ]] && ! flock -n -s "$session_lock" true; then
+        mode=queued
+      fi
       if [[ "$prepared" == 1 ]]; then
-        echo "context: $context_dir"
+        workdir=$cwd
+        cmd=(${lib.getExe launcher} "$context_dir" "$session_lock" "$host" "$origin")
+        if [[ -n "$sid" ]]; then
+          cmd+=("$sid" "$sdir")
+        fi
+        shown_prompt=$(cat "$context_dir/prompt.md")
+      else
+        # the user's own checkout, with no workspace: the notice below tells claude not to modify files
+        workdir=$dir
+        notice="You are in the user's MAIN checkout, not the MR branch — do NOT modify files; only analyse and report."
+        shown_prompt="$notice"$'\n\n'"$(jq -r --arg task "$task" -f ${fallbackFile} <<<"$event")"
+        cmd=(env "KNOWLEDGE_ORIGIN=$origin" claude "$shown_prompt")
       fi
-      echo "session: $name"
-      echo "kind: ${name}"
-      echo "title: $record_title"
-      if [[ -n "$sid" ]]; then
-        echo "session: $sid $sdir resume=$resume"
-        echo "action: $mode"
+
+      if [[ -n "$dry_run" ]]; then
+        echo "cwd: $workdir"
+        if [[ "$prepared" == 1 ]]; then
+          echo "context: $context_dir"
+        fi
+        echo "session: $name"
+        echo "kind: ${name}"
+        echo "title: $record_title"
+        if [[ -n "$sid" ]]; then
+          echo "session: $sid $sdir resume=$resume"
+          echo "action: $mode"
+        fi
+        printf 'command:'
+        printf ' %q' "''${cmd[@]}"
+        printf '\n'
+        echo "prompt:"
+        echo "$shown_prompt"
+        exit 0
       fi
-      printf 'command:'
-      printf ' %q' "''${cmd[@]}"
-      printf '\n'
-      echo "prompt:"
-      echo "$shown_prompt"
-      exit 0
-    fi
 
-    if [[ "$mode" == queued ]]; then
-      exit 0
-    fi
+      if [[ "$mode" == queued ]]; then
+        exit 0
+      fi
 
-    notify_once
+      notify_once
 
-    if [[ -z "''${TERM:-}" || "$TERM" == dumb ]]; then export TERM=xterm-256color; fi
-    export COLORTERM=truecolor
-    rundir=''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
-    # concurrent events must not pick the same name; fd 9 is closed for the
-    # shpool calls so nothing they start can hold the lock
-    exec 9>"$rundir/event-claude.lock"
-    flock -w 30 9 || { echo "cannot lock $rundir/event-claude.lock" >&2; exit 1; }
-    # --no-daemonize: an auto-started daemon would lack the service's config
-    existing=$(shpool --no-daemonize list </dev/null 9>&-) || { echo "shpool list failed (is shpool.socket running?)" >&2; exit 1; }
-    taken() { local n _; while read -r n _; do [[ "$n" == "$1" ]] && return 0; done <<<"$existing"; return 1; }
-    base=$name; i=2
-    while taken "$name"; do name="$base-$i"; i=$((i + 1)); done
-    # exported before the job script is written, so the session gets it. No KNOWLEDGE_ORIGIN
-    # in this environment (the launcher sets it): `jw session set` refuses event sessions
-    export AGENT_SESSION=$name
-    # --opt=value: a value starting with `-` must not be taken for an option
-    record=(--kind=${lib.escapeShellArg name} "--workspace=$workdir")
-    if [[ -n "$record_title" ]]; then
-      record+=("--title=$record_title")
-    fi
-    if [[ -n "$record_description" ]]; then
-      record+=("--description=$record_description")
-    fi
-    if [[ -n "$record_url" ]]; then
-      record+=("--url=$record_url")
-    fi
-    ${jw}/bin/jw session set -s "$name" "''${record[@]}" </dev/null 9>&- ||
-      echo "cannot write the session record of $name" >&2
-    # the prompt and the environment go only into this 0600 file, never through
-    # shpool's shell-words-split -c; the script removes itself when it starts
-    # (shpool starts it without a usable PATH, hence the absolute rm)
-    job=$(mktemp "$rundir/event-claude-XXXXXX")
-    {
-      # shellcheck disable=SC2016
-      printf '%s\n' '${coreutils}/bin/rm -f -- "$0"'
-      export -p
-      printf 'export SHPOOL_SESSION_NAME=%q\n' "$name"
-      printf 'cd -- %q || exit 1\n' "$workdir"
-      printf 'exec'; printf ' %q' "''${cmd[@]}"; printf '\n'
-    } >"$job"
-    if ! shpool --no-daemonize attach -b --ttl 1d -d "$workdir" -c "${runtimeShell} $job" "$name" </dev/null 9>&-; then
-      rm -f -- "$job"; echo "shpool attach failed for session $name" >&2; exit 1
-    fi
-    echo "started shpool session $name (jw attach $name)" >&2
-  '';
-}
+      if [[ -z "''${TERM:-}" || "$TERM" == dumb ]]; then export TERM=xterm-256color; fi
+      export COLORTERM=truecolor
+      rundir=''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+      # concurrent events must not pick the same name; fd 9 is closed for the
+      # shpool calls so nothing they start can hold the lock
+      exec 9>"$rundir/event-claude.lock"
+      flock -w 30 9 || { echo "cannot lock $rundir/event-claude.lock" >&2; exit 1; }
+      # --no-daemonize: an auto-started daemon would lack the service's config
+      existing=$(shpool --no-daemonize list </dev/null 9>&-) || { echo "shpool list failed (is shpool.socket running?)" >&2; exit 1; }
+      taken() { local n _; while read -r n _; do [[ "$n" == "$1" ]] && return 0; done <<<"$existing"; return 1; }
+      base=$name; i=2
+      while taken "$name"; do name="$base-$i"; i=$((i + 1)); done
+      # exported before the job script is written, so the session gets it. No KNOWLEDGE_ORIGIN
+      # in this environment (the launcher sets it): `jw session set` refuses event sessions
+      export AGENT_SESSION=$name
+      # --opt=value: a value starting with `-` must not be taken for an option
+      record=(--kind=${lib.escapeShellArg name} "--workspace=$workdir")
+      if [[ -n "$record_title" ]]; then
+        record+=("--title=$record_title")
+      fi
+      if [[ -n "$record_description" ]]; then
+        record+=("--description=$record_description")
+      fi
+      if [[ -n "$record_url" ]]; then
+        record+=("--url=$record_url")
+      fi
+      ${jw}/bin/jw session set -s "$name" "''${record[@]}" </dev/null 9>&- ||
+        echo "cannot write the session record of $name" >&2
+      # the prompt and the environment go only into this 0600 file, never through
+      # shpool's shell-words-split -c; the script removes itself when it starts
+      # (shpool starts it without a usable PATH, hence the absolute rm)
+      job=$(mktemp "$rundir/event-claude-XXXXXX")
+      {
+        # shellcheck disable=SC2016
+        printf '%s\n' '${coreutils}/bin/rm -f -- "$0"'
+        export -p
+        printf 'export SHPOOL_SESSION_NAME=%q\n' "$name"
+        printf 'cd -- %q || exit 1\n' "$workdir"
+        printf 'exec'; printf ' %q' "''${cmd[@]}"; printf '\n'
+      } >"$job"
+      if ! shpool --no-daemonize attach -b --ttl 1d -d "$workdir" -c "${runtimeShell} $job" "$name" </dev/null 9>&-; then
+        rm -f -- "$job"; echo "shpool attach failed for session $name" >&2; exit 1
+      fi
+      echo "started shpool session $name (jw attach $name)" >&2
+    '';
+  }

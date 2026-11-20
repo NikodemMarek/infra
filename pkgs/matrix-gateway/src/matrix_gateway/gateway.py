@@ -6,7 +6,16 @@ from typing import Protocol
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from .data import Obj, get_int, get_obj, get_str
-from .logic import Send, content, parse_command, parse_send, route, seal, seal_command, strip_fallback
+from .logic import (
+    Send,
+    content,
+    parse_command,
+    parse_send,
+    route,
+    seal,
+    seal_command,
+    strip_fallback,
+)
 
 DEVICE_ID = "matrix-gateway"
 
@@ -32,9 +41,13 @@ class Matrix(Protocol):
     def login(self, user: str, password: str, device_id: str) -> str: ...
     def resolve_alias(self, alias: str) -> str | None: ...
     def create_room(self, alias_localpart: str, invite: str) -> str: ...
-    def sync(self, room: str, since: str | None, timeout_ms: int) -> tuple[str, list[Obj]]: ...
+    def sync(
+        self, room: str, since: str | None, timeout_ms: int
+    ) -> tuple[str, list[Obj]]: ...
     def get_event(self, room: str, event_id: str) -> Obj | None: ...
-    def send(self, room: str, content: Obj, txn: str, event_type: str = "m.room.message") -> str: ...
+    def send(
+        self, room: str, content: Obj, txn: str, event_type: str = "m.room.message"
+    ) -> str: ...
 
 
 class Bus(Protocol):
@@ -42,7 +55,15 @@ class Bus(Protocol):
 
 
 class Gateway:
-    def __init__(self, matrix: Matrix, bus: Bus, owner: str, user: str, password: str, key: Ed25519PrivateKey) -> None:
+    def __init__(
+        self,
+        matrix: Matrix,
+        bus: Bus,
+        owner: str,
+        user: str,
+        password: str,
+        key: Ed25519PrivateKey,
+    ) -> None:
         self._matrix = matrix
         self._bus = bus
         self._owner = owner
@@ -56,7 +77,9 @@ class Gateway:
     def start(self) -> None:
         self._bot = self._matrix.login(self._user, self._password, DEVICE_ID)
         alias = "#agents:" + self._bot.partition(":")[2]
-        self._room = self._matrix.resolve_alias(alias) or self._matrix.create_room("agents", self._owner)
+        self._room = self._matrix.resolve_alias(alias) or self._matrix.create_room(
+            "agents", self._owner
+        )
         self._since = self._matrix.sync(self._room, None, 0)[0]
 
     def step(self) -> None:
@@ -92,7 +115,10 @@ class Gateway:
         text = strip_fallback(get_str(body, "body") or "").strip()
         parent_body = get_str(get_obj(parent, "content") or {}, "body") or ""
         try:
-            self._bus.publish("matrix.reply." + to, seal(self._key, to, ref, text, parent_body, event_id))
+            self._bus.publish(
+                "matrix.reply." + to,
+                seal(self._key, to, ref, text, parent_body, event_id),
+            )
         except BusError as e:
             log.warning("publishing a reply failed: %s", e)
             self._notice(event_id, NOTICE_BUS)
@@ -108,7 +134,9 @@ class Gateway:
             return
         to, text = command
         try:
-            self._bus.publish("matrix.command." + to, seal_command(self._key, to, text, event_id, ts))
+            self._bus.publish(
+                "matrix.command." + to, seal_command(self._key, to, text, event_id, ts)
+            )
         except BusError as e:
             log.warning("publishing a command failed: %s", e)
             self._notice(event_id, NOTICE_BUS)
@@ -121,4 +149,6 @@ class Gateway:
         self._matrix.send(self._room, content(send), txn)
 
     def _notice(self, event_id: str, text: str) -> None:
-        self._matrix.send(self._room, content(Send(text, reply_to=event_id)), "re-" + event_id)
+        self._matrix.send(
+            self._room, content(Send(text, reply_to=event_id)), "re-" + event_id
+        )

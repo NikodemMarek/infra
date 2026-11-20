@@ -1,7 +1,6 @@
 """Every fixture is obviously fake and assembled from pieces, so the repo itself does not trip a scanner."""
 
 import pytest
-
 from knowledge import secrets
 from knowledge.secrets import Finding
 
@@ -74,7 +73,9 @@ def test_jwt():
 def test_bearer_token():
     assert kinds("Authorization: Bearer " + MIXED) == ["bearer-token"]
     assert kinds("curl -H 'Authorization: bearer " + MIXED + "'") == ["bearer-token"]
-    assert kinds("Bearer " + "abc123." + "def456/ghi789+jkl012~mno345") == ["bearer-token"]
+    assert kinds("Bearer " + "abc123." + "def456/ghi789+jkl012~mno345") == [
+        "bearer-token"
+    ]
     assert kinds("Bearer " + "short1") == []
     assert kinds("Bearer " + FAKE) == []  # no digit: not random looking
     assert kinds("Bearer " + "1234567890" * 3) == []  # no letter
@@ -82,7 +83,15 @@ def test_bearer_token():
 
 
 def test_credential_assignment():
-    for name in ("api_key", "api-key", "apikey", "API_KEY", "secret", "token", "passphrase"):
+    for name in (
+        "api_key",
+        "api-key",
+        "apikey",
+        "API_KEY",
+        "secret",
+        "token",
+        "passphrase",
+    ):
         assert kinds(name + " = " + MIXED) == ["credential-assignment"], name
     assert kinds("token='" + MIXED + "'") == ["credential-assignment"]
     assert kinds("secret: " + MIXED) == ["credential-assignment"]
@@ -145,7 +154,13 @@ def test_credential_assignment_ignores_paths_variables_and_placeholders(text: st
 def test_credential_assignment_is_linear_in_the_text():
     """Long runs of word characters must not make the rule slow (it is run on every submission)."""
     rule = next(r for r in secrets._RULES if r.kind == "credential-assignment")
-    for text in ("token" * 20000, "token_" * 20000, "a-" * 50000, "x" * 100000 + "token", "secret=" * 10000):
+    for text in (
+        "token" * 20000,
+        "token_" * 20000,
+        "a-" * 50000,
+        "x" * 100000 + "token",
+        "secret=" * 10000,
+    ):
         assert secrets._rule_findings(rule, text) == [], text[:12]
 
 
@@ -167,7 +182,9 @@ def test_pgpassword():
 
 
 def test_url_userinfo():
-    assert kinds("postgres://" + "user:fakepass" + "@db.example.com/app") == ["url-credentials"]
+    assert kinds("postgres://" + "user:fakepass" + "@db.example.com/app") == [
+        "url-credentials"
+    ]
     assert kinds("https://" + "user:fake@" + "example.com") == ["url-credentials"]
     assert kinds("https://example.com:8080/path") == []
     assert kinds("git@example.com:group/repo.git") == []
@@ -178,14 +195,25 @@ def test_url_userinfo():
 def test_url_userinfo_is_linear_in_the_text():
     """A long run of scheme characters must not be rescanned from each of its starts (a quadratic scan)."""
     rule = next(r for r in secrets._RULES if r.kind == "url-credentials")
-    for text in ("a" * 100000, "a-" * 50000, "a.b+" * 25000, "a" * 100000 + "://", "a://" + "b:" * 50000, "a://b" * 20000):
+    for text in (
+        "a" * 100000,
+        "a-" * 50000,
+        "a.b+" * 25000,
+        "a" * 100000 + "://",
+        "a://" + "b:" * 50000,
+        "a://b" * 20000,
+    ):
         assert secrets._rule_findings(rule, text) == [], text[:12]
-    assert kinds("a" * 100000 + "://" + "user:fake@" + "example.com") == ["url-credentials"]  # the scheme is cut, still found
+    assert kinds("a" * 100000 + "://" + "user:fake@" + "example.com") == [
+        "url-credentials"
+    ]  # the scheme is cut, still found
     assert kinds("x" * 31 + "://" + "user:fake@" + "example.com") == ["url-credentials"]
 
 
 def test_sqlplus_style():
-    assert kinds("sqlplus " + "scott/" + "fake@" + "db.example.com:1521/ORCL") == ["sqlplus-credentials"]
+    assert kinds("sqlplus " + "scott/" + "fake@" + "db.example.com:1521/ORCL") == [
+        "sqlplus-credentials"
+    ]
     assert kinds("scott/fake@db.example.com") == []  # no port and service
     assert kinds("path/to@host:notaport/x") == []
 
@@ -226,7 +254,9 @@ def test_pesel_with_bad_checksum():
 def test_pesel_needs_exactly_eleven_digits():
     assert kinds("440514013590") == []
     assert kinds("4405140135") == []
-    assert kinds("a" + "44051401359") == []  # \b: a letter glued to the digits is not a boundary
+    assert (
+        kinds("a" + "44051401359") == []
+    )  # \b: a letter glued to the digits is not a boundary
 
 
 # masking and has_hard
@@ -256,7 +286,12 @@ def test_has_hard():
 
 def test_clean_text_and_several_findings():
     assert secrets.scan("") == []
-    assert secrets.scan("Use `jj new` before spawning a coder; see src/knowledge/cli.py:42.") == []
+    assert (
+        secrets.scan(
+            "Use `jj new` before spawning a coder; see src/knowledge/cli.py:42."
+        )
+        == []
+    )
     text = "PGPASSWORD=" + "fake psql\n" + "AKIA" + "FAKE" * 4 + "\n44051401359"
     assert kinds(text) == ["aws-access-key", "pgpassword", "pesel"]
 
@@ -264,7 +299,9 @@ def test_clean_text_and_several_findings():
 def test_json_style_keys_are_assignments() -> None:
     kinds = {f.kind for f in secrets.scan('{"' + "token" + '": "' + MIXED + '"}')}
     assert "credential-assignment" in kinds
-    assert "password-assignment" in {f.kind for f in secrets.scan('{"pass' + 'word": "x"}')}
+    assert "password-assignment" in {
+        f.kind for f in secrets.scan('{"pass' + 'word": "x"}')
+    }
 
 
 def test_password_header_above_a_separator_is_not_an_assignment() -> None:

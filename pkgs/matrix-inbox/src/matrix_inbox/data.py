@@ -24,7 +24,9 @@ def loads(data: str | bytes) -> Json:
 def dumps(value: Json, indent: int | None = None, sort_keys: bool = False) -> str:
     """Compact (one line) without indent."""
     if indent is None:
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=sort_keys)
+        return json.dumps(
+            value, ensure_ascii=False, separators=(",", ":"), sort_keys=sort_keys
+        )
     return json.dumps(value, ensure_ascii=False, indent=indent, sort_keys=sort_keys)
 
 

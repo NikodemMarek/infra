@@ -32,10 +32,14 @@ def _frontmatter(text: str) -> dict[str, str]:
         if line.strip() == "---":
             break
         m = _KEY.fullmatch(line)
-        name, value = (data.group(m, 1), data.group(m, 2)) if m is not None else (None, None)
+        name, value = (
+            (data.group(m, 1), data.group(m, 2)) if m is not None else (None, None)
+        )
         if name is not None and value is not None:
             key = name
-            found[key] = "" if value.strip() in _BLOCK_SCALARS else value.strip().strip("\"'")
+            found[key] = (
+                "" if value.strip() in _BLOCK_SCALARS else value.strip().strip("\"'")
+            )
         elif key is not None and line[:1] in (" ", "\t"):
             found[key] = f"{found[key]} {line.strip()}".strip()
     return found
@@ -101,7 +105,9 @@ def run() -> int:
     ideas.mkdir(exist_ok=True)
     before = _mtimes(ideas)
     try:
-        ClaudeCli(edits=[f"{memory.resolve()}/{DIR}/**"]).run(prompts.read(PROMPT), _message(sorted(before)), [])
+        ClaudeCli(edits=[f"{memory.resolve()}/{DIR}/**"]).run(
+            prompts.read(PROMPT), _message(sorted(before)), []
+        )
     except LlmError as e:
         log.error("the skills call failed: %s", e)
         return 1

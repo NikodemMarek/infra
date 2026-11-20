@@ -60,14 +60,35 @@ def _bearer_ok(matched: str) -> bool:
 
 
 _RULES: tuple[_Rule, ...] = (
-    _Rule("hard", "private-key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY( BLOCK)?-----")),
-    _Rule("hard", "gitlab-token", re.compile(r"gl(?:pat|cbt|dt|rt|ptt|ft|oas)-[0-9A-Za-z_-]{20,}")),
+    _Rule(
+        "hard",
+        "private-key",
+        re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY( BLOCK)?-----"),
+    ),
+    _Rule(
+        "hard",
+        "gitlab-token",
+        re.compile(r"gl(?:pat|cbt|dt|rt|ptt|ft|oas)-[0-9A-Za-z_-]{20,}"),
+    ),
     _Rule("hard", "github-token", re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}")),
     _Rule("hard", "aws-access-key", re.compile(r"AKIA[0-9A-Z]{16}")),
     _Rule("hard", "slack-token", re.compile(r"xox[abprs]-[0-9A-Za-z-]{10,}")),
-    _Rule("hard", "jwt", re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")),
-    _Rule("hard", "bearer-token", re.compile(r"Bearer\s+[A-Za-z0-9._~+/-]{20,}", re.IGNORECASE), _bearer_ok),
-    _Rule("hard", "sk-api-key", re.compile(r"(?<![A-Za-z0-9])sk-(?:ant-)?[A-Za-z0-9_-]{20,}")),
+    _Rule(
+        "hard",
+        "jwt",
+        re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
+    ),
+    _Rule(
+        "hard",
+        "bearer-token",
+        re.compile(r"Bearer\s+[A-Za-z0-9._~+/-]{20,}", re.IGNORECASE),
+        _bearer_ok,
+    ),
+    _Rule(
+        "hard",
+        "sk-api-key",
+        re.compile(r"(?<![A-Za-z0-9])sk-(?:ant-)?[A-Za-z0-9_-]{20,}"),
+    ),
     # `access_token: …`, `"client_secret": "…"`, `export GITLAB_TOKEN=…`: the keyword anywhere in the name. No prefix is
     # matched (it cannot matter) and the suffix is capped and possessive, so that a long run of word characters costs no
     # more than a linear scan.
@@ -80,10 +101,20 @@ _RULES: tuple[_Rule, ...] = (
         ),
         _credential_ok,
     ),
-    _Rule("soft", "password-assignment", re.compile(r"\b(?:password|passwd|pwd|hasło|haslo)\b['\"]?[ \t]*[:=]", re.IGNORECASE)),
+    _Rule(
+        "soft",
+        "password-assignment",
+        re.compile(
+            r"\b(?:password|passwd|pwd|hasło|haslo)\b['\"]?[ \t]*[:=]", re.IGNORECASE
+        ),
+    ),
     _Rule("soft", "pgpassword", re.compile(r"PGPASSWORD=\S+")),
     # the scheme is bounded: an unbounded one is rescanned from every start of a long run of letters (quadratic)
-    _Rule("soft", "url-credentials", re.compile(r"[a-z][a-z0-9+.-]{0,30}://[^/\s:@]+:[^/\s@]+@", re.IGNORECASE)),
+    _Rule(
+        "soft",
+        "url-credentials",
+        re.compile(r"[a-z][a-z0-9+.-]{0,30}://[^/\s:@]+:[^/\s@]+@", re.IGNORECASE),
+    ),
     _Rule("soft", "sqlplus-credentials", re.compile(r"\b\w+/\w+@[\w.-]+:\d+/\w+")),
 )
 _PESEL = _Rule("pii", "pesel", re.compile(r"\b\d{11}\b"), _pesel_ok)
@@ -106,7 +137,10 @@ def _table_findings(text: str) -> list[Finding]:
         header, separator, row = lines[i], lines[i + 1], lines[i + 2]
         if "|" not in header or "|" not in separator or "|" not in row:
             continue
-        if _TABLE_SEPARATOR.fullmatch(separator) is None or _TABLE_SEPARATOR.fullmatch(row) is not None:
+        if (
+            _TABLE_SEPARATOR.fullmatch(separator) is None
+            or _TABLE_SEPARATOR.fullmatch(row) is not None
+        ):
             continue
         for cell in _cells(header):
             if _TABLE_SECRET_HEADER.search(cell) is not None:

@@ -13,10 +13,10 @@ cmd="$(tr '\0' ' ' 2>/dev/null </proc/$PPID/cmdline)" || cmd=""
 cmd="${cmd% }"
 
 jq -n --arg cwd "$PWD" --arg title "${cmd:-sudo}" --arg prompt "${1:-}" --arg cmd "$cmd" --arg reply "$dir/reply" --argjson timeout "$limit" \
-  '{cwd: $cwd, title: $title, prompt: $prompt, command: $cmd, reply: $reply, timeout: $timeout}' |
-  claude-route-event sudo.password_request >&2 || {
-  echo "claude-askpass: could not route the password request" >&2
-  exit 1
+	'{cwd: $cwd, title: $title, prompt: $prompt, command: $cmd, reply: $reply, timeout: $timeout}' |
+	claude-route-event sudo.password_request >&2 || {
+	echo "claude-askpass: could not route the password request" >&2
+	exit 1
 }
 
 # The FIFO is an argument to a background reader, not a `<` redirect: a redirect would block on open
@@ -28,7 +28,7 @@ reader=$!
 IFS= read -r pw <&3
 exec 3<&-
 if [ -z "$pw" ]; then
-  echo "claude-askpass: no password received" >&2
-  exit 1
+	echo "claude-askpass: no password received" >&2
+	exit 1
 fi
 printf '%s\n' "$pw"

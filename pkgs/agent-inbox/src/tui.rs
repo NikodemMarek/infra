@@ -6385,7 +6385,10 @@ mod tests {
         let screen = screen_at(&a, 200, 30);
         let row = screen.lines().find(|l| l.contains("IDLE")).unwrap();
         assert!(row.contains("cache:cold 30s"), "{row}");
-        assert!(screen.contains("IDLE  r  ·  30s  ·  cache:cold"), "{screen}");
+        assert!(
+            screen.contains("IDLE  r  ·  30s  ·  cache:cold"),
+            "{screen}"
+        );
     }
 
     #[test]

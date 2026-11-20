@@ -2,8 +2,10 @@ import base64
 from collections.abc import Iterator
 
 import pytest
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
-
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 from fakes import OWNER, ROOM, FakeBus, FakeMatrix
 from matrix_gateway import cli
 from matrix_gateway.gateway import Fatal, Gateway, MatrixError
@@ -81,7 +83,12 @@ def test_deliver_retries_with_same_txn_then_succeeds(sleeps: list[float]) -> Non
 def test_deliver_gives_up_after_three_attempts(sleeps: list[float]) -> None:
     m = FakeMatrix()
     gw = make_gateway(m)
-    m.send_failures = [MatrixError("1"), MatrixError("2"), MatrixError("3"), MatrixError("4")]
+    m.send_failures = [
+        MatrixError("1"),
+        MatrixError("2"),
+        MatrixError("3"),
+        MatrixError("4"),
+    ]
     cli._deliver(gw, LINE)
     assert len(m.send_attempts) == 3
     assert len(set(m.send_attempts)) == 1
@@ -103,7 +110,9 @@ def test_deliver_invalid_line_sends_nothing(sleeps: list[float]) -> None:
     assert m.sent == []
 
 
-def test_pump_delivers_each_line_then_exits_1_when_sub_ends(sleeps: list[float], exits: list[int]) -> None:
+def test_pump_delivers_each_line_then_exits_1_when_sub_ends(
+    sleeps: list[float], exits: list[int]
+) -> None:
     m = FakeMatrix()
     gw = make_gateway(m)
     with pytest.raises(SystemExit):
@@ -112,7 +121,9 @@ def test_pump_delivers_each_line_then_exits_1_when_sub_ends(sleeps: list[float],
     assert exits == [1]
 
 
-def test_pump_exits_1_when_delivery_raises(sleeps: list[float], exits: list[int], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pump_exits_1_when_delivery_raises(
+    sleeps: list[float], exits: list[int], monkeypatch: pytest.MonkeyPatch
+) -> None:
     gw = make_gateway(FakeMatrix())
 
     def boom(gateway: Gateway, line: str) -> None:

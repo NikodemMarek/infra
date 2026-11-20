@@ -159,7 +159,9 @@ def scope_files(cwd: Path, memory: Path) -> list[str]:
     for marker in markers:
         if (root / marker.file).exists() or (cwd / marker.file).exists():
             found.update(marker.scopes)
-    files = [f"{s}.md" for s in sorted(found, key=_order) if _SCOPE.fullmatch(s) is not None]
+    files = [
+        f"{s}.md" for s in sorted(found, key=_order) if _SCOPE.fullmatch(s) is not None
+    ]
     if best is not None and _SLUG.fullmatch(best.slug) is not None:
         files.insert(0, f"projects/{best.slug}/facts.md")
     return files
@@ -174,7 +176,11 @@ def _size(text: str) -> int:
 
 def _join(memory: Path, blocks: Sequence[tuple[str, str]], kept: Sequence[int]) -> str:
     shown = [blocks[i][1] for i in kept]
-    also = [f"also relevant: {memory / rel}" for i, (rel, _) in enumerate(blocks) if i not in kept]
+    also = [
+        f"also relevant: {memory / rel}"
+        for i, (rel, _) in enumerate(blocks)
+        if i not in kept
+    ]
     return "\n".join([HEADER, *shown, *also]) + "\n"
 
 
@@ -208,7 +214,10 @@ def session_context(cwd: Path) -> str | None:
 def stale_inbox_line(now: datetime.datetime | None = None) -> str | None:
     """A line for the user when notes have waited for the curator for more than a day."""
     oldest = notes.oldest_date()
-    if oldest is None or (now or datetime.datetime.now(datetime.UTC)) - oldest <= STALE_AFTER:
+    if (
+        oldest is None
+        or (now or datetime.datetime.now(datetime.UTC)) - oldest <= STALE_AFTER
+    ):
         return None
     return (
         f"{len(notes.pending())} knowledge notes wait in {config.inbox_dir()} since {oldest:%Y-%m-%d}; "

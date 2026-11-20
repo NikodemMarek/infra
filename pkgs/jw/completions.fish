@@ -1,16 +1,16 @@
-function __jw_repos  # a glob matching nothing is an error in a command (only `set` is exempt)
+function __jw_repos # a glob matching nothing is an error in a command (only `set` is exempt)
     set -l d ~/projects/*/.jj
     path dirname $d | path basename
 end
 
-function __jw_workspaces  # directory names of this repo's workspaces, from the main repo or from one of them
+function __jw_workspaces # directory names of this repo's workspaces, from the main repo or from one of them
     set -l root (jj --ignore-working-copy workspace root 2>/dev/null); or return
     set -l d (string replace -r '\.agents/[^/]+$' '' -- $root).agents/*/.jj
     set -q d[1]; or return
     path dirname $d | path basename
 end
 
-function __jw_shpool_sessions  # first column of `shpool list`, after the header
+function __jw_shpool_sessions # first column of `shpool list`, after the header
     shpool --no-daemonize list 2>/dev/null | string match -rg '^(\S+)' | tail -n +2
 end
 

@@ -1,11 +1,9 @@
 {
   writeShellApplication,
-  lib,
   coreutils,
   findutils,
   jq,
 }:
-
 # event handler: queues the event for agent-inbox as
 # $XDG_RUNTIME_DIR/agent-inbox/<id>.json = {"id", "received", "event"}. An event with
 # a non-empty string `key` has the id `<h>-<r>`: h is a hash of its type and key, r is
@@ -66,4 +64,4 @@ let
     '';
   };
 in
-inbox
+  inbox

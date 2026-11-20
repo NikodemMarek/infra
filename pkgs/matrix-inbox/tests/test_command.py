@@ -1,5 +1,4 @@
 import pytest
-
 from fakes import HOST, FakeBus, FakeSeen, FakeTasks
 from matrix_inbox import handlers
 from matrix_inbox.data import Json, Obj
@@ -13,7 +12,9 @@ NO_RESULT = "Failed: the task starter gave no result."
 STARTED: Obj = {"type": "task.started", "project": "infra", "shpool": "s-1110-120000"}
 
 
-def cmd(to: str = HOST, text: str = "fix it", event_id: str = CMD_ID, ts: int = TS) -> Command:
+def cmd(
+    to: str = HOST, text: str = "fix it", event_id: str = CMD_ID, ts: int = TS
+) -> Command:
     return Command(to, text, event_id, ts)
 
 
@@ -54,7 +55,9 @@ def test_started_missing_fields_are_empty() -> None:
 
 
 def test_failed() -> None:
-    _, _, bus = run(cmd(), {"type": "task.failed", "reason": "no repo chosen (no clear match)"})
+    _, _, bus = run(
+        cmd(), {"type": "task.failed", "reason": "no repo chosen (no clear match)"}
+    )
     assert bus.notices() == ["Failed: no repo chosen (no clear match)"]
 
 
@@ -83,7 +86,11 @@ def test_failed_reason_control_chars_are_sanitized() -> None:
 
 @pytest.mark.parametrize("reason", [None, 5, ["x"], {"a": "b"}])
 def test_failed_reason_missing_or_not_a_string(reason: Json) -> None:
-    outcome: Obj = {"type": "task.failed"} if reason is None else {"type": "task.failed", "reason": reason}
+    outcome: Obj = (
+        {"type": "task.failed"}
+        if reason is None
+        else {"type": "task.failed", "reason": reason}
+    )
     _, _, bus = run(cmd(), outcome)
     assert bus.notices() == ["Failed: unknown"]
 
@@ -94,7 +101,10 @@ def test_no_result() -> None:
     assert bus.notices() == [NO_RESULT]
 
 
-@pytest.mark.parametrize("outcome", [{}, {"type": "other"}, {"type": 1}, {"project": "infra", "shpool": "s-1"}])
+@pytest.mark.parametrize(
+    "outcome",
+    [{}, {"type": "other"}, {"type": 1}, {"project": "infra", "shpool": "s-1"}],
+)
 def test_unknown_outcome(outcome: Obj) -> None:
     _, _, bus = run(cmd(), outcome)
     assert bus.notices() == [NO_RESULT]
@@ -183,6 +193,8 @@ def test_seen_oserror_propagates_without_starting() -> None:
     tasks = FakeTasks(STARTED)
     bus = FakeBus()
     with pytest.raises(OSError):
-        handlers.command(cmd(), HOST, NOW, FakeSeen(error=OSError("read-only")), tasks, bus)
+        handlers.command(
+            cmd(), HOST, NOW, FakeSeen(error=OSError("read-only")), tasks, bus
+        )
     assert tasks.prompts == []
     assert bus.published == []

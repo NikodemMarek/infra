@@ -24,16 +24,13 @@
   # $CLAUDE_CONFIG_DIR/settings.json. null -> ./settings.nix
   settings ? null,
   # extra packages put on PATH of the wrapped claude
-  extraPackages ? [ ],
+  extraPackages ? [],
   # where claude keeps its state/config; shell-expanded at runtime
   dataDir ? "$HOME/.local/share/claude",
   # trusted without the trust prompt, with every repo below it; shell-expanded at runtime
   projectsDir ? "$HOME/projects",
-}:
-
-let
-  mdEntries =
-    dir: lib.filterAttrs (n: t: t == "regular" && lib.hasSuffix ".md" n) (builtins.readDir dir);
+}: let
+  mdEntries = dir: lib.filterAttrs (n: t: t == "regular" && lib.hasSuffix ".md" n) (builtins.readDir dir);
 
   defaultAgents = lib.mapAttrs' (
     n: _: lib.nameValuePair (lib.removeSuffix ".md" n) (./agents + "/${n}")
@@ -45,25 +42,23 @@ let
   );
 
   # attrsets recurse, lists concatenate (deduped), anything else: b wins
-  deepMerge =
-    a: b:
-    if builtins.isAttrs a && builtins.isAttrs b && !(lib.isDerivation a) && !(lib.isDerivation b) then
+  deepMerge = a: b:
+    if builtins.isAttrs a && builtins.isAttrs b && !(lib.isDerivation a) && !(lib.isDerivation b)
+    then
       lib.zipAttrsWith
-        (
-          _: vs:
-          if builtins.length vs == 1 then
-            builtins.head vs
-          else
-            deepMerge (builtins.elemAt vs 0) (builtins.elemAt vs 1)
-        )
-        [
-          a
-          b
-        ]
-    else if builtins.isList a && builtins.isList b then
-      lib.unique (a ++ b)
-    else
-      b;
+      (
+        _: vs:
+          if builtins.length vs == 1
+          then builtins.head vs
+          else deepMerge (builtins.elemAt vs 0) (builtins.elemAt vs 1)
+      )
+      [
+        a
+        b
+      ]
+    else if builtins.isList a && builtins.isList b
+    then lib.unique (a ++ b)
+    else b;
 
   dropNulls = lib.filterAttrs (_: v: v != null);
 
@@ -89,24 +84,20 @@ let
       extraPackages,
       dataDir,
       projectsDir,
-    }:
-    let
+    }: let
       # "$HOME/.local/share/claude" -> "~/.local/share/claude" (for prose in the markdown files)
       # The deny rules in the settings use the `~/` form, so a dataDir outside $HOME would silently disable them.
-      prettyDataDir =
-        assert lib.assertMsg (lib.hasPrefix "$HOME/" dataDir) "claude: dataDir must start with $HOME/ (got ${dataDir})";
+      prettyDataDir = assert lib.assertMsg (lib.hasPrefix "$HOME/" dataDir) "claude: dataDir must start with $HOME/ (got ${dataDir})";
         "~" + lib.removePrefix "$HOME" dataDir;
       prettyMemoryDir = "${prettyDataDir}/memory";
       prettyProjectsDir =
-        if lib.hasPrefix "$HOME/" projectsDir then
-          "~" + lib.removePrefix "$HOME" projectsDir
-        else
-          assert lib.assertMsg (lib.hasPrefix "/" projectsDir) "claude: projectsDir must start with $HOME/ or / (got ${projectsDir})";
-          projectsDir;
+        if lib.hasPrefix "$HOME/" projectsDir
+        then "~" + lib.removePrefix "$HOME" projectsDir
+        else assert lib.assertMsg (lib.hasPrefix "/" projectsDir) "claude: projectsDir must start with $HOME/ or / (got ${projectsDir})"; projectsDir;
 
       settingsFile = writeText "claude-settings.json" (builtins.toJSON settings);
 
-      config = runCommand "claude-config" { } ''
+      config = runCommand "claude-config" {} ''
         mkdir -p "$out/agents" "$out/skills"
         cp ${instructions} "$out/CLAUDE.md"
         ${lib.concatStringsSep "\n" (lib.mapAttrsToList (n: p: ''cp "${p}" "$out/agents/${n}.md"'') agents)}
@@ -124,12 +115,13 @@ let
       '';
 
       # Everything the launch preamble keeps linked into $CLAUDE_CONFIG_DIR.
-      entries = [
-        "CLAUDE.md"
-        "settings.json"
-      ]
-      ++ map (n: "agents/${n}.md") (lib.attrNames agents)
-      ++ map (n: "skills/${n}") (lib.attrNames skills);
+      entries =
+        [
+          "CLAUDE.md"
+          "settings.json"
+        ]
+        ++ map (n: "agents/${n}.md") (lib.attrNames agents)
+        ++ map (n: "skills/${n}") (lib.attrNames skills);
 
       managed = "${builtins.storeDir}/*-claude-config/*";
 
@@ -236,7 +228,8 @@ let
             '{hasCompletedOnboarding: true, hasSeenAutoDefaultNotice: true, projects: {($p): {hasTrustDialogAccepted: true}}}')"
           ${lib.concatMapStringsSep "\n" (
             e: ''__claude_link ${lib.escapeShellArg e} "${config}/${e}"''
-          ) entries}
+          )
+          entries}
           __claude_prune
         }
 
@@ -323,18 +316,18 @@ let
         unset __claude_ws __claude_root
       '';
     in
-    symlinkJoin {
-      name = "claude-${claude-code.version}";
-      paths = [ claude-code ];
-      nativeBuildInputs = [ makeWrapper ];
-      postBuild = ''
-        wrapProgram $out/bin/claude \
-          --run "source ${preamble}" \
-          --run "source ${workspace}" \
-          --set-default DISABLE_AUTOUPDATER 1 \
-          --set-default KNOWLEDGE_CLAUDE $out/bin/claude-bare \
-          --set-default SUDO_ASKPASS ${claude-hooks}/bin/claude-askpass \
-          --prefix PATH : ${
+      symlinkJoin {
+        name = "claude-${claude-code.version}";
+        paths = [claude-code];
+        nativeBuildInputs = [makeWrapper];
+        postBuild = ''
+          wrapProgram $out/bin/claude \
+            --run "source ${preamble}" \
+            --run "source ${workspace}" \
+            --set-default DISABLE_AUTOUPDATER 1 \
+            --set-default KNOWLEDGE_CLAUDE $out/bin/claude-bare \
+            --set-default SUDO_ASKPASS ${claude-hooks}/bin/claude-askpass \
+            --prefix PATH : ${
             lib.makeBinPath (
               [
                 claude-hooks
@@ -346,55 +339,67 @@ let
             )
           }
 
-        # Minimal headless claude for narrow tool runs (the curator, skills, route): no
-        # MCP servers, slash commands, settings files or CLAUDE.md; the caller picks the tools
-        # with `--tools`. Not `--bare`: that drops the subscription login. Wraps the unwrapped
-        # claude (no jj workspace). Only CLAUDE_CONFIG_DIR is set (where the login is), not the
-        # preamble: that would relink the managed config of whichever claude runs it. Auto-memory
-        # is off here because settings.json, where settings.nix turns it off, is not loaded.
-        makeWrapper ${claude-code}/bin/claude $out/bin/claude-bare \
-          --run 'export CLAUDE_CONFIG_DIR="''${CLAUDE_CONFIG_DIR:-${dataDir}}"' \
-          --set-default DISABLE_AUTOUPDATER 1 \
-          --set-default CLAUDE_CODE_DISABLE_AUTO_MEMORY 1 \
-          --add-flags "--strict-mcp-config --disable-slash-commands --setting-sources="
-      '';
+          # Minimal headless claude for narrow tool runs (the curator, skills, route): no
+          # MCP servers, slash commands, settings files or CLAUDE.md; the caller picks the tools
+          # with `--tools`. Not `--bare`: that drops the subscription login. Wraps the unwrapped
+          # claude (no jj workspace). Only CLAUDE_CONFIG_DIR is set (where the login is), not the
+          # preamble: that would relink the managed config of whichever claude runs it. Auto-memory
+          # is off here because settings.json, where settings.nix turns it off, is not loaded.
+          makeWrapper ${claude-code}/bin/claude $out/bin/claude-bare \
+            --run 'export CLAUDE_CONFIG_DIR="''${CLAUDE_CONFIG_DIR:-${dataDir}}"' \
+            --set-default DISABLE_AUTOUPDATER 1 \
+            --set-default CLAUDE_CODE_DISABLE_AUTO_MEMORY 1 \
+            --add-flags "--strict-mcp-config --disable-slash-commands --setting-sources="
+        '';
 
-      passthru = {
-        inherit config;
-        inherit (claude-code) version;
+        passthru = {
+          inherit config;
+          inherit (claude-code) version;
 
-        # Overlay-friendly customisation, e.g.
-        #   prev.claude.extend { skills.foo = ./foo; settings.permissions.allow = [ "..." ]; }
-        # attrsets (settings, agents, skills) deep-merge, extraPackages concatenates,
-        # instructions/dataDir/projectsDir are replaced. Results carry `extend` again.
-        extend =
-          cfg:
-          let
+          # Overlay-friendly customisation, e.g.
+          #   prev.claude.extend { skills.foo = ./foo; settings.permissions.allow = [ "..." ]; }
+          # attrsets (settings, agents, skills) deep-merge, extraPackages concatenates,
+          # instructions/dataDir/projectsDir are replaced. Results carry `extend` again.
+          extend = cfg: let
             unknown = lib.subtractLists knownKeys (lib.attrNames cfg);
           in
-          assert lib.assertMsg (unknown == [ ]) "claude.extend: unknown attributes: ${toString unknown}";
-          build {
-            instructions = cfg.instructions or instructions;
-            dataDir = cfg.dataDir or dataDir;
-            projectsDir = cfg.projectsDir or projectsDir;
-            settings = deepMerge settings (cfg.settings or { });
-            # `null` entries remove an agent/skill, e.g. `skills.commit = null;`
-            agents = dropNulls (deepMerge agents (cfg.agents or { }));
-            skills = dropNulls (deepMerge skills (cfg.skills or { }));
-            extraPackages = lib.unique (extraPackages ++ (cfg.extraPackages or [ ]));
-          };
-      };
+            assert lib.assertMsg (unknown == []) "claude.extend: unknown attributes: ${toString unknown}";
+              build {
+                instructions = cfg.instructions or instructions;
+                dataDir = cfg.dataDir or dataDir;
+                projectsDir = cfg.projectsDir or projectsDir;
+                settings = deepMerge settings (cfg.settings or {});
+                # `null` entries remove an agent/skill, e.g. `skills.commit = null;`
+                agents = dropNulls (deepMerge agents (cfg.agents or {}));
+                skills = dropNulls (deepMerge skills (cfg.skills or {}));
+                extraPackages = lib.unique (extraPackages ++ (cfg.extraPackages or []));
+              };
+        };
 
-      meta = claude-code.meta // {
-        mainProgram = "claude";
-      };
-    }
+        meta =
+          claude-code.meta
+          // {
+            mainProgram = "claude";
+          };
+      }
   );
 in
-build {
-  instructions = if instructions == null then ./CLAUDE.md else instructions;
-  agents = if agents == null then defaultAgents else agents;
-  skills = if skills == null then defaultSkills else skills;
-  settings = if settings == null then import ./settings.nix else settings;
-  inherit extraPackages dataDir projectsDir;
-}
+  build {
+    instructions =
+      if instructions == null
+      then ./CLAUDE.md
+      else instructions;
+    agents =
+      if agents == null
+      then defaultAgents
+      else agents;
+    skills =
+      if skills == null
+      then defaultSkills
+      else skills;
+    settings =
+      if settings == null
+      then import ./settings.nix
+      else settings;
+    inherit extraPackages dataDir projectsDir;
+  }

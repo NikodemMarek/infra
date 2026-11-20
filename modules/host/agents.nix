@@ -18,72 +18,78 @@ in {
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [pkgs.shpool pkgs.natscli];
 
-    # units ship with the packages; NixOS ignores their [Install]
-    systemd.packages = [pkgs.nats-server pkgs.event-handlers];
-    systemd.services.nats.wantedBy = ["multi-user.target"];
+    systemd = {
+      # units ship with the packages; NixOS ignores their [Install]
+      packages = [pkgs.nats-server pkgs.event-handlers];
+      services.nats.wantedBy = ["multi-user.target"];
 
-    # the event handler for claude sessions runs them in shpool sessions
-    systemd.user.sockets.shpool = {
-      description = "Shpool session daemon socket";
-      wantedBy = ["sockets.target"];
-      listenStreams = ["%t/shpool/shpool.socket"];
-      socketConfig.SocketMode = "0600";
+      user = {
+        # the event handler for claude sessions runs them in shpool sessions
+        sockets.shpool = {
+          description = "Shpool session daemon socket";
+          wantedBy = ["sockets.target"];
+          listenStreams = ["%t/shpool/shpool.socket"];
+          socketConfig.SocketMode = "0600";
+        };
+
+        services = {
+          # restarting it kills every pooled session
+          shpool = {
+            description = "Shpool session daemon";
+            requires = ["shpool.socket"];
+            serviceConfig = {
+              ExecStart = "${pkgs.shpool}/bin/shpool --config-file ${shpoolConfig} daemon";
+              KillMode = "mixed";
+              TimeoutStopSec = "2s";
+              SendSIGHUP = true;
+            };
+          };
+
+          event-handlers = {
+            wantedBy = ["default.target"];
+            environment = {
+              PATH = lib.mkForce "/run/wrappers/bin:/etc/profiles/per-user/%u/bin:/run/current-system/sw/bin";
+              SSH_AUTH_SOCK = "%t/ssh-agent";
+            };
+          };
+
+          knowledge-curate = {
+            description = "Merge the pending knowledge notes into the knowledge store";
+            environment.KNOWLEDGE_CLAUDE = "${pkgs.claude}/bin/claude-bare";
+            serviceConfig = {
+              Type = "oneshot";
+              ExecStart = "${lib.getExe pkgs.knowledge} curate";
+            };
+            startAt = "*-*-* 00/6:15:00";
+          };
+
+          jw-reap = {
+            description = "Stop finished or long-idle Claude agent sessions and remove their merged workspaces";
+            path = [
+              pkgs.jujutsu
+              pkgs.git
+              pkgs.openssh
+              pkgs.glab
+              pkgs.gh
+            ];
+            environment.SSH_AUTH_SOCK = "%t/ssh-agent";
+            serviceConfig = {
+              Type = "oneshot";
+              ExecStart = "${pkgs.jw}/bin/jw reap";
+              TimeoutStartSec = "15min";
+            };
+            startAt = "*:0/10";
+          };
+        };
+
+        timers = {
+          knowledge-curate.timerConfig = {
+            Persistent = true;
+            RandomizedDelaySec = "10min";
+          };
+          jw-reap.timerConfig.Persistent = true;
+        };
+      };
     };
-
-    systemd.user.services = {
-      # restarting it kills every pooled session
-      shpool = {
-        description = "Shpool session daemon";
-        requires = ["shpool.socket"];
-        serviceConfig = {
-          ExecStart = "${pkgs.shpool}/bin/shpool --config-file ${shpoolConfig} daemon";
-          KillMode = "mixed";
-          TimeoutStopSec = "2s";
-          SendSIGHUP = true;
-        };
-      };
-
-      event-handlers = {
-        wantedBy = ["default.target"];
-        environment = {
-          PATH = lib.mkForce "/run/wrappers/bin:/etc/profiles/per-user/%u/bin:/run/current-system/sw/bin";
-          SSH_AUTH_SOCK = "%t/ssh-agent";
-        };
-      };
-
-      knowledge-curate = {
-        description = "Merge the pending knowledge notes into the knowledge store";
-        environment.KNOWLEDGE_CLAUDE = "${pkgs.claude}/bin/claude-bare";
-        serviceConfig = {
-          Type = "oneshot";
-          ExecStart = "${lib.getExe pkgs.knowledge} curate";
-        };
-        startAt = "*-*-* 00/6:15:00";
-      };
-
-      jw-reap = {
-        description = "Stop finished or long-idle Claude agent sessions and remove their merged workspaces";
-        path = [
-          pkgs.jujutsu
-          pkgs.git
-          pkgs.openssh
-          pkgs.glab
-          pkgs.gh
-        ];
-        environment.SSH_AUTH_SOCK = "%t/ssh-agent";
-        serviceConfig = {
-          Type = "oneshot";
-          ExecStart = "${pkgs.jw}/bin/jw reap";
-          TimeoutStartSec = "15min";
-        };
-        startAt = "*:0/10";
-      };
-    };
-
-    systemd.user.timers.knowledge-curate.timerConfig = {
-      Persistent = true;
-      RandomizedDelaySec = "10min";
-    };
-    systemd.user.timers.jw-reap.timerConfig.Persistent = true;
   };
 }

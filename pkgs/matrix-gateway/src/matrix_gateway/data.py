@@ -23,7 +23,9 @@ def loads(data: str | bytes) -> Json:
 
 def dumps(value: Json, sort_keys: bool = False) -> str:
     """Compact (one line)."""
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=sort_keys)
+    return json.dumps(
+        value, ensure_ascii=False, separators=(",", ":"), sort_keys=sort_keys
+    )
 
 
 def get_str(o: Obj, key: str) -> str | None:

@@ -1,5 +1,4 @@
 import pytest
-
 from knowledge import data
 from knowledge.data import ParseError
 
@@ -30,12 +29,19 @@ def test_dumps_is_compact_by_default():
 
 
 def test_checked_access():
-    o = data.as_obj(data.loads('{"s": "x", "n": 4, "l": ["a", "b"], "b": true, "o": {"k": 1}}'))
+    o = data.as_obj(
+        data.loads('{"s": "x", "n": 4, "l": ["a", "b"], "b": true, "o": {"k": 1}}')
+    )
     assert data.get_str(o, "s") == "x"
     assert data.str_list(o, "l") == ["a", "b"] and data.get_bool(o, "b")
     assert data.opt_str(o, "missing") is None and data.str_or(o, "missing", "d") == "d"
     assert data.opt_list(o, "missing") == []
-    for bad in (lambda: data.get_str(o, "n"), lambda: data.get_str(o, "missing"),
-                lambda: data.str_list(o, "o"), lambda: data.get_bool(o, "n"), lambda: data.opt_list(o, "s")):
+    for bad in (
+        lambda: data.get_str(o, "n"),
+        lambda: data.get_str(o, "missing"),
+        lambda: data.str_list(o, "o"),
+        lambda: data.get_bool(o, "n"),
+        lambda: data.opt_list(o, "s"),
+    ):
         with pytest.raises(ParseError):
             bad()

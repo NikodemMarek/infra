@@ -4,7 +4,6 @@
   jq,
   notify,
 }:
-
 # event handler for `remote.notify.>` messages that come in over the leaf link
 # from the cluster, so untrusted: only `project`, `title` and `body` are kept
 # (in that shape, with a fixed type) and handed to notify. Everything else, above
@@ -12,7 +11,7 @@
 let
   handler = writeShellApplication {
     name = "event-handler-remote-notify";
-    runtimeInputs = [ jq ];
+    runtimeInputs = [jq];
     text = ''
       event=$(cat)
 
@@ -42,4 +41,4 @@ let
     '';
   };
 in
-handler
+  handler

@@ -28,7 +28,10 @@ def sanitize(text: str, single_line: bool = False) -> str:
     if single_line:
         text = text.replace("\n", " ").replace("\t", " ")
     return "".join(
-        "�" if unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") and c not in "\n\t" else c for c in text
+        "�"
+        if unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") and c not in "\n\t"
+        else c
+        for c in text
     )
 
 
@@ -64,7 +67,11 @@ def parse_send(line: str) -> Send | None:
         return None
     if "reply_to" in obj:
         reply_to = obj["reply_to"]
-        if not isinstance(reply_to, str) or not reply_to.startswith("$") or len(reply_to) > 255:
+        if (
+            not isinstance(reply_to, str)
+            or not reply_to.startswith("$")
+            or len(reply_to) > 255
+        ):
             return None
         return Send(body, reply_to=reply_to)
     to = obj.get("to")
@@ -93,12 +100,26 @@ def _seal(key: Ed25519PrivateKey, kind: str, fields: Obj) -> str:
     return dumps({"type": kind, "msg": msg, "sig": sig})
 
 
-def seal(key: Ed25519PrivateKey, to: str, ref: str, text: str, body: str, event_id: str) -> str:
-    return _seal(key, "matrix.reply", {"to": to, "ref": ref, "text": text, "body": body, "event_id": event_id})
+def seal(
+    key: Ed25519PrivateKey, to: str, ref: str, text: str, body: str, event_id: str
+) -> str:
+    return _seal(
+        key,
+        "matrix.reply",
+        {"to": to, "ref": ref, "text": text, "body": body, "event_id": event_id},
+    )
 
 
-def seal_command(key: Ed25519PrivateKey, to: str, text: str, event_id: str, ts: int) -> str:
-    fields: Obj = {"kind": "matrix.command", "to": to, "text": text, "event_id": event_id, "ts": ts}
+def seal_command(
+    key: Ed25519PrivateKey, to: str, text: str, event_id: str, ts: int
+) -> str:
+    fields: Obj = {
+        "kind": "matrix.command",
+        "to": to,
+        "text": text,
+        "event_id": event_id,
+        "ts": ts,
+    }
     return _seal(key, "matrix.command", fields)
 
 

@@ -4,6 +4,7 @@ import fcntl
 import os
 import time
 from pathlib import Path
+from typing import Self
 
 from .config import runtime_dir
 
@@ -50,7 +51,7 @@ class FileLock:
             os.close(self._fd)  # closing drops the flock
             self._fd = None
 
-    def __enter__(self) -> "FileLock":
+    def __enter__(self) -> Self:
         if not self.acquire():
             raise LockTimeout(f"{self.path}: still locked after {self.timeout:g}s")
         return self

@@ -23,14 +23,14 @@ rel="${abs#"$real"/}"
 lockdir="${XDG_RUNTIME_DIR:-/tmp/user-$(id -u)}/knowledge"
 mkdir -p "$lockdir" 2>/dev/null
 (
-  flock -w 30 9 || exit 0
-  git -c core.hooksPath=/dev/null add -A -- "$rel" >/dev/null 2>&1
-  git -c core.hooksPath=/dev/null diff --cached --quiet -- "$rel" >/dev/null 2>&1 && exit 0
-  git -c core.hooksPath=/dev/null commit -q --no-verify -m "architect: update $rel" -- "$rel" >/dev/null 2>&1 || true
+	flock -w 30 9 || exit 0
+	git -c core.hooksPath=/dev/null add -A -- "$rel" >/dev/null 2>&1
+	git -c core.hooksPath=/dev/null diff --cached --quiet -- "$rel" >/dev/null 2>&1 && exit 0
+	git -c core.hooksPath=/dev/null commit -q --no-verify -m "architect: update $rel" -- "$rel" >/dev/null 2>&1 || true
 ) 9>"$lockdir/memory.lock"
 # Files below a nested repository can never be committed by the memory repo; say so.
 nested="$(find "$real" -mindepth 2 -name .git -print -quit 2>/dev/null)"
 if [ -n "$nested" ]; then
-  jq -n --arg p "$nested" '{systemMessage: ("memory: nested git repository at " + $p + "; files below it are not committed")}'
+	jq -n --arg p "$nested" '{systemMessage: ("memory: nested git repository at " + $p + "; files below it are not committed")}'
 fi
 exit 0

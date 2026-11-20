@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-
 from knowledge import config
 from knowledge.config import Tunables, UsageError
 
@@ -11,16 +10,23 @@ def test_memory_dir_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("CLAUDE_MEMORY_DIR")
     assert config.memory_dir() == tmp_path / "claude" / "memory"
     monkeypatch.delenv("CLAUDE_CONFIG_DIR")
-    assert config.memory_dir() == tmp_path / "home" / ".local" / "share" / "claude" / "memory"
+    assert (
+        config.memory_dir()
+        == tmp_path / "home" / ".local" / "share" / "claude" / "memory"
+    )
 
 
 def test_claude_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert config.claude_config_dir() == tmp_path / "claude"
     monkeypatch.delenv("CLAUDE_CONFIG_DIR")
-    assert config.claude_config_dir() == tmp_path / "home" / ".local" / "share" / "claude"
+    assert (
+        config.claude_config_dir() == tmp_path / "home" / ".local" / "share" / "claude"
+    )
 
 
-def test_an_empty_variable_counts_as_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_an_empty_variable_counts_as_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setenv("CLAUDE_MEMORY_DIR", "")
     assert config.memory_dir() == tmp_path / "claude" / "memory"
 
@@ -85,7 +91,9 @@ def test_tunable_overrides(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.parametrize("value", ["abc", "1.5", "0", "-3"])
-def test_an_invalid_timeout_is_a_usage_error(monkeypatch: pytest.MonkeyPatch, value: str):
+def test_an_invalid_timeout_is_a_usage_error(
+    monkeypatch: pytest.MonkeyPatch, value: str
+):
     monkeypatch.setenv("KNOWLEDGE_TIMEOUT", value)
     with pytest.raises(UsageError, match="KNOWLEDGE_TIMEOUT"):
         config.tunables()

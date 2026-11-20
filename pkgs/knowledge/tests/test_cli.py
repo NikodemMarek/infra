@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-
 from editing_claude import EditingClaude
 from knowledge import cli, notes
 from runner import Runner
@@ -10,8 +9,12 @@ TOKEN = "glpat-" + "a" * 20
 
 
 @pytest.fixture
-def run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> Runner:
-    monkeypatch.chdir(tmp_path)  # not an event's `.agents/gl-*` workspace, whatever runs the tests
+def run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> Runner:
+    monkeypatch.chdir(
+        tmp_path
+    )  # not an event's `.agents/gl-*` workspace, whatever runs the tests
     return Runner(monkeypatch, capsys)
 
 
@@ -22,7 +25,22 @@ def test_no_command_is_a_usage_error(monkeypatch: pytest.MonkeyPatch):
     assert e.value.code == 2
 
 
-@pytest.mark.parametrize("command", ["paths", "init", "index", "lint", "ask", "receive", "import", "status", "undo", "restore", "drop"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "paths",
+        "init",
+        "index",
+        "lint",
+        "ask",
+        "receive",
+        "import",
+        "status",
+        "undo",
+        "restore",
+        "drop",
+    ],
+)
 def test_the_removed_commands_are_gone(run: Runner, command: str):
     assert run(command)[0] == 2
 
@@ -40,13 +58,17 @@ def test_submit_queues_stdin_as_a_note_and_prints_its_path(run: Runner, tmp_path
     assert path.read_text().startswith(f"origin: user   cwd: {tmp_path}   date: ")
 
 
-def test_submit_inside_claude_code_is_a_session_note(run: Runner, monkeypatch: pytest.MonkeyPatch):
+def test_submit_inside_claude_code_is_a_session_note(
+    run: Runner, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setenv("CLAUDECODE", "1")
     assert run("submit", stdin="a note")[0] == 0
     assert [notes.origin_of(p) for p in notes.pending()] == ["session"]
 
 
-def test_submit_from_an_event_session_is_an_event_note(run: Runner, monkeypatch: pytest.MonkeyPatch):
+def test_submit_from_an_event_session_is_an_event_note(
+    run: Runner, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.setenv("KNOWLEDGE_ORIGIN", "event:gitlab.note")
     assert run("submit", stdin="a note")[0] == 0
@@ -73,11 +95,15 @@ def test_submit_takes_no_flags(run: Runner):
 # curate and skills
 
 
-def test_curate_runs_the_curator_and_exits_with_its_code(run: Runner, memory_repo: Path, editing_claude: EditingClaude):
+def test_curate_runs_the_curator_and_exits_with_its_code(
+    run: Runner, memory_repo: Path, editing_claude: EditingClaude
+):
     assert run("curate") == (0, "")  # nothing queued
     assert not editing_claude.called
     queued = notes.write("title: t\n---\nb", "user", Path("/w"))
-    editing_claude.plan(writes={"global.md": "- rule\n"}, result=f"{queued.stem}: merged - ok\n")
+    editing_claude.plan(
+        writes={"global.md": "- rule\n"}, result=f"{queued.stem}: merged - ok\n"
+    )
     assert run("curate") == (0, "")
     assert (memory_repo / "global.md").read_text() == "- rule\n"
     assert notes.pending() == []
@@ -91,7 +117,9 @@ def test_curate_takes_no_flags(run: Runner):
     assert run("curate", "--dry-run")[0] == 2
 
 
-def test_skills_prints_the_drafts(run: Runner, memory_repo: Path, editing_claude: EditingClaude):
+def test_skills_prints_the_drafts(
+    run: Runner, memory_repo: Path, editing_claude: EditingClaude
+):
     editing_claude.plan(writes={"skill-ideas/jj-flow.md": "# idea\n"})
     assert run("skills") == (0, f"{memory_repo / 'skill-ideas' / 'jj-flow.md'}\n")
     editing_claude.plan(exit_code=1)

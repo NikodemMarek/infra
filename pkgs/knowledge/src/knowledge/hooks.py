@@ -18,7 +18,9 @@ log = logging.getLogger("knowledge")
 SESSION_START = "session-start"
 SUBAGENT_STOP = "subagent-stop"
 HOOKS = (SESSION_START, SUBAGENT_STOP)
-DEFAULT_AGENT = "subagent"  # the origin of a block when the hook input does not name the agent type
+DEFAULT_AGENT = (
+    "subagent"  # the origin of a block when the hook input does not name the agent type
+)
 
 
 def _opt(inp: Obj, key: str) -> str | None:
@@ -41,7 +43,7 @@ def session_start(inp: Obj) -> Obj | None:
     text: str | None = None
     try:
         text = context.session_context(_cwd(inp))
-    except Exception as e:  # e.g. SCOPES.toml is not valid: no scope files, but the user hears of it
+    except Exception as e:  # noqa: BLE001  # e.g. SCOPES.toml is not valid: no scope files, but the user hears of it
         reason = str(e) or type(e).__name__
         log.warning("session context failed: %s", reason)
         messages.append(f"knowledge: {reason}")
@@ -49,7 +51,10 @@ def session_start(inp: Obj) -> Obj | None:
         messages.append(stale)
     out: Obj = {}
     if text is not None:
-        out["hookSpecificOutput"] = {"hookEventName": "SessionStart", "additionalContext": text}
+        out["hookSpecificOutput"] = {
+            "hookEventName": "SessionStart",
+            "additionalContext": text,
+        }
     if messages:
         out["systemMessage"] = "\n".join(messages)
     return out or None
@@ -91,7 +96,9 @@ def last_assistant_text(path: Path) -> str:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
-    for line in reversed(text.split("\n")):  # not splitlines(): it also splits on U+2028 and the like
+    for line in reversed(
+        text.split("\n")
+    ):  # not splitlines(): it also splits on U+2028 and the like
         found = _assistant_text(line)
         if found.strip():
             return found
@@ -123,8 +130,15 @@ def agent_text(inp: Obj) -> str:
 
 def _note(block: Block) -> str:
     """The text of the note of a block: its header lines, `---`, the body."""
-    fields = (("title", block.title), ("kind", block.kind), ("scope", block.scope), ("evidence", block.evidence))
-    return "\n".join([*(f"{key}: {value}" for key, value in fields if value), SEPARATOR, block.body])
+    fields = (
+        ("title", block.title),
+        ("kind", block.kind),
+        ("scope", block.scope),
+        ("evidence", block.evidence),
+    )
+    return "\n".join(
+        [*(f"{key}: {value}" for key, value in fields if value), SEPARATOR, block.body]
+    )
 
 
 def _summary(queued: int, refused: int, invalid: int) -> str:
@@ -139,7 +153,9 @@ def _summary(queued: int, refused: int, invalid: int) -> str:
 def subagent_stop(inp: Obj) -> Obj | None:
     """Queue the knowledge blocks of the subagent's last message as notes; the message for the user, None without
     knowledge fences."""
-    if inp.get("stop_hook_active") is True:  # the subagent goes on because a stop hook said so: its message was seen
+    if (
+        inp.get("stop_hook_active") is True
+    ):  # the subagent goes on because a stop hook said so: its message was seen
         return None
     message = agent_text(inp)
     blocks = parse_blocks(message)
@@ -179,7 +195,7 @@ def run(name: str) -> Obj | None:
     try:
         inp = _read_input()
         return session_start(inp) if name == SESSION_START else subagent_stop(inp)
-    except Exception as e:  # anything: a hook must not break the session
+    except Exception as e:  # noqa: BLE001  # anything: a hook must not break the session
         reason = str(e) or type(e).__name__
         log.warning("hook %s failed: %s", name, reason)
         if name == SUBAGENT_STOP:

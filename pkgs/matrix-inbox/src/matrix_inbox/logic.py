@@ -16,7 +16,9 @@ BODY_MAX = 16000
 TOO_LONG = "Too long to approve here: reply n to deny, or answer it on the computer."
 PERMISSION_HINT = "Reply y to allow or n to deny."
 QUESTION_HINT = "Reply with the option number or your own answer."
-QUESTIONS_HINT = "Reply with one line per question: the option number(s) or your own answer."
+QUESTIONS_HINT = (
+    "Reply with one line per question: the option number(s) or your own answer."
+)
 MULTI_HINT = "   (several: e.g. 1,3)"
 REPLY_Y_OR_N = "Reply y or n."
 CANNOT_ANSWER = "This question cannot be answered here."
@@ -32,7 +34,10 @@ def sanitize(text: str, single_line: bool = False) -> str:
     if single_line:
         text = text.replace("\n", " ").replace("\t", " ")
     return "".join(
-        "�" if unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") and c not in "\n\t" else c for c in text
+        "�"
+        if unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") and c not in "\n\t"
+        else c
+        for c in text
     )
 
 
@@ -78,7 +83,11 @@ def detail(event: Obj) -> tuple[str, bool]:
 
 
 def _options(question: Obj) -> list[Obj]:
-    return [o for o in get_list(question, "options") or [] if isinstance(o, dict) and get_str(o, "label") is not None]
+    return [
+        o
+        for o in get_list(question, "options") or []
+        if isinstance(o, dict) and get_str(o, "label") is not None
+    ]
 
 
 def _render_permission(header: str, event: Obj, title: str) -> str:
@@ -90,7 +99,9 @@ def _render_permission(header: str, event: Obj, title: str) -> str:
 
 def _render_question(header: str, event: Obj) -> str:
     tool_input = get_obj(event, "tool_input") or {}
-    questions = [q for q in get_list(tool_input, "questions") or [] if isinstance(q, dict)]
+    questions = [
+        q for q in get_list(tool_input, "questions") or [] if isinstance(q, dict)
+    ]
     lines = [f"{header} asks:"]
     for i, q in enumerate(questions, 1):
         prefix = f"{i}. " if len(questions) > 1 else ""
@@ -110,9 +121,13 @@ def _render_question(header: str, event: Obj) -> str:
 def render(event: Obj) -> str:
     kind = get_str(event, "type") or ""
     session = _nonempty(event, "session") or _nonempty(event, "shpool")
-    header = _head(_nonempty(event, "project") or "?") + (f" · {_head(session)}" if session else "")
+    header = _head(_nonempty(event, "project") or "?") + (
+        f" · {_head(session)}" if session else ""
+    )
     if kind == "claude.permission_request":
-        body = _render_permission(header, event, _head(_nonempty(event, "title") or kind))
+        body = _render_permission(
+            header, event, _head(_nonempty(event, "title") or kind)
+        )
     else:
         body = _render_question(header, event)
     if len(body) > BODY_MAX:

@@ -7,7 +7,18 @@ import time
 from typing import NoReturn
 
 from .data import ParseError, loads
-from .handlers import BusError, answer as answer_reply, command as run_command, post as post_event
+from .handlers import (
+    BusError,
+)
+from .handlers import (
+    answer as answer_reply,
+)
+from .handlers import (
+    command as run_command,
+)
+from .handlers import (
+    post as post_event,
+)
 from .io import NatsBus, ProcessLocal, ProcessTasks, SeenDir
 from .signed import load_key, open_command, open_reply
 
@@ -54,7 +65,9 @@ def answer() -> None:
     try:
         key = load_key(os.environ.get("MATRIX_GATEWAY_KEY", ""))
     except ValueError:
-        _fail("matrix-inbox-answer: set MATRIX_GATEWAY_KEY to the gateway's public key", 2)
+        _fail(
+            "matrix-inbox-answer: set MATRIX_GATEWAY_KEY to the gateway's public key", 2
+        )
     reply = open_reply(_read_stdin().decode("utf-8", errors="replace"), key)
     if reply is None:
         _fail("matrix-inbox-answer: dropping an unsigned or invalid reply", 1)
@@ -69,14 +82,22 @@ def command() -> None:
     try:
         key = load_key(os.environ.get("MATRIX_GATEWAY_KEY", ""))
     except ValueError:
-        _fail("matrix-inbox-command: set MATRIX_GATEWAY_KEY to the gateway's public key", 2)
+        _fail(
+            "matrix-inbox-command: set MATRIX_GATEWAY_KEY to the gateway's public key",
+            2,
+        )
     cmd = open_command(_read_stdin().decode("utf-8", errors="replace"), key)
     if cmd is None:
         _fail("matrix-inbox-command: dropping an unsigned or invalid command", 1)
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
     try:
         run_command(
-            cmd, _host(), time.time(), SeenDir(runtime_dir + "/matrix-inbox/commands"), ProcessTasks(), _bus()
+            cmd,
+            _host(),
+            time.time(),
+            SeenDir(runtime_dir + "/matrix-inbox/commands"),
+            ProcessTasks(),
+            _bus(),
         )
     except (BusError, OSError) as e:
         _fail(f"matrix-inbox-command: {e}", 1)

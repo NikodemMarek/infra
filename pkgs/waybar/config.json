@@ -1,225 +1,181 @@
 {
-    "layer": "top",
-    "position": "left",
-    "margin-top": 5,
-    "margin-bottom": 5,
-    "margin-left": 5,
-    "spacing": 5,
-    "modules-left": [
-        "clock",
-        "battery",
-        "network",
-        "bluetooth",
-        "custom/wireguard"
-    ],
-    "clock": {
-        "format": "{:%H\n%M}",
-        "format-alt": "{:%d\n%b}",
-        "tooltip": true,
-        "tooltip-format": "<tt><small>{calendar}</small></tt>",
-        "calendar": {
-            "mode": "year",
-            "mode-mon-col": 3,
-            "format": {
-                "days": "<span color='#cdd6f4'><b>{}</b></span>",
-                "months": "<span color='#fab387'><b>{}</b></span>",
-                "weekdays": "<span color='#a6e3a1'><b>{}</b></span>",
-                "today": "<span color='#f38ba8'><b><u>{}</u></b></span>"
-            }
-        },
-        "actions": {
-            "on-click-right": "mode",
-            "on-scroll-up": "shift_up",
-            "on-scroll-down": "shift_down"
-        }
+  "layer": "top",
+  "position": "left",
+  "margin-top": 5,
+  "margin-bottom": 5,
+  "margin-left": 5,
+  "spacing": 5,
+  "modules-left": [
+    "clock",
+    "battery",
+    "network",
+    "bluetooth",
+    "custom/wireguard"
+  ],
+  "clock": {
+    "format": "{:%H\n%M}",
+    "format-alt": "{:%d\n%b}",
+    "tooltip": true,
+    "tooltip-format": "<tt><small>{calendar}</small></tt>",
+    "calendar": {
+      "mode": "year",
+      "mode-mon-col": 3,
+      "format": {
+        "days": "<span color='#cdd6f4'><b>{}</b></span>",
+        "months": "<span color='#fab387'><b>{}</b></span>",
+        "weekdays": "<span color='#a6e3a1'><b>{}</b></span>",
+        "today": "<span color='#f38ba8'><b><u>{}</u></b></span>"
+      }
     },
-    "battery": {
-        "format": "{icon}",
-        "states": {
-            "warning": 20,
-            "critical": 10
-        },
-        "format-icons": [
-            "󰁺",
-            "󰁻",
-            "󰁼",
-            "󰁽",
-            "󰁾",
-            "󰁿",
-            "󰂀",
-            "󰂁",
-            "󰂂",
-            "󰁹"
-        ],
-        "format-charging": "󰂄",
-        "format-plugged": "󰚥",
-        "format-critical": "󰂃"
-    },
-    "network": {
-        "format-icons": {
-            "wifi": [
-                "󰤯",
-                "󰤟",
-                "󰤢",
-                "󰤥",
-                "󰤨"
-            ],
-            "ethernet": "󰈀",
-            "disabled": "󰤭",
-            "disconnected": "󰤩"
-        },
-        "format-wifi": "{icon}",
-        "format-ethernet": "{icon}",
-        "format-disconnected": "{icon}",
-        "format-disabled": "{icon}",
-        "interval": 5,
-        "tooltip-format": "{essid}\t{gwaddr}",
-        "on-click": "rfkill toggle wifi",
-        "tooltip": true,
-        "max-length": 20
-    },
-    "bluetooth": {
-        "interval": 5,
-        "format-on": "󰂯",
-        "format-off": "󰂲",
-        "format-disabled": "󰂲",
-        "format-connected": "󰂱",
-        "format-no-controller": "󰂯",
-        "tooltip": true,
-        "tooltip-format": "{device_enumerate}",
-        "tooltip-format-enumerate-connected": "{device_address}",
-        "tooltip-format-enumerate-connected-battery": "{device_address} | Battery: {device_battery_percentage}%",
-        "on-click": "rfkill toggle bluetooth"
-    },
-    "custom/wireguard": {
-        "format": "{icon}",
-        "format-icons": [
-            "",
-            ""
-        ],
-        "exec": "wireguard-status",
-        "return-type": "json",
-        "interval": 5,
-        "tooltip": true,
-        "on-click": "wireguard-toggle"
-    },
-    "modules-center": [
-        "hyprland/workspaces"
-    ],
-    "hyprland/workspaces": {
-        "format": "{icon}",
-        "format-icons": {
-            "default": "󰄰",
-            "active": "󰄯"
-        }
-    },
-    "modules-right": [
-        "group/audio",
-        "group/brightness",
-        "group/powermenu"
-    ],
-    "group/brightness": {
-        "orientation": "inherit",
-        "drawer": {
-            "transition-duration": 400,
-            "children-class": "brightness",
-            "transition-left-to-right": false
-        },
-        "modules": [
-            "backlight",
-            "backlight/slider"
-        ]
-    },
-    "backlight/slider": {
-        "min": 0,
-        "max": 100,
-        "orientation": "vertical"
-    },
-    "backlight": {
-        "format": "{icon}",
-        "format-icons": [
-            "󰃚",
-            "󰃛",
-            "󰃜",
-            "󰃝",
-            "󰃞",
-            "󰃟",
-            "󰃠"
-        ]
-    },
-    "group/audio": {
-        "orientation": "inherit",
-        "drawer": {
-            "transition-duration": 400,
-            "children-class": "pulseaudio",
-            "transition-left-to-right": false
-        },
-        "modules": [
-            "pulseaudio",
-            "pulseaudio/slider"
-        ]
-    },
-    "pulseaudio/slider": {
-        "min": 0,
-        "max": 100,
-        "orientation": "vertical"
-    },
-    "pulseaudio": {
-        "interval": 1,
-        "format": "{icon}",
-        "format-icons": [
-            "󰕿",
-            "󰖀",
-            "󰕾"
-        ],
-        "format-muted": "󰝟",
-        "on-click": "pactl set-sink-mute @DEFAULT_SINK@ toggle",
-        "tooltip": false
-    },
-    "group/powermenu": {
-        "orientation": "inherit",
-        "drawer": {
-            "transition-duration": 500,
-            "children-class": "powermenu",
-            "transition-left-to-right": false
-        },
-        "modules": [
-            "custom/power",
-            "custom/quit",
-            "custom/lock",
-            "custom/reboot",
-            "custom/sleep",
-            "custom/hibernate"
-        ]
-    },
-    "custom/quit": {
-        "format": "󰗼",
-        "tooltip": false,
-        "on-click": "loginctl terminate-user $USER"
-    },
-    "custom/lock": {
-        "format": "󰍁",
-        "tooltip": false,
-        "on-click": "loginctl lock-session"
-    },
-    "custom/reboot": {
-        "format": "󰜉",
-        "tooltip": false,
-        "on-click": "reboot"
-    },
-    "custom/power": {
-        "format": "",
-        "tooltip": false,
-        "on-click": "poweroff"
-    },
-    "custom/sleep": {
-        "format": "",
-        "tooltip": false,
-        "on-click": "systemctl suspend"
-    },
-    "custom/hibernate": {
-        "format": "",
-        "tooltip": false,
-        "on-click": "systemctl hibernate"
+    "actions": {
+      "on-click-right": "mode",
+      "on-scroll-up": "shift_up",
+      "on-scroll-down": "shift_down"
     }
+  },
+  "battery": {
+    "format": "{icon}",
+    "states": {
+      "warning": 20,
+      "critical": 10
+    },
+    "format-icons": ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"],
+    "format-charging": "󰂄",
+    "format-plugged": "󰚥",
+    "format-critical": "󰂃"
+  },
+  "network": {
+    "format-icons": {
+      "wifi": ["󰤯", "󰤟", "󰤢", "󰤥", "󰤨"],
+      "ethernet": "󰈀",
+      "disabled": "󰤭",
+      "disconnected": "󰤩"
+    },
+    "format-wifi": "{icon}",
+    "format-ethernet": "{icon}",
+    "format-disconnected": "{icon}",
+    "format-disabled": "{icon}",
+    "interval": 5,
+    "tooltip-format": "{essid}\t{gwaddr}",
+    "on-click": "rfkill toggle wifi",
+    "tooltip": true,
+    "max-length": 20
+  },
+  "bluetooth": {
+    "interval": 5,
+    "format-on": "󰂯",
+    "format-off": "󰂲",
+    "format-disabled": "󰂲",
+    "format-connected": "󰂱",
+    "format-no-controller": "󰂯",
+    "tooltip": true,
+    "tooltip-format": "{device_enumerate}",
+    "tooltip-format-enumerate-connected": "{device_address}",
+    "tooltip-format-enumerate-connected-battery": "{device_address} | Battery: {device_battery_percentage}%",
+    "on-click": "rfkill toggle bluetooth"
+  },
+  "custom/wireguard": {
+    "format": "{icon}",
+    "format-icons": ["", ""],
+    "exec": "wireguard-status",
+    "return-type": "json",
+    "interval": 5,
+    "tooltip": true,
+    "on-click": "wireguard-toggle"
+  },
+  "modules-center": ["hyprland/workspaces"],
+  "hyprland/workspaces": {
+    "format": "{icon}",
+    "format-icons": {
+      "default": "󰄰",
+      "active": "󰄯"
+    }
+  },
+  "modules-right": ["group/audio", "group/brightness", "group/powermenu"],
+  "group/brightness": {
+    "orientation": "inherit",
+    "drawer": {
+      "transition-duration": 400,
+      "children-class": "brightness",
+      "transition-left-to-right": false
+    },
+    "modules": ["backlight", "backlight/slider"]
+  },
+  "backlight/slider": {
+    "min": 0,
+    "max": 100,
+    "orientation": "vertical"
+  },
+  "backlight": {
+    "format": "{icon}",
+    "format-icons": ["󰃚", "󰃛", "󰃜", "󰃝", "󰃞", "󰃟", "󰃠"]
+  },
+  "group/audio": {
+    "orientation": "inherit",
+    "drawer": {
+      "transition-duration": 400,
+      "children-class": "pulseaudio",
+      "transition-left-to-right": false
+    },
+    "modules": ["pulseaudio", "pulseaudio/slider"]
+  },
+  "pulseaudio/slider": {
+    "min": 0,
+    "max": 100,
+    "orientation": "vertical"
+  },
+  "pulseaudio": {
+    "interval": 1,
+    "format": "{icon}",
+    "format-icons": ["󰕿", "󰖀", "󰕾"],
+    "format-muted": "󰝟",
+    "on-click": "pactl set-sink-mute @DEFAULT_SINK@ toggle",
+    "tooltip": false
+  },
+  "group/powermenu": {
+    "orientation": "inherit",
+    "drawer": {
+      "transition-duration": 500,
+      "children-class": "powermenu",
+      "transition-left-to-right": false
+    },
+    "modules": [
+      "custom/power",
+      "custom/quit",
+      "custom/lock",
+      "custom/reboot",
+      "custom/sleep",
+      "custom/hibernate"
+    ]
+  },
+  "custom/quit": {
+    "format": "󰗼",
+    "tooltip": false,
+    "on-click": "loginctl terminate-user $USER"
+  },
+  "custom/lock": {
+    "format": "󰍁",
+    "tooltip": false,
+    "on-click": "loginctl lock-session"
+  },
+  "custom/reboot": {
+    "format": "󰜉",
+    "tooltip": false,
+    "on-click": "reboot"
+  },
+  "custom/power": {
+    "format": "",
+    "tooltip": false,
+    "on-click": "poweroff"
+  },
+  "custom/sleep": {
+    "format": "",
+    "tooltip": false,
+    "on-click": "systemctl suspend"
+  },
+  "custom/hibernate": {
+    "format": "",
+    "tooltip": false,
+    "on-click": "systemctl hibernate"
+  }
 }

@@ -7,7 +7,6 @@
   # low | normal | critical
   urgency ? "normal",
 }:
-
 # event handler: desktop notification, "Open" action opens the event URL
 # (or the url of the session's record, else its first MR), if it is an https URL.
 writeShellApplication {

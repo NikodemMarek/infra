@@ -48,7 +48,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop:
-              - ALL
+                - ALL
           volumeMounts:
             - name: tmp
               mountPath: /tmp

@@ -3,10 +3,17 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from fakes import FakeLlm
 from knowledge.config import UsageError
-from knowledge.llm import ALLOWED_TOOLS, DISALLOWED_TOOLS, PRIVATE_DENY, ClaudeCli, Llm, LlmError, build_argv
+from knowledge.llm import (
+    ALLOWED_TOOLS,
+    DISALLOWED_TOOLS,
+    PRIVATE_DENY,
+    ClaudeCli,
+    Llm,
+    LlmError,
+    build_argv,
+)
 
 FAKE_CLAUDE = """\
 #!@PYTHON@
@@ -115,7 +122,9 @@ def test_argv_settings_parse_and_tools_are_read_only():
     assert json.loads(a[a.index("--settings") + 1]) == {"disableAllHooks": True}
     assert a[a.index("--allowedTools") + 1] == "Read,Grep,Glob"
     assert a[a.index("--tools") + 1] == "Read,Grep,Glob"
-    assert a[a.index("--tools") + 2].startswith("--")  # --tools is variadic: no positional right after it
+    assert a[a.index("--tools") + 2].startswith(
+        "--"
+    )  # --tools is variadic: no positional right after it
     assert "--max-turns" not in a
 
 
@@ -132,14 +141,20 @@ def test_argv_has_no_positional_prompt():
         "--append-system-prompt",
         "--add-dir",
     }
-    rest = [x for i, x in enumerate(a[1:], 1) if not x.startswith("-") and a[i - 1] not in flags_with_value]
+    rest = [
+        x
+        for i, x in enumerate(a[1:], 1)
+        if not x.startswith("-") and a[i - 1] not in flags_with_value
+    ]
     assert rest == []
 
 
 def test_argv_denies_the_private_notes():
     a = argv()
     denied = a[a.index("--disallowedTools") + 1].split(",")
-    assert {"Read(./private/**)", "Grep(./private/**)", "Glob(./private/**)"} <= set(denied)
+    assert {"Read(./private/**)", "Grep(./private/**)", "Glob(./private/**)"} <= set(
+        denied
+    )
     assert denied == list(PRIVATE_DENY)
     assert "Read" not in denied  # only the private directory, not the tool
     assert a[a.index("--allowedTools") + 1] == "Read,Grep,Glob"
@@ -163,8 +178,12 @@ def test_argv_with_edits_allows_only_edit_rules():
     a = argv(edits=["/mem/global.md", "/mem/topic/**"])
     assert a[a.index("--tools") + 1] == "Read,Grep,Glob,Edit,Write"
     assert a[a.index("--tools") + 2] == "--allowedTools"
-    assert a[a.index("--allowedTools") + 1] == "Edit(//mem/global.md),Edit(//mem/topic/**)"  # no Write, no bare Read
-    assert a[a.index("--disallowedTools") + 1] == DISALLOWED_TOOLS  # private/ stays denied
+    assert (
+        a[a.index("--allowedTools") + 1] == "Edit(//mem/global.md),Edit(//mem/topic/**)"
+    )  # no Write, no bare Read
+    assert (
+        a[a.index("--disallowedTools") + 1] == DISALLOWED_TOOLS
+    )  # private/ stays denied
     assert a[a.index("--permission-mode") + 1] == "default"
     assert a.index("--permission-mode") < a.index("--strict-mcp-config")
     assert a[-4:] == ["--add-dir", "/mem", "--add-dir", "/ws/skills"]
@@ -220,14 +239,20 @@ def test_edits_are_passed_through(fake_claude: Path, memory_repo: Path):
     assert args[args.index("--permission-mode") + 1] == "default"
 
 
-def test_permission_denials_fail_a_call_with_edits(fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch):
+def test_permission_denials_fail_a_call_with_edits(
+    fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "denied")
     with pytest.raises(LlmError, match="denied 1 tool call"):
         ClaudeCli(edits=["/mem/a.md"]).run("s", "m", [])
-    assert ClaudeCli().run("s", "m", []) == "ok"  # a read-only call does not look at them
+    assert (
+        ClaudeCli().run("s", "m", []) == "ok"
+    )  # a read-only call does not look at them
 
 
-def test_the_child_does_not_see_claudecode(fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch):
+def test_the_child_does_not_see_claudecode(
+    fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
     ClaudeCli().run("s", "m", [])
     assert call(fake_claude)["claudecode"] is None
     monkeypatch.setenv("CLAUDECODE", "1")  # a nested launch from inside Claude Code
@@ -248,38 +273,50 @@ def test_model_and_effort_come_from_the_environment(
     assert args[args.index("--effort") + 1] == "high"
 
 
-def test_a_failing_exit_is_an_error(fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch):
+def test_a_failing_exit_is_an_error(
+    fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "exit1")
     with pytest.raises(LlmError, match="status 1: boom: no credentials"):
         ClaudeCli().run("s", "m", [])
 
 
-def test_output_that_is_not_json_is_an_error(fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch):
+def test_output_that_is_not_json_is_an_error(
+    fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "notjson")
     with pytest.raises(LlmError, match="did not print a JSON object"):
         ClaudeCli().run("s", "m", [])
 
 
-def test_is_error_is_an_error(fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch):
+def test_is_error_is_an_error(
+    fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "iserror")
     with pytest.raises(LlmError, match="error_during_execution"):
         ClaudeCli().run("s", "m", [])
 
 
-def test_no_result_is_an_error(fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch):
+def test_no_result_is_an_error(
+    fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "noresult")
     with pytest.raises(LlmError, match="no result"):
         ClaudeCli().run("s", "m", [])
 
 
-def test_a_timeout_is_an_error(fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch):
+def test_a_timeout_is_an_error(
+    fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "sleep")
     monkeypatch.setenv("KNOWLEDGE_TIMEOUT", "1")
     with pytest.raises(LlmError, match="timed out after 1s"):
         ClaudeCli().run("s", "m", [])
 
 
-def test_a_missing_binary_is_an_error(memory_repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_a_missing_binary_is_an_error(
+    memory_repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     monkeypatch.setenv("KNOWLEDGE_CLAUDE", str(tmp_path / "no-such-claude"))
     with pytest.raises(LlmError, match="cannot run claude"):
         ClaudeCli().run("s", "m", [])

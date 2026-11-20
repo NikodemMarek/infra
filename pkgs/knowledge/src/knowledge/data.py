@@ -7,8 +7,9 @@ import datetime
 import json
 import re
 import sys
-import tomllib
 from typing import cast
+
+import tomllib
 
 type Json = None | bool | int | float | str | list[Json] | dict[str, Json]
 type Obj = dict[str, Json]

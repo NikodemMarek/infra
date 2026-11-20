@@ -11,12 +11,12 @@ dir="${1:-}"
 mcp="$dir/.mcp.json"
 settings="$dir/.claude/settings.local.json"
 if [ -z "$dir" ] || [ ! -f "$mcp" ]; then
-  exit 0
+	exit 0
 fi
 files=("${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$dir/.claude/settings.json" "$settings")
 for i in "${!files[@]}"; do
-  # a missing file reads as no values, like a 0-byte one
-  [ -e "${files[$i]}" ] || files[i]=/dev/null
+	# a missing file reads as no values, like a 0-byte one
+	[ -e "${files[$i]}" ] || files[i]=/dev/null
 done
 # the filter prints nothing when no server needs adding
 if ! out="$(jq -n --slurpfile m "$mcp" --slurpfile g "${files[0]}" --slurpfile p "${files[1]}" --slurpfile l "${files[2]}" '
@@ -27,14 +27,14 @@ if ! out="$(jq -n --slurpfile m "$mcp" --slurpfile g "${files[0]}" --slurpfile p
   | if ($add | length) == 0 then empty
     else $all[2] | .disabledMcpjsonServers = ((.disabledMcpjsonServers // []) + $add) end
   ')"; then
-  echo "claude-mcp-defaults: leaving $settings alone" >&2
-  exit 0
+	echo "claude-mcp-defaults: leaving $settings alone" >&2
+	exit 0
 fi
 if [ -z "$out" ]; then
-  exit 0
+	exit 0
 fi
 if mkdir -p -- "$dir/.claude" && tmp="$(mktemp -- "$settings.XXXXXX")"; then
-  printf '%s\n' "$out" >"$tmp" && mv -f -- "$tmp" "$settings"
-  rm -f -- "$tmp"
+	printf '%s\n' "$out" >"$tmp" && mv -f -- "$tmp" "$settings"
+	rm -f -- "$tmp"
 fi
 exit 0

@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-
 from fakes import FakeLlm
 from knowledge import route
 from knowledge.llm import LlmError
@@ -9,7 +8,9 @@ from knowledge.prompts import router_prompt
 from runner import Runner
 
 
-def make_repo(root: Path, name: str, readme: str | None = None, readme_name: str = "README.md") -> Path:
+def make_repo(
+    root: Path, name: str, readme: str | None = None, readme_name: str = "README.md"
+) -> Path:
     path = root / name
     path.mkdir(parents=True)
     if readme is not None:
@@ -78,7 +79,10 @@ def test_readme_head_prefers_the_shortest_name_to_a_translation(tmp_path: Path):
 
 def test_readme_head_without_a_readme_or_text_is_empty(tmp_path: Path):
     assert route.readme_head(make_repo(tmp_path, "none")) == ""
-    assert route.readme_head(make_repo(tmp_path, "headings", "# Only\n\n[![b](c)](d)\n")) == ""
+    assert (
+        route.readme_head(make_repo(tmp_path, "headings", "# Only\n\n[![b](c)](d)\n"))
+        == ""
+    )
     assert route.readme_head(tmp_path / "missing") == ""
 
 
@@ -103,8 +107,12 @@ def project(memory_repo: Path, tmp_path: Path) -> Path:
     app = make_repo(tmp_path / "p", "app", "# app\n\nThe README text.\n")
     overview = memory_repo / "projects" / "app" / "overview.md"
     overview.parent.mkdir(parents=True)
-    overview.write_text("# app\n\n## Purpose\n\nBilling\nfor all.\n\n## Status\n\nactive\n")
-    (memory_repo / "INDEX.md").write_text(f"| slug | status | repo |\n|---|---|---|\n| app | active | {app} |\n")
+    overview.write_text(
+        "# app\n\n## Purpose\n\nBilling\nfor all.\n\n## Status\n\nactive\n"
+    )
+    (memory_repo / "INDEX.md").write_text(
+        f"| slug | status | repo |\n|---|---|---|\n| app | active | {app} |\n"
+    )
     return app
 
 
@@ -114,7 +122,9 @@ def test_purpose_is_the_section_of_the_overview(memory_repo: Path, project: Path
 
 
 def test_purpose_is_empty_without_the_section(memory_repo: Path, project: Path):
-    (memory_repo / "projects" / "app" / "overview.md").write_text("# app\n\n## Status\n\nactive\n")
+    (memory_repo / "projects" / "app" / "overview.md").write_text(
+        "# app\n\n## Status\n\nactive\n"
+    )
     assert route.purpose(memory_repo, "app") == ""
 
 
@@ -123,17 +133,26 @@ def test_the_purpose_is_preferred_to_the_readme(memory_repo: Path, project: Path
     assert text.splitlines()[-1] == "- app: Billing for all."
 
 
-def test_the_readme_is_used_without_a_purpose(memory_repo: Path, project: Path, tmp_path: Path):
+def test_the_readme_is_used_without_a_purpose(
+    memory_repo: Path, project: Path, tmp_path: Path
+):
     (memory_repo / "projects" / "app" / "overview.md").write_text("# app\n")
-    assert route.message("t", [project], memory_repo).splitlines()[-1] == "- app: The README text."
+    assert (
+        route.message("t", [project], memory_repo).splitlines()[-1]
+        == "- app: The README text."
+    )
     lib = make_repo(tmp_path / "p", "lib", "A library.\n")  # not in INDEX.md
-    assert route.message("t", [lib], memory_repo).splitlines()[-1] == "- lib: A library."
+    assert (
+        route.message("t", [lib], memory_repo).splitlines()[-1] == "- lib: A library."
+    )
 
 
 # message
 
 
-def test_message_lists_every_candidate_in_order_with_the_task_verbatim(memory_repo: Path, tmp_path: Path):
+def test_message_lists_every_candidate_in_order_with_the_task_verbatim(
+    memory_repo: Path, tmp_path: Path
+):
     zeta = make_repo(tmp_path, "zeta", "Zeta things.\n")
     bare = make_repo(tmp_path, "bare")
     alpha = make_repo(tmp_path, "alpha", "Alpha things.\n")
@@ -154,11 +173,15 @@ NAMES = ["app", "lib"]
 
 
 def test_parse_plain_json():
-    assert route.parse('{"repo": "app", "reason": "billing"}', NAMES) == route.Answer("app", "billing")
+    assert route.parse('{"repo": "app", "reason": "billing"}', NAMES) == route.Answer(
+        "app", "billing"
+    )
 
 
 def test_parse_fenced_json():
-    assert route.parse('```json\n{"repo": "lib", "reason": "r"}\n```', NAMES) == route.Answer("lib", "r")
+    assert route.parse(
+        '```json\n{"repo": "lib", "reason": "r"}\n```', NAMES
+    ) == route.Answer("lib", "r")
 
 
 def test_parse_json_among_prose():
@@ -172,7 +195,9 @@ def test_parse_json_followed_by_braces_in_prose():
 
 
 def test_parse_null_none_and_empty_mean_no_repo():
-    assert route.parse('{"repo": null, "reason": "unclear"}', NAMES) == route.Answer(None, "unclear")
+    assert route.parse('{"repo": null, "reason": "unclear"}', NAMES) == route.Answer(
+        None, "unclear"
+    )
     assert route.parse('{"repo": "none"}', NAMES) == route.Answer(None, "")
     assert route.parse('{"repo": "null"}', NAMES) == route.Answer(None, "")
     assert route.parse('{"repo": "None"}', NAMES) == route.Answer(None, "")
@@ -200,7 +225,9 @@ def test_parse_rejects_what_is_not_an_answer(text: str, error: str):
 # route
 
 
-def test_route_asks_the_router_prompt_with_no_extra_dirs(memory_repo: Path, tmp_path: Path):
+def test_route_asks_the_router_prompt_with_no_extra_dirs(
+    memory_repo: Path, tmp_path: Path
+):
     app = make_repo(tmp_path, "app", "Billing.\n")
     fake = answering("app")
     assert route.route("pay the bill", [app], fake) == route.Answer("app", "because")
@@ -214,7 +241,9 @@ def test_router_prompt_is_filled():
     assert "@@" not in router_prompt()
 
 
-def test_route_uses_the_haiku_low_runner_without_tools(memory_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_route_uses_the_haiku_low_runner_without_tools(
+    memory_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     seen: list[dict[str, object]] = []
 
     def factory(**kwargs: object) -> FakeLlm:
@@ -238,7 +267,9 @@ def stdin_of(*repos: Path) -> str:
     return "".join(f"{r}\n" for r in repos)
 
 
-def test_route_prints_one_json_line(run: Runner, monkeypatch: pytest.MonkeyPatch, memory_repo: Path, tmp_path: Path):
+def test_route_prints_one_json_line(
+    run: Runner, monkeypatch: pytest.MonkeyPatch, memory_repo: Path, tmp_path: Path
+):
     app = make_repo(tmp_path, "app", "Billing.\n")
     lib = make_repo(tmp_path, "lib", "Parsing.\n")
     fake = fake_llm(monkeypatch, answering("app", "it bills"))
@@ -261,7 +292,10 @@ def test_route_keeps_the_newlines_of_a_single_argument(
     run: Runner, monkeypatch: pytest.MonkeyPatch, memory_repo: Path, tmp_path: Path
 ):
     fake = fake_llm(monkeypatch, answering("app"))
-    assert run("route", "first\nsecond", stdin=f"  {make_repo(tmp_path, 'app')}  \n\n")[0] == 0
+    assert (
+        run("route", "first\nsecond", stdin=f"  {make_repo(tmp_path, 'app')}  \n\n")[0]
+        == 0
+    )
     assert fake.calls[0].message.startswith("Task:\nfirst\nsecond\n\n")
 
 
@@ -282,18 +316,27 @@ def test_route_usage_errors_exit_2_without_a_call(
     assert run("route", " ", stdin=app) == (2, "")
     assert run("route", "t", stdin="") == (2, "")  # no candidates
     assert run("route", "t", stdin=" \n\n") == (2, "")
-    assert run("route", "t", stdin=app, tty=True) == (2, "")  # a terminal is no candidates
+    assert run("route", "t", stdin=app, tty=True) == (
+        2,
+        "",
+    )  # a terminal is no candidates
     assert fake.calls == []
 
 
-def test_route_without_a_memory_dir_is_a_usage_error(run: Runner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_route_without_a_memory_dir_is_a_usage_error(
+    run: Runner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     fake = fake_llm(monkeypatch, FakeLlm())
     assert run("route", "t", stdin=stdin_of(make_repo(tmp_path, "app"))) == (2, "")
     assert fake.calls == []
 
 
 def test_route_when_the_call_fails_exits_1(
-    run: Runner, monkeypatch: pytest.MonkeyPatch, memory_repo: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    run: Runner,
+    monkeypatch: pytest.MonkeyPatch,
+    memory_repo: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ):
     fake_llm(monkeypatch, FakeLlm(error=LlmError("claude timed out after 60s")))
     assert run("route", "t", stdin=stdin_of(make_repo(tmp_path, "app"))) == (1, "")
@@ -301,7 +344,11 @@ def test_route_when_the_call_fails_exits_1(
 
 
 def test_route_with_an_unusable_answer_exits_1(
-    run: Runner, monkeypatch: pytest.MonkeyPatch, memory_repo: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    run: Runner,
+    monkeypatch: pytest.MonkeyPatch,
+    memory_repo: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ):
     fake_llm(monkeypatch, FakeLlm(lambda message: "no idea"))
     assert run("route", "t", stdin=stdin_of(make_repo(tmp_path, "app"))) == (1, "")
@@ -309,7 +356,11 @@ def test_route_with_an_unusable_answer_exits_1(
 
 
 def test_route_with_a_non_candidate_answer_exits_1(
-    run: Runner, monkeypatch: pytest.MonkeyPatch, memory_repo: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    run: Runner,
+    monkeypatch: pytest.MonkeyPatch,
+    memory_repo: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ):
     fake_llm(monkeypatch, answering("elsewhere"))
     assert run("route", "t", stdin=stdin_of(make_repo(tmp_path, "app"))) == (1, "")

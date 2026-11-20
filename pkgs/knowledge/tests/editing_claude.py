@@ -42,7 +42,9 @@ class EditingClaude:
         self.log = log
 
     @classmethod
-    def install(cls, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> "EditingClaude":
+    def install(
+        cls, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> "EditingClaude":
         script = tmp_path / "bin" / "claude"
         script.parent.mkdir(exist_ok=True)
         script.write_text(SCRIPT.replace("@PYTHON@", sys.executable))

@@ -5,13 +5,13 @@ cat >/dev/null
 context=""
 dir="${CLAUDE_EVENT_SESSION_DIR:-}"
 if [ -n "$dir" ] && [ -d "$dir" ]; then
-  paths="$(claude-event-queue take "$dir")"
-  if [ -n "$paths" ]; then
-    context="New GitLab activity on this MR, read: ${paths//$'\n'/ }"
-  fi
+	paths="$(claude-event-queue take "$dir")"
+	if [ -n "$paths" ]; then
+		context="New GitLab activity on this MR, read: ${paths//$'\n'/ }"
+	fi
 fi
 if [ -n "$context" ]; then
-  jq -n --arg c "$context" \
-    '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$c}}'
+	jq -n --arg c "$context" \
+		'{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$c}}'
 fi
 exit 0

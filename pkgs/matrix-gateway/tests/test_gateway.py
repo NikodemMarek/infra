@@ -3,7 +3,6 @@ import json
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
 from fakes import OWNER, ROOM, USER, FakeBus, FakeMatrix, owner_message
 from matrix_gateway.data import Obj
 from matrix_gateway.gateway import DEVICE_ID, Fatal, Gateway, MatrixError
@@ -15,7 +14,9 @@ BUS_DOWN = "Failed: message bus unavailable."
 
 class Rig:
     def __init__(self, aliases: dict[str, str] | None = None) -> None:
-        self.matrix = FakeMatrix(aliases={"#agents:nkmrk.com": ROOM} if aliases is None else aliases)
+        self.matrix = FakeMatrix(
+            aliases={"#agents:nkmrk.com": ROOM} if aliases is None else aliases
+        )
         self.bus = FakeBus()
         self.key = Ed25519PrivateKey.generate()
         self.gw = Gateway(self.matrix, self.bus, OWNER, "agents", "pw", self.key)
@@ -24,14 +25,22 @@ class Rig:
         self.gw.start()
         return self
 
-    def routed(self, event_id: str = "$bot1", to: str = "yenn", ref: str = "r", body: str = "B") -> None:
-        self.matrix.add_event(event_id, USER, {"msgtype": "m.text", "body": body, ROUTE: {"to": to, "ref": ref}})
+    def routed(
+        self, event_id: str = "$bot1", to: str = "yenn", ref: str = "r", body: str = "B"
+    ) -> None:
+        self.matrix.add_event(
+            event_id,
+            USER,
+            {"msgtype": "m.text", "body": body, ROUTE: {"to": to, "ref": ref}},
+        )
 
 
 def verify(rig: Rig, data: str) -> Obj:
     env = json.loads(data)
     assert env["type"] == "matrix.reply"
-    rig.key.public_key().verify(base64.b64decode(env["sig"]), env["msg"].encode("utf-8"))
+    rig.key.public_key().verify(
+        base64.b64decode(env["sig"]), env["msg"].encode("utf-8")
+    )
     msg = json.loads(env["msg"])
     assert isinstance(msg, dict)
     return msg
@@ -90,7 +99,11 @@ def test_on_send_routed() -> None:
     assert s.room == ROOM
     assert s.txn == "t1"
     assert s.event_type == "m.room.message"
-    assert s.content == {"msgtype": "m.text", "body": "hi", ROUTE: {"to": "yenn", "ref": "/r/x"}}
+    assert s.content == {
+        "msgtype": "m.text",
+        "body": "hi",
+        ROUTE: {"to": "yenn", "ref": "/r/x"},
+    }
 
 
 def test_on_send_notice() -> None:
@@ -114,7 +127,10 @@ def test_on_send_propagates_matrix_error() -> None:
     assert r.matrix.sent == []
 
 
-@pytest.mark.parametrize("line", ['{"body":"hi"}', "nil", "[1]", '{"to":"Y","ref":"r","body":"x"}', '{"body":""}'])
+@pytest.mark.parametrize(
+    "line",
+    ['{"body":"hi"}', "nil", "[1]", '{"to":"Y","ref":"r","body":"x"}', '{"body":""}'],
+)
 def test_on_send_invalid(line: str) -> None:
     r = Rig().started()
     r.gw.on_send(line, "t")
@@ -128,14 +144,22 @@ def test_reply_published_signed() -> None:
     assert len(r.bus.published) == 1
     subject, data = r.bus.published[0]
     assert subject == "matrix.reply.yenn"
-    assert verify(r, data) == {"to": "yenn", "ref": "r", "text": "y", "body": "B", "event_id": "$o1"}
+    assert verify(r, data) == {
+        "to": "yenn",
+        "ref": "r",
+        "text": "y",
+        "body": "B",
+        "event_id": "$o1",
+    }
     assert r.matrix.sent == []
 
 
 def test_reply_fallback_stripped() -> None:
     r = Rig().started()
     r.routed()
-    r.gw.on_event(owner_message("$o1", "> <@agents:nkmrk.com> B\n\n  y ", parent="$bot1"))
+    r.gw.on_event(
+        owner_message("$o1", "> <@agents:nkmrk.com> B\n\n  y ", parent="$bot1")
+    )
     assert verify(r, r.bus.published[0][1])["text"] == "y"
 
 
@@ -189,7 +213,9 @@ def test_unknown_parent() -> None:
 
 def test_parent_by_other_sender() -> None:
     r = Rig().started()
-    r.matrix.add_event("$p", "@mallory:nkmrk.com", {"body": "B", ROUTE: {"to": "yenn", "ref": "r"}})
+    r.matrix.add_event(
+        "$p", "@mallory:nkmrk.com", {"body": "B", ROUTE: {"to": "yenn", "ref": "r"}}
+    )
     r.gw.on_event(owner_message("$o", "y", parent="$p"))
     assert_not_routed_notice(r)
 
@@ -228,7 +254,13 @@ def test_matrix_error_on_one_event_does_not_stop_the_next() -> None:
     r.matrix.event_errors["$bad"] = MatrixError("boom")
     r.matrix.script = [
         ("s1", []),
-        ("s2", [owner_message("$o1", "n", parent="$bad"), owner_message("$o2", "y", parent="$bot1")]),
+        (
+            "s2",
+            [
+                owner_message("$o1", "n", parent="$bad"),
+                owner_message("$o2", "y", parent="$bot1"),
+            ],
+        ),
     ]
     r.gw.start()
     r.gw.step()
@@ -260,7 +292,9 @@ def test_fatal_propagates() -> None:
 def verify_command(rig: Rig, data: str) -> Obj:
     env = json.loads(data)
     assert env["type"] == "matrix.command"
-    rig.key.public_key().verify(base64.b64decode(env["sig"]), env["msg"].encode("utf-8"))
+    rig.key.public_key().verify(
+        base64.b64decode(env["sig"]), env["msg"].encode("utf-8")
+    )
     msg = json.loads(env["msg"])
     assert isinstance(msg, dict)
     return msg

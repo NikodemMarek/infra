@@ -19,7 +19,10 @@ from dataclasses import dataclass
 
 from . import data
 
-_BLOCK = re.compile(r"^([ \t]{0,3})(`{3,4})knowledge[ \t]*\n(.*?)\n[ \t]{0,3}\2[ \t]*$", re.MULTILINE | re.DOTALL)
+_BLOCK = re.compile(
+    r"^([ \t]{0,3})(`{3,4})knowledge[ \t]*\n(.*?)\n[ \t]{0,3}\2[ \t]*$",
+    re.MULTILINE | re.DOTALL,
+)
 _HEADER = re.compile(r"([a-z]+):[ \t]*(.*)")
 SEPARATOR = "---"
 KEYS = ("title", "kind", "scope", "evidence")
@@ -92,7 +95,9 @@ def parse_blocks(text: str) -> list[Block]:
     found: list[Block] = []
     for m in _BLOCK.finditer(text.replace("\r\n", "\n")):
         indent, inner = data.group(m, 1), data.group(m, 3)
-        block = None if indent is None or inner is None else _block(_dedent(inner, indent))
+        block = (
+            None if indent is None or inner is None else _block(_dedent(inner, indent))
+        )
         if block is not None:
             found.append(block)
     return found

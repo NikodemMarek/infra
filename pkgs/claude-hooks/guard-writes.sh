@@ -14,27 +14,30 @@ cwd="$(jq -r '.cwd // empty' <<<"$input")"
 [ -z "$cwd" ] && cwd="$PWD"
 
 deny() {
-  jq -n --arg r "$1" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
-  exit 0
+	jq -n --arg r "$1" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+	exit 0
 }
 
 [ -z "$path" ] && deny "No file path in tool input."
 case "$path" in /*) ;; *) path="$cwd/$path" ;; esac
 abs="$(realpath -m -- "$path")"
-under() { case "$abs/" in "$(realpath -m -- "$1")"/*) return 0 ;; esac; return 1; }
+under() {
+	case "$abs/" in "$(realpath -m -- "$1")"/*) return 0 ;; esac
+	return 1
+}
 
-case "$abs" in */.git/*|*/.git) deny "Writing inside .git is not allowed for this agent." ;; esac
-case "$abs" in */.jj/*|*/.jj) deny "Writing inside .jj is not allowed for this agent." ;; esac
+case "$abs" in */.git/* | */.git) deny "Writing inside .git is not allowed for this agent." ;; esac
+case "$abs" in */.jj/* | */.jj) deny "Writing inside .jj is not allowed for this agent." ;; esac
 
 if [ "$MODE" = memory ]; then
-  under "$MEM" || deny "Architect may only write inside $MEM (got $abs)."
-  # The curator owns global.md, lang/, topic/, org/ and projects/<slug>/facts.md; SCOPES.toml and private/ are the user's
-  # (private/ holds credentials): only the architect's own files are allowed.
-  rel="${abs#"$(realpath -m -- "$MEM")"/}"
-  slug='[a-z0-9][a-z0-9-]{0,63}'
-  [[ "$rel" =~ ^(README\.md|INDEX\.md|templates/.+)$ ]] && exit 0
-  [[ "$rel" =~ ^projects/$slug/(overview\.md|decisions\.md|log\.md|notes/.+)$ ]] && exit 0
-  deny "Architect may only write README.md, INDEX.md, templates/**, projects/<slug>/{overview,decisions,log}.md and projects/<slug>/notes/** in $MEM (got $rel); the rest is the curator's or private."
+	under "$MEM" || deny "Architect may only write inside $MEM (got $abs)."
+	# The curator owns global.md, lang/, topic/, org/ and projects/<slug>/facts.md; SCOPES.toml and private/ are the user's
+	# (private/ holds credentials): only the architect's own files are allowed.
+	rel="${abs#"$(realpath -m -- "$MEM")"/}"
+	slug='[a-z0-9][a-z0-9-]{0,63}'
+	[[ "$rel" =~ ^(README\.md|INDEX\.md|templates/.+)$ ]] && exit 0
+	[[ "$rel" =~ ^projects/$slug/(overview\.md|decisions\.md|log\.md|notes/.+)$ ]] && exit 0
+	deny "Architect may only write README.md, INDEX.md, templates/**, projects/<slug>/{overview,decisions,log}.md and projects/<slug>/notes/** in $MEM (got $rel); the rest is the curator's or private."
 fi
 
 # MODE=code or tests
@@ -42,18 +45,18 @@ fi
 # the agent's work must stay in its own workspace to be squashed into the right change.
 home="$cwd"
 case "$(dirname -- "$cwd")" in *.agents) home="$(dirname -- "$cwd")" && home="${home%.agents}" ;; esac
-under "$cwd" || { [ -n "$PROJECTS" ] && under "$PROJECTS" && ! under "$home" && ! under "$home.agents"; } \
-  || deny "Writes outside the working directory ($cwd) and other repos under ${PROJECTS:-\$CLAUDE_PROJECTS_DIR (unset)} are not allowed (got $abs)."
+under "$cwd" || { [ -n "$PROJECTS" ] && under "$PROJECTS" && ! under "$home" && ! under "$home.agents"; } ||
+	deny "Writes outside the working directory ($cwd) and other repos under ${PROJECTS:-\$CLAUDE_PROJECTS_DIR (unset)} are not allowed (got $abs)."
 for p in "$HOME/.claude" "$CFG" "$HOME/.ssh" "$HOME/.gnupg" "$HOME/.config" "$HOME/.local" "$HOME/.aws" "$HOME/.kube" "$HOME/.m2/settings.xml" "$MEM"; do
-  under "$p" && deny "Path $abs is protected (config/secrets/architect memory)."
+	under "$p" && deny "Path $abs is protected (config/secrets/architect memory)."
 done
 # Top-level dotfiles in $HOME (.bashrc, .profile, ...)
 [ "$(dirname -- "$abs")" = "$HOME" ] && case "$(basename -- "$abs")" in .*) deny "Home dotfiles are protected." ;; esac
-case "$(basename -- "$abs")" in .env|.env.*|*.pem|*.key|id_rsa*|id_ed25519*) deny "Secret-like files are protected." ;; esac
+case "$(basename -- "$abs")" in .env | .env.* | *.pem | *.key | id_rsa* | id_ed25519*) deny "Secret-like files are protected." ;; esac
 [ "$MODE" = tests ] || exit 0
 
-case "$abs" in */test/*|*/tests/*|*/__tests__/*|*/spec/*|*/specs/*|*/testdata/*|*/fixtures/*|*/testing/*) exit 0 ;; esac
+case "$abs" in */test/* | */tests/* | */__tests__/* | */spec/* | */specs/* | */testdata/* | */fixtures/* | */testing/*) exit 0 ;; esac
 case "$(basename -- "$abs")" in
-  test_*|*_test.*|*_tests.*|*.test.*|*.spec.*|*_spec.*|*Test.*|*Tests.*|conftest.py) exit 0 ;;
+test_* | *_test.* | *_tests.* | *.test.* | *.spec.* | *_spec.* | *Test.* | *Tests.* | conftest.py) exit 0 ;;
 esac
 deny "Only test files may be written (test/, tests/, __tests__/, spec/, testdata/, fixtures/, *_test.*, test_*, *.test.*, *.spec.*, *Test.*, ...); got $abs."

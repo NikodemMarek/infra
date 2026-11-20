@@ -61,16 +61,26 @@ def log(msg):
 
 
 def jj(repo, *args, check=True):
-    p = subprocess.run(["jj", "--no-pager", "--color=never", "-R", repo, *args],
-                       capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    p = subprocess.run(
+        ["jj", "--no-pager", "--color=never", "-R", repo, *args],
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        check=False,
+    )
     if check and p.returncode != 0:
         raise Fail(f"`jj {' '.join(args)}` in {repo}: {p.stderr.strip()}")
     return p.stdout
 
 
 def git(cwd, *args):
-    p = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True,
-                       stdin=subprocess.DEVNULL)
+    p = subprocess.run(
+        ["git", "-C", cwd, *args],
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        check=False,
+    )
     if p.returncode != 0:
         raise Fail(f"`git {' '.join(args)}`: {p.stderr.strip()}")
     sys.stderr.write(p.stdout)  # keep stdout clean: it must carry only the path
@@ -80,7 +90,12 @@ def git(cwd, *args):
 def mcp_defaults(d):
     """Start the project MCP servers of a fresh workspace disabled: avoids the blocking approval dialog."""
     try:
-        subprocess.run(["claude-mcp-defaults", d], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        subprocess.run(
+            ["claude-mcp-defaults", d],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            check=False,
+        )
     except OSError as e:
         log(f"claude-mcp-defaults: {e}")
 
@@ -92,17 +107,26 @@ def inside(path, parent):
 
 # ------------------------------------------------------------------ registry
 
+
 def workspace_root(path):
     """Root of the jj workspace containing path (`-R` would not search parent directories)."""
-    p = subprocess.run(["jj", "--no-pager", "--ignore-working-copy", "workspace", "root"], cwd=path,
-                       capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    p = subprocess.run(
+        ["jj", "--no-pager", "--ignore-working-copy", "workspace", "root"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        check=False,
+    )
     return p.stdout.strip() if p.returncode == 0 else None
 
 
 def home_of(ws_root):
     """Root of the main workspace: secondary ones live in <home>.agents/<name> (like `jw`)."""
     parent = os.path.dirname(ws_root)
-    return parent.removesuffix(".agents") if re.search(r".\.agents$", parent) else ws_root
+    return (
+        parent.removesuffix(".agents") if re.search(r".\.agents$", parent) else ws_root
+    )
 
 
 def agents_of(st):
@@ -116,7 +140,11 @@ def store_of(ws_root):
     if os.path.isfile(repo):
         with open(repo) as f:
             target = f.read().strip()
-        repo = target if os.path.isabs(target) else os.path.join(os.path.dirname(repo), target)
+        repo = (
+            target
+            if os.path.isabs(target)
+            else os.path.join(os.path.dirname(repo), target)
+        )
     return os.path.realpath(repo)
 
 
@@ -134,7 +162,11 @@ def load(path):
     try:
         with open(path) as f:
             st = json.load(f)
-        return st if all(k in st for k in ("name", "root", "dir", "base", "kind")) else None
+        return (
+            st
+            if all(k in st for k in ("name", "root", "dir", "base", "kind"))
+            else None
+        )
     except (OSError, ValueError):
         return None
 
@@ -162,7 +194,7 @@ def all_states(reg):
 
 class Lock:
     def __init__(self, reg, timeout=LOCK_TIMEOUT):
-        self.f = open(os.path.join(reg, ".lock"), "w")
+        self.f = open(os.path.join(reg, ".lock"), "w")  # noqa: SIM115
         self.timeout = timeout
 
     def __enter__(self):
@@ -183,6 +215,7 @@ class Lock:
 
 # ------------------------------------------------------------------ jj operations
 
+
 def refresh(ws):
     """Update a stale workspace and snapshot it without losing unsaved edits.
 
@@ -190,12 +223,25 @@ def refresh(ws):
     base, another agent squashing into it). `update-stale` then snapshots unsaved edits into a
     divergent twin of @ and checks out the rebased clean @, so fold that twin back into @.
     """
-    p = subprocess.run(["jj", "--no-pager", "-R", ws, "workspace", "update-stale"],
-                       capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    p = subprocess.run(
+        ["jj", "--no-pager", "-R", ws, "workspace", "update-stale"],
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        check=False,
+    )
     if p.returncode != 0 and "not stale" not in p.stderr:
         raise Fail(f"update-stale in {ws}: {p.stderr.strip()}")
     cid = jj(ws, "log", "--no-graph", "-r", "@", "-T", "change_id").strip()
-    twins = jj(ws, "log", "--no-graph", "-r", f"change_id({cid}) ~ @", "-T", 'commit_id.short() ++ " "').split()
+    twins = jj(
+        ws,
+        "log",
+        "--no-graph",
+        "-r",
+        f"change_id({cid}) ~ @",
+        "-T",
+        'commit_id.short() ++ " "',
+    ).split()
     if twins:
         jj(ws, "squash", "--from", f"change_id({cid}) ~ @", "--into", "@", "-u")
         log(f"folded unsaved edits ({', '.join(twins)}) back into @ of {ws}")
@@ -203,21 +249,49 @@ def refresh(ws):
 
 
 def check_base(ws, base):
-    out = jj(ws, "log", "--no-graph", "-r", f"change_id({base})",
-             "-T", 'if(immutable, "immutable", "ok") ++ "\\n"', check=False).split()
+    out = jj(
+        ws,
+        "log",
+        "--no-graph",
+        "-r",
+        f"change_id({base})",
+        "-T",
+        'if(immutable, "immutable", "ok") ++ "\\n"',
+        check=False,
+    ).split()
     if len(out) != 1:
         raise Fail(f"base change {base[:8]} is {'gone' if not out else 'divergent'}")
     if out[0] != "ok":
         raise Fail(f"base change {base[:8]} is immutable now")
-    stray = jj(ws, "log", "--no-graph", "-r", f"(change_id({base})..@) ~ change_id({base})::",
-               "-T", 'change_id.short(8) ++ " "').split()
+    stray = jj(
+        ws,
+        "log",
+        "--no-graph",
+        "-r",
+        f"(change_id({base})..@) ~ change_id({base})::",
+        "-T",
+        'change_id.short(8) ++ " "',
+    ).split()
     if stray:
-        raise Fail(f"the agent's @ is no longer on top of base {base[:8]} (also contains {', '.join(stray)})")
+        raise Fail(
+            f"the agent's @ is no longer on top of base {base[:8]} (also contains {', '.join(stray)})"
+        )
 
 
 def changed_files(st):
-    return [l for l in jj(st["dir"], "diff", "--from", f"change_id({st['base']})", "--to", "@",
-                          "--name-only").splitlines() if l]
+    return [
+        l
+        for l in jj(
+            st["dir"],
+            "diff",
+            "--from",
+            f"change_id({st['base']})",
+            "--to",
+            "@",
+            "--name-only",
+        ).splitlines()
+        if l
+    ]
 
 
 def integrate(st):
@@ -229,35 +303,75 @@ def integrate(st):
     files = changed_files(st)
     if not files:
         return None
-    jj(ws, "squash", "--from", f"change_id({base})..@", "--into", f"change_id({base})", "-u")
+    jj(
+        ws,
+        "squash",
+        "--from",
+        f"change_id({base})..@",
+        "--into",
+        f"change_id({base})",
+        "-u",
+    )
     refresh(root)  # base may be the caller's @
-    info = jj(root, "log", "--no-graph", "-r", f"change_id({base})", "-T",
-              'change_id.short(8) ++ "\\x1f" ++ description.first_line() ++ "\\n"').splitlines()
+    info = jj(
+        root,
+        "log",
+        "--no-graph",
+        "-r",
+        f"change_id({base})",
+        "-T",
+        'change_id.short(8) ++ "\\x1f" ++ description.first_line() ++ "\\n"',
+    ).splitlines()
     if len(info) != 1:
-        raise Fail(f"base change {base[:8]} became divergent while squashing (a concurrent jj command?); "
-                   f"check `jj log -r 'change_id({base})'`")
+        raise Fail(
+            f"base change {base[:8]} became divergent while squashing (a concurrent jj command?); "
+            f"check `jj log -r 'change_id({base})'`"
+        )
     cid, title = info[0].split("\x1f")
     msg = f"jj: squashed {len(files)} file(s) from agent workspace {st.get('ws') or st['name']} into {cid} {title or '(no description)'}"
-    conflicts = jj(root, "log", "--no-graph", "-r", f"change_id({base}):: & conflicts() ~ empty()",
-                   "-T", 'change_id.short(8) ++ " "').split()
+    conflicts = jj(
+        root,
+        "log",
+        "--no-graph",
+        "-r",
+        f"change_id({base}):: & conflicts() ~ empty()",
+        "-T",
+        'change_id.short(8) ++ " "',
+    ).split()
     if conflicts:
-        raise Conflict(f"{msg}, which left CONFLICTS in {', '.join(conflicts)} "
-                       f"(jj resolve --list -r <change>)")
+        raise Conflict(
+            f"{msg}, which left CONFLICTS in {', '.join(conflicts)} "
+            f"(jj resolve --list -r <change>)"
+        )
     return msg
 
 
 def delete_workspace(reg, st):
     agents = os.path.realpath(agents_of(st))
     d = os.path.realpath(st["dir"])
-    if (os.path.dirname(d) != agents or not agents.endswith(".agents")
-            or not VALID_NAME.match(os.path.basename(d))):
-        raise Fail(f"refusing to delete {d}: not a workspace directly under a <repo>.agents directory")
+    if (
+        os.path.dirname(d) != agents
+        or not agents.endswith(".agents")
+        or not VALID_NAME.match(os.path.basename(d))
+    ):
+        raise Fail(
+            f"refusing to delete {d}: not a workspace directly under a <repo>.agents directory"
+        )
     try:
         if not os.path.isdir(d):
             raise Fail("directory gone")
-        jj(d, "--ignore-working-copy", "workspace", "forget")  # its own workspace, whatever it is named now
+        jj(
+            d, "--ignore-working-copy", "workspace", "forget"
+        )  # its own workspace, whatever it is named now
     except Fail:
-        jj(st["root"], "--ignore-working-copy", "workspace", "forget", st.get("ws") or st["name"], check=False)
+        jj(
+            st["root"],
+            "--ignore-working-copy",
+            "workspace",
+            "forget",
+            st.get("ws") or st["name"],
+            check=False,
+        )
     shutil.rmtree(d, ignore_errors=True)
     drop(reg, st["name"])
     try:
@@ -268,7 +382,9 @@ def delete_workspace(reg, st):
 
 def last_activity(st):
     times = [st.get("touched", 0)]
-    times += [os.path.getmtime(p) for p in glob.glob(TRANSCRIPTS.format(name=st["name"]))]
+    times += [
+        os.path.getmtime(p) for p in glob.glob(TRANSCRIPTS.format(name=st["name"]))
+    ]
     return max(times)
 
 
@@ -277,13 +393,31 @@ def has_work(st):
     d = st["dir"]
     if not os.path.isdir(d):
         return False
-    if (st.get("ws") or st["name"]) not in jj(d, "--ignore-working-copy", "workspace", "list", "-T", 'name ++ "\\n"').split():
+    if (st.get("ws") or st["name"]) not in jj(
+        d, "--ignore-working-copy", "workspace", "list", "-T", 'name ++ "\\n"'
+    ).split():
         return False  # already forgotten: jj tracks nothing there any more
     refresh(d)
-    if len(jj(d, "log", "--no-graph", "-r", f"change_id({st['base']})", "-T", 'change_id ++ "\\n"',
-              check=False).split()) != 1:
+    if (
+        len(
+            jj(
+                d,
+                "log",
+                "--no-graph",
+                "-r",
+                f"change_id({st['base']})",
+                "-T",
+                'change_id ++ "\\n"',
+                check=False,
+            ).split()
+        )
+        != 1
+    ):
         # base gone or divergent: the agent's own change is all that can be left
-        return jj(d, "log", "--no-graph", "-r", "@", "-T", 'if(empty, "", "x")').strip() != ""
+        return (
+            jj(d, "log", "--no-graph", "-r", "@", "-T", 'if(empty, "", "x")').strip()
+            != ""
+        )
     return bool(changed_files(st))
 
 
@@ -306,11 +440,13 @@ def gc(report=False):
                             delete_workspace(reg, st)
                             log(f"cleaned up idle workspace {st['name']}")
                         elif report and not st.get("warned"):
-                            kept.append(f"jj: idle agent workspace {st['dir']} holds changes that aren't "
-                                        "integrated; integrate them or delete it")
+                            kept.append(
+                                f"jj: idle agent workspace {st['dir']} holds changes that aren't "
+                                "integrated; integrate them or delete it"
+                            )
                             st["warned"] = True
                             save(reg, st)
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         log(f"gc {st['name']}: {e}")
         except Fail:
             pass
@@ -318,6 +454,7 @@ def gc(report=False):
 
 
 # ------------------------------------------------------------------ hooks
+
 
 def create(inp):
     cwd = inp.get("cwd") or os.getcwd()
@@ -328,7 +465,7 @@ def create(inp):
     if not root:
         return create_git(cwd, name, inp)
     reg = registry_of(store_of(root))
-    wsname = "a-" + name[len("agent-"):] if AGENT_NAME.match(name) else name
+    wsname = "a-" + name[len("agent-") :] if AGENT_NAME.match(name) else name
     with Lock(reg):
         st = load(reg_path(reg, name))
         if st and os.path.isdir(st["dir"]):
@@ -336,10 +473,19 @@ def create(inp):
             save(reg, st)
             return st["dir"]
         if st:  # registered, but its directory is gone
-            jj(st["root"], "--ignore-working-copy", "workspace", "forget", st.get("ws") or name, check=False)
+            jj(
+                st["root"],
+                "--ignore-working-copy",
+                "workspace",
+                "forget",
+                st.get("ws") or name,
+                check=False,
+            )
             drop(reg, name)
         elif wsname in jj(root, "workspace", "list", "-T", 'name ++ "\\n"').split():
-            raise Fail(f"a jj workspace named {wsname!r} already exists and isn't managed by this hook")
+            raise Fail(
+                f"a jj workspace named {wsname!r} already exists and isn't managed by this hook"
+            )
         agents = f"{home_of(root)}.agents"  # flat, even when the caller is itself in a workspace
         d = f"{agents}/{wsname}"
         if os.path.lexists(d):
@@ -350,27 +496,65 @@ def create(inp):
         base = ""
         if kind == "session":
             want = os.environ.get("CLAUDE_WORKSPACE_BASE") or ""
-            if re.fullmatch(r"[a-z]+", want) and len(jj(
-                    root, "--ignore-working-copy", "log", "--no-graph", "-r", f"change_id({want})",
-                    "-T", 'change_id ++ "\\n"', check=False).split()) == 1:
+            if (
+                re.fullmatch(r"[a-z]+", want)
+                and len(
+                    jj(
+                        root,
+                        "--ignore-working-copy",
+                        "log",
+                        "--no-graph",
+                        "-r",
+                        f"change_id({want})",
+                        "-T",
+                        'change_id ++ "\\n"',
+                        check=False,
+                    ).split()
+                )
+                == 1
+            ):
                 base = want
             else:
-                base = jj(root, "--ignore-working-copy", "log", "--no-graph", "-r", "trunk()",
-                          "-T", 'if(root, "", change_id)', check=False).strip()
+                base = jj(
+                    root,
+                    "--ignore-working-copy",
+                    "log",
+                    "--no-graph",
+                    "-r",
+                    "trunk()",
+                    "-T",
+                    'if(root, "", change_id)',
+                    check=False,
+                ).strip()
         if not base:
-            base = jj(root, "log", "--no-graph", "-r", "@", "-T", "change_id").strip()  # snapshots
+            base = jj(
+                root, "log", "--no-graph", "-r", "@", "-T", "change_id"
+            ).strip()  # snapshots
         os.makedirs(os.path.dirname(d), exist_ok=True)
         jj(root, "workspace", "add", f"--name={wsname}", "-r", f"change_id({base})", d)
         mcp_defaults(d)
         try:
-            st = {"name": name, "root": root, "dir": d, "agents": agents, "base": base,
-                  "kind": kind,
-                  "touched": time.time()}
+            st = {
+                "name": name,
+                "root": root,
+                "dir": d,
+                "agents": agents,
+                "base": base,
+                "kind": kind,
+                "touched": time.time(),
+            }
             if wsname != name:
                 st["ws"] = wsname
             save(reg, st)
         except Exception:
-            jj(root, "--ignore-working-copy", "workspace", "forget", wsname, check=False)
+            jj(
+                root,
+                "--ignore-working-copy",
+                "workspace",
+                "forget",
+                wsname,
+                check=False,
+            )
             shutil.rmtree(d, ignore_errors=True)
             raise
         log(f"created jj workspace {wsname} at {d} on top of {base[:8]}")
@@ -387,7 +571,13 @@ def create_git(cwd, name, inp):
     os.makedirs(os.path.dirname(wt), exist_ok=True)
     if inp.get("detach"):
         git(top, "worktree", "add", "--detach", wt, "HEAD")
-    elif subprocess.run(["git", "-C", top, "show-ref", "--verify", "-q", f"refs/heads/{branch}"]).returncode == 0:
+    elif (
+        subprocess.run(
+            ["git", "-C", top, "show-ref", "--verify", "-q", f"refs/heads/{branch}"],
+            check=False,
+        ).returncode
+        == 0
+    ):
         git(top, "worktree", "add", wt, branch)
     else:
         git(top, "worktree", "add", "-b", branch, wt, "HEAD")
@@ -425,13 +615,16 @@ def stop(inp):
         if isinstance(e, Conflict):
             problem = f"{e}."
         else:
-            problem = f"jj integration problem: {e}. The agent's work is kept in {st['dir']}."
+            problem = (
+                f"jj integration problem: {e}. The agent's work is kept in {st['dir']}."
+            )
         out = {"systemMessage": problem}
         if not inp.get("stop_hook_active"):
             out["hookSpecificOutput"] = {
                 "hookEventName": "SubagentStop",
                 "additionalContext": f"{problem} Reply with this sentence verbatim, followed by "
-                                     "your complete previous final report unchanged."}
+                "your complete previous final report unchanged.",
+            }
         return out
     notes = ([msg] if msg else []) + gc(report=True)
     return {"systemMessage": "\n".join(notes)} if notes else None
@@ -454,18 +647,27 @@ def remove(inp):
                     if msg:
                         log(msg)
                 elif changed_files(st):
-                    log(f"keeping {path}: it has changes")  # Claude's default for worktrees
+                    log(
+                        f"keeping {path}: it has changes"
+                    )  # Claude's default for worktrees
                     return
                 delete_workspace(reg, st)
             return
-    if os.path.realpath(workspace_root(path) or "/nonexistent") == os.path.realpath(path):
+    if os.path.realpath(workspace_root(path) or "/nonexistent") == os.path.realpath(
+        path
+    ):
         return  # a jj workspace this hook doesn't manage
     if not git(path, "status", "--porcelain").strip():
         git(path, "worktree", "remove", path)
 
 
 def slug(title):
-    s = unicodedata.normalize("NFKD", title.replace("ł", "l").replace("Ł", "L")).encode("ascii", "ignore").decode().lower()
+    s = (
+        unicodedata.normalize("NFKD", title.replace("ł", "l").replace("Ł", "L"))
+        .encode("ascii", "ignore")
+        .decode()
+        .lower()
+    )
     return re.sub(r"[^a-z0-9]+", "-", s).strip("-")[:40].rstrip("-")
 
 
@@ -485,13 +687,29 @@ def title(inp):
         return
     reg = registry_of(store_of(root))
     st = load(reg_path(reg, name))
-    if not st or st["kind"] != "session" or "ws" in st or os.path.realpath(st["dir"]) != root:
+    if (
+        not st
+        or st["kind"] != "session"
+        or "ws" in st
+        or os.path.realpath(st["dir"]) != root
+    ):
         return
-    with Lock(reg, timeout=0):  # the statusline runs often: skip when busy, the next run retries
+    with Lock(
+        reg, timeout=0
+    ):  # the statusline runs often: skip when busy, the next run retries
         st = load(reg_path(reg, name))
         if not st or "ws" in st:
             return
-        taken = set(jj(root, "--ignore-working-copy", "workspace", "list", "-T", 'name ++ "\\n"').split())
+        taken = set(
+            jj(
+                root,
+                "--ignore-working-copy",
+                "workspace",
+                "list",
+                "-T",
+                'name ++ "\\n"',
+            ).split()
+        )
         new, n = f"s-{t}", 2
         while new in taken:
             new, n = f"s-{t}-{n}", n + 1
@@ -510,20 +728,20 @@ def main():
     try:
         inp = json.load(sys.stdin)
         if not isinstance(inp, dict):
-            raise ValueError("not a JSON object")
+            raise ValueError("not a JSON object")  # noqa: TRY004
     except ValueError as e:
         log(f"bad hook input: {e}")
         return 0 if mode in ("stop", "title") else 1
     if mode == "title":
         try:
             title(inp)
-        except Exception:  # best effort, the statusline must stay quiet
+        except Exception:  # noqa: BLE001, S110  # best effort, the statusline must stay quiet
             pass
         return 0
     if mode == "stop":
         try:
             out = stop(inp)
-        except Exception as e:  # SubagentStop must never block the agent
+        except Exception as e:  # noqa: BLE001  # SubagentStop must never block the agent
             out = {"systemMessage": f"jj-workspace stop hook error: {e}"}
         if out:
             print(json.dumps(out))

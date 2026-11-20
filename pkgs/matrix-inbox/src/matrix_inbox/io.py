@@ -21,8 +21,13 @@ def _agent_inbox(args: list[str], stdin: str | None = None) -> tuple[int, str, s
         encoding="utf-8",
         errors="replace",
         timeout=LOCAL_TIMEOUT,
+        check=False,
     )
-    return done.returncode, done.stdout, done.stderr.strip() or f"exit {done.returncode}"
+    return (
+        done.returncode,
+        done.stdout,
+        done.stderr.strip() or f"exit {done.returncode}",
+    )
 
 
 class ProcessLocal:
@@ -60,7 +65,9 @@ class SeenDir:
 
     def claim(self, event_id: str) -> bool:
         os.makedirs(self._path, 0o700, exist_ok=True)
-        marker = os.path.join(self._path, hashlib.sha256(event_id.encode("utf-8")).hexdigest())
+        marker = os.path.join(
+            self._path, hashlib.sha256(event_id.encode("utf-8")).hexdigest()
+        )
         try:
             fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError:
@@ -79,6 +86,7 @@ class ProcessTasks:
                 encoding="utf-8",
                 errors="replace",
                 timeout=TASK_TIMEOUT,
+                check=False,
             )
         except (OSError, subprocess.SubprocessError) as e:
             print(f"matrix-inbox-command: {e}", file=sys.stderr)
@@ -106,6 +114,7 @@ class NatsBus:
                 encoding="utf-8",
                 errors="replace",
                 timeout=BUS_TIMEOUT,
+                check=False,
             )
         except (OSError, subprocess.SubprocessError) as e:
             raise BusError(f"nats pub: {e}") from e
