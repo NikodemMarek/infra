@@ -123,7 +123,6 @@
         // extra;
     in {
       geralt = mkNode "geralt" {};
-      roach = mkNode "roach" {};
       regis = mkNode "regis" {};
       triss = mkNode "triss" {};
     };
