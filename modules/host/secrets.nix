@@ -118,13 +118,26 @@
       map (name: "\"${name}\" is used by ${definedIn name} but profile ${used.${name}.profile} is missing from secretspec.toml")
       (lib.filter (name: used.${name}.wholeProfile && !(profiles ? ${used.${name}.profile})) (lib.attrNames used));
 
+    wholeProfileInvalid = name: let
+      profile = used.${name}.profile;
+      rawKeys = lib.attrNames profiles.${profile};
+      badKeys = lib.filter (key: builtins.match "[a-z0-9_]+" (lib.toLower key) == null) rawKeys;
+      collidingKeys = lib.filter (key: lib.count (other: lib.toLower other == lib.toLower key) rawKeys > 1) rawKeys;
+    in
+      lib.optional (rawKeys == []) "\"${name}\": profile ${profile} has no secrets"
+      ++ lib.optional (badKeys != []) "profile ${profile}: keys must match ^[a-z0-9_]+$ once lowercased: ${lib.concatStringsSep ", " badKeys}"
+      ++ lib.optional (collidingKeys != []) "profile ${profile}: keys collide when lowercased: ${lib.concatStringsSep ", " collidingKeys}";
+    wholeProfile =
+      lib.concatMap wholeProfileInvalid
+      (lib.filter (name: used.${name}.wholeProfile && profiles ? ${used.${name}.profile}) (lib.attrNames used));
+
     # only the host's own profile must be used completely
     usedByHost = lib.filter (name: used.${name}.profile == host) (lib.attrNames used);
     unused =
       map (key: "\"${key}\" in profile ${host} of secretspec.toml is not used by any module")
       (lib.filter (key: !(lib.elem (lib.toLower key) usedByHost)) keys);
   in
-    invalid ++ missing ++ missingProfile ++ unused;
+    invalid ++ missing ++ missingProfile ++ wholeProfile ++ unused;
 in {
   options.secrets = mkOption {
     description = "Secrets the host's modules use, provided as files. Names must match the host's profile in secretspec.toml";

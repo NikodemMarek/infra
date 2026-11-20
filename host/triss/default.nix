@@ -47,10 +47,7 @@
     isCrypted = false;
   };
 
-  services = {
-    flux-sops-age.enable = true;
-    cluster-secrets.enable = true;
-  };
+  services.cluster-secrets.enable = true;
 
   services.k3s = {
     role = "server";
