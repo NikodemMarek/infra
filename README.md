@@ -37,7 +37,7 @@ tofu/                  OpenTofu config of the external infrastructure: Cloudflar
 | `triss` | aarch64 | k3s server (control plane), qemu/virtio guest |
 | `alp` | x86_64 | installer ISO, not in `nixosConfigurations` (see `mkiso`) |
 
-`geralt`, `roach`, `regis` and `triss` are deploy-rs nodes (`deploy.nodes` in `flake.nix`): ssh as `maintenance`, interactive sudo.
+`geralt`, `regis` and `triss` are deploy-rs nodes (`deploy.nodes` in `flake.nix`): ssh as `maintenance`, interactive sudo.
 
 Cluster access: the dev shell sets `KUBECONFIG` to `kubeconfig.yaml` in the `default` jj workspace root, so `kubectl` works from the workstation. On `triss` itself `k3s.yaml` is root-only (`sudo kubectl`).
 
