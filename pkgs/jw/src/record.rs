@@ -32,6 +32,9 @@ pub struct Record {
     pub url: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mrs: Vec<String>,
+    /// The MRs of mrs the session was told are merged.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub merged_mrs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -53,6 +56,16 @@ impl Record {
         };
         let text = |key: &str| map.get(key).and_then(Value::as_str).map(str::to_string);
         let number = |key: &str| map.get(key).and_then(Value::as_f64);
+        let texts = |key: &str| -> Vec<String> {
+            map.get(key)
+                .and_then(Value::as_array)
+                .map(|v| {
+                    v.iter()
+                        .filter_map(|u| u.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
         let integer = |key: &str| {
             let value = map.get(key)?;
             value.as_i64().or_else(|| value.as_f64().map(|f| f as i64))
@@ -63,15 +76,8 @@ impl Record {
             title: text("title"),
             description: text("description"),
             url: text("url"),
-            mrs: map
-                .get("mrs")
-                .and_then(Value::as_array)
-                .map(|urls| {
-                    urls.iter()
-                        .filter_map(|u| u.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            mrs: texts("mrs"),
+            merged_mrs: texts("merged_mrs"),
             status: text("status"),
             status_at: number("status_at"),
             waiting_for: text("waiting_for"),
