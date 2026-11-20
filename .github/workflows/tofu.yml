@@ -5,6 +5,8 @@ on:
     paths:
       - tofu/**
       - pkgs/infra-tofu/**
+      - pkgs/bws/**
+      - pkgs/bws-project/**
       - secretspec.toml
       - flake.lock
       - .github/workflows/tofu.yml
@@ -13,6 +15,8 @@ on:
     paths:
       - tofu/**
       - pkgs/infra-tofu/**
+      - pkgs/bws/**
+      - pkgs/bws-project/**
       - secretspec.toml
       - flake.lock
       - .github/workflows/tofu.yml

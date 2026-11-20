@@ -64,8 +64,11 @@
       secrets-build "$secrets" "$@"
     }
 
-    # [host user] login password from bitwarden, fails if there is none
-    user_password() { secretspec get --profile "$1" "USERS_''${2^^}_PASSWORD" 2> /dev/null; }
+    # [host user] login password from bws, fails if there is none
+    user_password() {
+      nix run "$DEVENV_ROOT#bws-project" -- hosts 2> /dev/null \
+        | jq -er --arg k "''${1,,}/users_''${2,,}_password" '.[$k] // empty'
+    }
 
     # [file] key type and body of a public key (from stdin without a file), without the comment
     pubkey() { cut -d' ' -f1-2 "$@"; }
@@ -74,15 +77,38 @@
     sops_recipient() { sed -n "s/.*&$1 \(age1[0-9a-z]*\).*/\1/p" .sops.yaml; }
   '';
 
-  # Input: `secretspec export` of one profile. $names: the secrets taken from it.
+  # Input: the secrets of the bws project `hosts` (lowercase `<profile>/<key>` names).
+  # $p: the profile. $names: the secrets taken from it. $composed: the `composed` templates of every
+  # profile (secretspec.toml), by profile and key.
+  # Output: the secrets of the profile under their plain names, plus the composed ones in $names with
+  # their ${KEY} inputs substituted; fails if an input is missing or empty.
+  profileSecrets = pkgs.writeText "profile-secrets.jq" ''
+    with_entries(select(.key | startswith($p + "/")) | .key |= ltrimstr($p + "/")) as $vals
+    | (
+      ($composed[$p] // {})
+      | to_entries
+      | map(select(.key | ascii_downcase | IN($names[])))
+      | map(
+        .value as $template
+        | ([$template | match("\\$\\{(?<k>[A-Za-z0-9_]+)\\}"; "g").captures[0].string | ascii_downcase | select(($vals[.] // "") == "")] | unique) as $bad
+        | if $bad != [] then error("\($p)/\(.key) needs missing or empty \($bad)")
+          else {key: (.key | ascii_downcase), value: ($template | gsub("\\$\\{(?<k>[A-Za-z0-9_]+)\\}"; $vals[.k | ascii_downcase]))}
+          end
+      )
+      | from_entries
+    ) as $rendered
+    | $vals + $rendered
+  '';
+
+  # Input: the secrets of one profile. $names: the secrets taken from it.
   # Output: exactly those secrets, with lowercase names; fails if one is missing or empty.
   selectSecrets = pkgs.writeText "select-secrets.jq" ''
     with_entries(.key |= ascii_downcase)
     | ($names - keys) as $missing
-    | if $missing != [] then error("missing in bitwarden: \($missing)") end
+    | if $missing != [] then error("missing in bws: \($missing)") end
     | with_entries(select(.key | IN($names[])))
     | [to_entries[] | select(.value == null or .value == "") | .key] as $empty
-    | if $empty != [] then error("empty in bitwarden: \($empty)") end
+    | if $empty != [] then error("empty in bws: \($empty)") end
   '';
 
   # Input: the secrets of one namespace (output of selectSecrets). $ns: the namespace.
@@ -197,8 +223,8 @@ in {
         # [json key] value of one secret
         secret() { printf '%s' "$1" | jq -r --arg k "$2" '.[$k]'; }
 
-        # [host] the host's secrets from bitwarden as json, exactly the ones its config declares,
-        # each exported from the profile that holds it
+        # [host] the host's secrets from bws as json, exactly the ones its config declares,
+        # each taken from the profile that holds it
         fetch_secrets() {
           local profile_of profiles p names part parts=""
           # assigned first, set -e ignores a failing $(...) inside the arguments below
@@ -206,7 +232,10 @@ in {
           profiles=$(printf '%s' "$profile_of" | jq -r '[.[]] | unique[]')
           for p in $profiles; do
             names=$(printf '%s' "$profile_of" | jq -c --arg p "$p" '[to_entries[] | select(.value == $p) | .key]')
-            part=$(secretspec export --profile "$p" --format json | jq --argjson names "$names" -f ${selectSecrets})
+            part=$(printf '%s' "$hosts" | jq --arg p "$p" --argjson names "$names" --argjson composed "$composed" -f ${profileSecrets} | jq --argjson names "$names" -f ${selectSecrets}) || {
+              echo "$1: profile $p" >&2
+              exit 1
+            }
             parts+=$part$'\n'
           done
           printf '%s' "$parts" | jq -s 'add // {}'
@@ -230,7 +259,7 @@ in {
           for key in $(printf '%s' "$2" | jq -r 'keys[] | select(. == "host_ssh_ed25519_priv" or test("^users_.+_ssh_id_ed25519$"))'); do
             file=$(pub_file "$1" "$key")
             if [ "$(secret "$2" "$key" | ssh-keygen -y -f /dev/stdin | pubkey)" != "$(pubkey "$file" 2> /dev/null || true)" ]; then
-              echo "$1: $key in bitwarden does not match $file" >&2
+              echo "$1: $key in bws does not match $file" >&2
               exit 1
             fi
           done
@@ -258,7 +287,7 @@ in {
           have=$(secret "$2" flux_sops_age_key | age-keygen -y)
           want=$(sops_recipient dijkstra_cluster)
           if [ "$have" != "$want" ]; then
-            echo "$1: flux_sops_age_key in bitwarden is $have, but .sops.yaml has ''${want:-nothing}" >&2
+            echo "$1: flux_sops_age_key in bws is $have, but .sops.yaml has ''${want:-nothing}" >&2
             exit 1
           fi
         }
@@ -284,8 +313,11 @@ in {
         mkdir -p "$outdir"
         chmod 700 "$outdir"
 
-        bw_unlock
-        bw sync > /dev/null
+        # fetched once for all hosts
+        hosts=$(nix run "$DEVENV_ROOT#bws-project" -- hosts)
+        # {"<profile>": {"<KEY>": "<template>"}} of the composed secrets
+        composed=$(nix eval --impure --json --expr '(builtins.fromTOML (builtins.readFile ./secretspec.toml)).profiles' \
+          | jq 'map_values(with_entries(select(.value.composed) | .value |= .composed))')
 
         # plaintext only ever lives in memory and pipes, never touches the disk
         for h in "$@"; do
@@ -298,7 +330,7 @@ in {
           mv "$outdir/.$h.yaml.tmp" "$outdir/$h.yaml"
         done
       '';
-      description = "[outdir host...] build encrypted sops files from bitwarden";
+      description = "[outdir host...] build encrypted sops files from Bitwarden Secrets Manager (needs BWS_ACCESS_TOKEN)";
     };
     cluster-secrets-build = {
       exec = ''
@@ -420,13 +452,10 @@ in {
       exec = ''
         source ${common}
 
-        # unlock once, secrets-build and the sudo password below reuse the session
-        bw_unlock
-
         host=$(hostname)
         build_secrets "$host"
 
-        # the login password is in bitwarden too, use it to unlock sudo; if it
+        # the login password is in bws too, use it to unlock sudo; if it
         # doesn't match (yet), sudo below just prompts as usual
         if password=$(user_password "$host" "$USER"); then
           printf '%s\n' "$password" | sudo -S -p "" -v 2> /dev/null || true
@@ -446,7 +475,7 @@ in {
           exit 1
         fi
 
-        # [node] the ssh user's password is in bitwarden too, sudoExpect answers
+        # [node] the ssh user's password is in bws too, sudoExpect answers
         # deploy-rs's sudo prompts with it; nodes without one are asked on the terminal
         export_sudo_password() {
           local user password
@@ -456,8 +485,6 @@ in {
           fi
         }
 
-        # unlock once, secrets-build and the sudo passwords below reuse the session
-        bw_unlock
         build_secrets "$@"
 
         known_hosts=$(mktemp)

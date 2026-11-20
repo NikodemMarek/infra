@@ -44,6 +44,8 @@
   jw = pkgs.callPackage ./jw {inherit (prev) jujutsu;};
   jail = pkgs.callPackage ./jail {};
   bitwarden-cli = pkgs.callPackage ./bitwarden-cli {inherit (prev) bitwarden-cli;};
+  bws = pkgs.callPackage ./bws {};
+  bws-project = pkgs.callPackage ./bws-project {};
   infra-tofu = pkgs.callPackage ./infra-tofu {};
   wallpaper = pkgs.callPackage ./wallpaper {};
   dictate = pkgs.callPackage ./dictate {};
