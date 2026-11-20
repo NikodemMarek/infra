@@ -122,6 +122,7 @@
         }
         // extra;
     in {
+      yenn = mkNode "yenn" {};
       geralt = mkNode "geralt" {};
       roach = mkNode "roach" {};
       regis = mkNode "regis" {};

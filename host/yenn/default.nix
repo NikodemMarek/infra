@@ -16,6 +16,7 @@
     ../features/optional/pipewire.nix
     ../features/optional/libvirt.nix
     ../features/optional/dictate.nix
+    ../features/optional/maintenance.nix
   ];
 
   networking.hostName = "yenn";
