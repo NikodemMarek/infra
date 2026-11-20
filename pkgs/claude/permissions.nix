@@ -59,6 +59,8 @@
     # Queueing notes for the knowledge curator.
     "Bash(knowledge submit:*)"
 
+    "Bash(tm:*)"
+
     "Bash(mvn test:*)"
     "Bash(mvn compile:*)"
     "Bash(mvn verify:*)"

@@ -28,7 +28,10 @@ in {
       pkgs.zellij
       wake-geralt
 
-      (pkgs.claude.extend {projectsDir = projects;})
+      (pkgs.claude.extend {
+        projectsDir = projects;
+        settings.env.TM_FILE = "/home/nikodem/omniverse/tasks/ai-tasks.md";
+      })
       pkgs.agent-inbox
       pkgs.agent-task
       pkgs.tm
