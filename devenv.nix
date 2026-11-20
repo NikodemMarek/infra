@@ -446,21 +446,6 @@ in {
           exit 1
         fi
 
-        # [node] refuse to deploy to a host whose ssh key differs from the repo (and so bitwarden)
-        check_host_key() {
-          local addr actual
-          addr=$(nix eval --raw ".#deploy.nodes.$1.hostname")
-          actual=$(ssh-keyscan -t ed25519 "$addr" 2> /dev/null | grep -v '^#' | cut -d' ' -f2-3 || true)
-          if [ -z "$actual" ]; then
-            echo "$1: could not read the host key of $addr" >&2
-            exit 1
-          fi
-          if [ "$actual" != "$(pubkey "host/$1/ssh_host_ed25519_key.pub")" ]; then
-            echo "$1: host key on $addr does not match host/$1/ssh_host_ed25519_key.pub" >&2
-            exit 1
-          fi
-        }
-
         # [node] the ssh user's password is in bitwarden too, sudoExpect answers
         # deploy-rs's sudo prompts with it; nodes without one are asked on the terminal
         export_sudo_password() {
@@ -475,15 +460,20 @@ in {
         bw_unlock
         build_secrets "$@"
 
+        known_hosts=$(mktemp)
+        on_exit "rm -f '$known_hosts'"
+        nix eval --raw .#knownHosts > "$known_hosts"
+
         targets=()
         for n in "$@"; do
-          check_host_key "$n"
           export_sudo_password "$n"
           targets+=(".#$n")
         done
 
         # deploy-rs's flake check evaluates every host, but $secrets only holds the requested ones
-        expect ${sudoExpect} deploy --skip-checks --targets "''${targets[@]}" -- --override-input secrets "path:$secrets"
+        expect ${sudoExpect} deploy --skip-checks \
+          --ssh-opts "-o UserKnownHostsFile=$known_hosts -o StrictHostKeyChecking=yes" \
+          --targets "''${targets[@]}" -- --override-input secrets "path:$secrets"
       '';
       description = "[node...] deploy config to remote hosts";
     };
