@@ -1,0 +1,73 @@
+name: tofu
+
+on:
+  pull_request:
+    paths:
+      - tofu/**
+      - pkgs/infra-tofu/**
+      - secretspec.toml
+      - flake.lock
+      - .github/workflows/tofu.yml
+  push:
+    branches: [main]
+    paths:
+      - tofu/**
+      - pkgs/infra-tofu/**
+      - secretspec.toml
+      - flake.lock
+      - .github/workflows/tofu.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - name: Build
+        run: nix build .#infra-tofu --out-link "$RUNNER_TEMP/infra-tofu"
+      - name: Init and validate
+        working-directory: tofu
+        run: |
+          tofu="$RUNNER_TEMP/infra-tofu/bin/infra-tofu"
+          "$tofu" init -backend=false -input=false
+          "$tofu" validate
+
+  apply:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: tofu
+    concurrency: tofu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - name: Build
+        run: nix build .#infra-tofu --out-link "$RUNNER_TEMP/infra-tofu"
+      - name: Plan and apply
+        working-directory: tofu
+        env:
+          BWS_ACCESS_TOKEN: ${{ secrets.BWS_ACCESS_TOKEN }}
+        shell: bash
+        run: |
+          tofu="$RUNNER_TEMP/infra-tofu/bin/infra-tofu"
+
+          "$tofu" init -input=false
+          "$tofu" plan -input=false -no-color -out=tfplan >/dev/null
+
+          plan_json=$("$tofu" show -json tfplan)
+          if printf '%s' "$plan_json" | jq -e 'any((.resource_changes // [])[]; .change.actions | index("delete"))' >/dev/null; then
+            echo "::error::The plan deletes or replaces resources, apply skipped. Review and apply it manually."
+            exit 1
+          fi
+
+          "$tofu" apply -input=false -no-color tfplan >/dev/null

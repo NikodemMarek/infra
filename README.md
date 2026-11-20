@@ -232,8 +232,9 @@ One-time setup:
 3. Create the Cloudflare API token (permissions as in `secretspec.toml`, not cert-manager's) and the Tailscale OAuth client (scopes `policy_file`, `devices:core:read`, `devices:posture_attributes`, `dns`).
 4. In Bitwarden Secrets Manager create the project `tofu` with a secret per key of the profile `tofu` in `secretspec.toml` (plain key names) and a machine account with read access to it; export its access token as `BWS_ACCESS_TOKEN`.
 5. `tofu init`.
+6. In the GitHub repo Settings > Environments create `tofu`, deployment branches "Selected branches" = `main`, and the environment secret `BWS_ACCESS_TOKEN` = the access token of a machine account with read-only access to the project `tofu`.
 
-Workflow: edit, `tofu plan`, read it, `tofu apply`, commit.
+Workflow: open a PR (CI validates); merging to main plans and applies. A plan that deletes or replaces anything fails the job: apply it locally with `tofu apply` after reading the plan. The state has no locking, so don't apply locally while the workflow runs.
 
 - Never apply a plan that replaces (`-/+`) or destroys something you didn't intend.
 - To stop managing a resource use a `removed { from = ... lifecycle { destroy = false } }` block, never just delete the resource block.
