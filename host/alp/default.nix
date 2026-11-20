@@ -9,11 +9,6 @@
     "${modulesPath}/installer/cd-dvd/installation-cd-minimal.nix"
   ];
 
-  services.tailscale = {
-    enable = true;
-    # Generate the key in tailscale console, Settings > Keys.
-    authKeyFile = ./key;
-  };
   services.openssh.enable = true;
 
   nix.settings.trusted-users = ["@wheel"];

@@ -73,11 +73,11 @@ Cluster access: the dev shell sets `KUBECONFIG` to `kubeconfig.yaml` in the `def
    ```
    Commit only the `.pub` (the host config reads it). The private half goes to Bitwarden as `HOST_SSH_ED25519_PRIV` (see Secrets). The private key is git-ignored (`host/*/ssh_host_ed25519_key`), but delete the local file after installing.
 3. Put the age key in `.sops.yaml` (an anchor under `&hosts` and a `host/<name>/.+$` creation rule) and add a `[profiles.<name>]` to `secretspec.toml` with the host's items in Bitwarden.
-4. Boot the target from the ISO: `mkiso`, then `writeiso /dev/sdX`. The ISO joins tailscale with an auth key read from `host/alp/key` (git-ignored, create it in the Tailscale console) and accepts the key of `yenn`'s user over ssh.
+4. Boot the target from the ISO: `mkiso`, then `writeiso /dev/sdX`. The ISO accepts the key of `yenn`'s user over ssh and is reached on the LAN: find its IP with `ip a` on its console.
 5. For a host with a ZFS pool, put a disk key at `host/<name>/disk.key` (git-ignored; `regis`'s `tank` pool uses a raw key, `dd if=/dev/urandom of=host/regis/disk.key bs=32 count=1`). `install-remote` requires it only if the host's disko config has a zpool: it passes it to nixos-anywhere as `/tmp/disk.key` and also copies it to `/persist/data/etc/zfs/disk.key`. Other hosts need no disk key.
 6. Install:
    ```sh
-   install-remote <name> root@<ip>
+   install-remote <name> root@<lan-ip>
    ```
    It builds the host's secrets, copies the host key to `/persist/data/etc/ssh/ssh_host_ed25519_key` on the new disk and runs nixos-anywhere with the disko script and the toplevel as store paths.
 7. For a k3s node, join tailscale by hand. k3s keeps restarting until the node is logged in, and each start runs `tailscale up` with its placeholder `--vpn-auth` key (ignored once logged in), so stop it while joining:
