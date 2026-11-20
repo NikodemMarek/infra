@@ -1,0 +1,77 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency: deploy
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {host: geralt, runner: ubuntu-latest}
+          - {host: regis, runner: ubuntu-latest}
+          - {host: triss, runner: ubuntu-24.04-arm}
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    environment: deploy
+    env:
+      HOST: ${{ matrix.host }}
+    steps:
+      - run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache >/dev/null 2>&1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - name: secrets
+        id: secrets
+        env:
+          BWS_ACCESS_TOKEN: ${{ secrets.BWS_ACCESS_TOKEN }}
+        run: |
+          exec 2>/dev/null
+          umask 077
+          hosts=$(nix run .#bws-project -- hosts)
+          jq -r '.[] | strings | splits("[\r\n]") | select(. != "") | "::add-mask::\(gsub("%"; "%25"))"' <<< "$hosts"
+          ci() { jq -er --arg k "ci/$1" '.[$k]' <<< "$hosts"; }
+
+          mkdir -p ~/.ssh
+          ci ssh_id_ed25519 > ~/.ssh/id_ed25519
+          id=$(ci tailscale_oauth_client_id)
+          secret=$(ci tailscale_oauth_client_secret)
+          echo "ts_oauth_client_id=$id" >> "$GITHUB_OUTPUT"
+          echo "ts_oauth_secret=$secret" >> "$GITHUB_OUTPUT"
+
+          nix run .#secrets-build -- "$RUNNER_TEMP/secrets" "$HOST" >/dev/null
+      - uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
+        with:
+          oauth-client-id: ${{ steps.secrets.outputs.ts_oauth_client_id }}
+          oauth-secret: ${{ steps.secrets.outputs.ts_oauth_secret }}
+          tags: tag:ci
+      - name: reachability
+        id: reachable
+        run: |
+          if tailscale ping -c 1 --timeout 10s "$HOST" >/dev/null 2>&1; then
+            echo "online=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$HOST is offline, not deployed"
+          fi
+      - name: deploy
+        if: steps.reachable.outputs.online == 'true'
+        run: |
+          exec >/dev/null 2>&1
+          nix eval --raw .#knownHosts > "$RUNNER_TEMP/known_hosts"
+          nix run --inputs-from . deploy-rs -- --skip-checks \
+            --ssh-opts "-o UserKnownHostsFile=$RUNNER_TEMP/known_hosts -o StrictHostKeyChecking=yes" \
+            --targets ".#$HOST" -- --override-input secrets "path:$RUNNER_TEMP/secrets"
