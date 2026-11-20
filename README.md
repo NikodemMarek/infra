@@ -9,7 +9,7 @@ All commands below are meant to be run from the repo root inside the dev shell.
 ```
 flake.nix              inputs, nixosConfigurations, deploy-rs nodes, packages
 devenv.nix             dev shell: tools and the scripts described below
-secretspec.toml        inventory of every secret: one profile per host, `dijkstra` for the cluster key, `dijkstra-<ns>` for the Secret `secrets` of each namespace
+secretspec.toml        inventory of every secret: one profile per host, `dijkstra` for the cluster key, `dijkstra-<ns>` for the Secret `secrets` of each namespace, `tailscale` for the key servers join the tailnet with
 .sops.yaml             age recipients: hosts, user, cluster
 secrets-stub/          placeholder for the `secrets` flake input
 host/
@@ -80,13 +80,7 @@ Cluster access: the dev shell sets `KUBECONFIG` to `kubeconfig.yaml` in the `def
    install-remote <name> root@<ip>
    ```
    It builds the host's secrets, copies the host key to `/persist/data/etc/ssh/ssh_host_ed25519_key` on the new disk and runs nixos-anywhere with the disko script and the toplevel as store paths.
-7. For a k3s node, join tailscale by hand. k3s keeps restarting until the node is logged in, and each start runs `tailscale up` with its placeholder `--vpn-auth` key (ignored once logged in), so stop it while joining:
-   ```sh
-   sudo systemctl stop k3s
-   sudo tailscale up --auth-key=<key>
-   sudo systemctl start k3s
-   ```
-   Generate the key in the Tailscale console (Settings > Keys): single use, 1-day expiry, tag `tag:server`. Tagged nodes don't expire, and the policy auto-approves the pod CIDR route k3s advertises. Add the node's tailscale IP to `ips` in `host/features/optional/k3s.nix`.
+7. Servers (hosts importing `tailscale-server.nix`) join the tailnet on first boot as `tag:server`, with the OAuth client secret from Bitwarden `infra/tailscale/TAILSCALE_AUTH_KEY`; the policy auto-approves the pod route k3s advertises. For a k3s node, install it without `k3s.nix` first (it needs the node's IP in `ips`), then add its tailnet IP (`tailscale ip -4`) to `ips` in `host/features/optional/k3s.nix`, add the import and `K3S_TOKEN` to its profile, and `host-deploy` it.
 
 ## Updating hosts
 
@@ -229,7 +223,7 @@ Own programs that are not wrappers of an upstream package. They are top-level at
 OpenTofu in `tofu/` manages what lives outside the repo. State is in the private bucket `tofu-state` on Oracle Cloud (S3-compatible API, no locking: one apply at a time).
 
 - Managed: the Cloudflare zone `nkmrk.com` and its DNS records, the mail Worker and Email Routing of `t.nkmrk.com`, the tailnet policy and DNS settings, Oracle Cloud `triss` (instance, VCN, subnet, security list, internet gateway, route table), the state bucket and the spending budget.
-- Manual: API tokens and keys and Tailscale auth keys (tofu never creates secrets), the cloudflared tunnel itself (config in `clusters/dijkstra/cloudflare`), Mullvad, Matrix users, GitHub.
+- Manual: API tokens and keys and the Tailscale OAuth client hosts join with (tofu never creates secrets), the cloudflared tunnel itself (config in `clusters/dijkstra/cloudflare`), Mullvad, Matrix users, GitHub.
 
 One-time setup:
 
@@ -260,7 +254,7 @@ Tailscale:
 
 - Edit the policy only in `tofu/tailscale-policy.json`: the next apply reverts console edits.
 - The `tests` block makes Tailscale reject a policy that breaks server connectivity.
-- Auth keys stay manual.
+- The OAuth client hosts join with is made by hand (Tailscale console Settings > OAuth clients: scope Auth keys write, tag `tag:server`). Its secret goes to Bitwarden `infra/tailscale/TAILSCALE_AUTH_KEY`; deleting the client revokes it.
 
 Oracle Cloud:
 

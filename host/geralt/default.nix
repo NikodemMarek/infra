@@ -6,7 +6,7 @@
     ../features
     ../features/optional/docker.nix
     ../features/optional/systemd-boot.nix
-    ../features/optional/tailscale.nix
+    ../features/optional/tailscale-server.nix
     ../features/optional/libvirt.nix
     ../features/optional/wolf.nix
     ../features/optional/maintenance.nix
