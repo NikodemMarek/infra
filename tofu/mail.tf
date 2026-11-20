@@ -34,9 +34,9 @@ resource "cloudflare_workers_script" "mail_hook" {
   ]
 }
 
-resource "cloudflare_email_routing_dns" "nkmrk" {
+resource "cloudflare_email_routing_dns" "t" {
   zone_id = cloudflare_zone.nkmrk.id
-  name    = cloudflare_zone.nkmrk.name
+  name    = "t.${cloudflare_zone.nkmrk.name}"
 }
 
 resource "cloudflare_email_routing_address" "forward_to" {
@@ -44,7 +44,7 @@ resource "cloudflare_email_routing_address" "forward_to" {
   email      = var.mail_forward_to
 }
 
-resource "cloudflare_email_routing_catch_all" "nkmrk" {
+resource "cloudflare_email_routing_catch_all" "t" {
   zone_id = cloudflare_zone.nkmrk.id
   name    = "mail-hook"
   enabled = true
@@ -61,14 +61,4 @@ resource "cloudflare_email_routing_catch_all" "nkmrk" {
       value = [cloudflare_workers_script.mail_hook.script_name]
     },
   ]
-}
-
-moved {
-  from = cloudflare_email_routing_dns.t
-  to   = cloudflare_email_routing_dns.nkmrk
-}
-
-moved {
-  from = cloudflare_email_routing_catch_all.t
-  to   = cloudflare_email_routing_catch_all.nkmrk
 }
