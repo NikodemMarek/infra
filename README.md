@@ -92,6 +92,13 @@ host-deploy geralt roach
 
 `host-deploy` builds the secrets for the requested nodes, checks their ssh host keys, answers deploy-rs's sudo prompt with the `maintenance` password from the project `hosts` (`<node>/USERS_MAINTENANCE_PASSWORD`, or asks), and runs `deploy --skip-checks`.
 
+Merges to `main` deploy `geralt`, `regis` and `triss` (`.github/workflows/deploy.yml`). Hosts that are offline are skipped (a notice in the log); re-running an old run redeploys that old commit. The logs print nothing but failures, by design.
+
+One-time setup:
+
+1. In Bitwarden Secrets Manager add to the project `hosts` the secrets `ci/SSH_ID_ED25519` (the private half of `host/features/optional/ci_ssh_id_ed25519.pub`), `ci/TAILSCALE_OAUTH_CLIENT_ID` and `ci/TAILSCALE_OAUTH_CLIENT_SECRET` (a Tailscale OAuth client with scope `auth_keys` and tag `tag:ci`), and create the machine account `ci-hosts` with read access to the project.
+2. In the GitHub repo Settings > Environments create `deploy`, deployment branches "Selected branches" = `main`, and the environment secret `BWS_ACCESS_TOKEN` = the access token of `ci-hosts`.
+
 ## Secrets
 
 Modules never talk to sops directly. They go through a small contract:
