@@ -128,6 +128,64 @@ in {
 
   languages.rust.enable = true;
 
+  treefmt = {
+    enable = true;
+    config = {
+      programs = {
+        alejandra.enable = true;
+        ruff-format.enable = true;
+        rustfmt = {
+          enable = true;
+          edition = "2021";
+        };
+        shfmt.enable = true;
+        terraform = {
+          enable = true;
+          package = pkgs.opentofu;
+        };
+        taplo.enable = true;
+        yamlfmt = {
+          enable = true;
+          settings.formatter.retain_line_breaks_single = true;
+        };
+        prettier = {
+          enable = true;
+          includes = ["*.json" "*.css"];
+        };
+        fish_indent.enable = true;
+        stylua.enable = true;
+      };
+      settings.global.excludes = [
+        "*.enc.yaml"
+        ".sops.yaml"
+        "*.lock"
+        "*.pub"
+        "*.cred"
+        "*.png"
+      ];
+    };
+  };
+
+  tasks."devenv:treefmt:run".status = "true";
+  tasks."devenv:git-hooks:install".status = "true";
+
+  git-hooks.hooks = {
+    treefmt.enable = true;
+    statix.enable = true;
+    deadnix.enable = true;
+    ruff.enable = true;
+    shellcheck.enable = true;
+    clippy = {
+      enable = true;
+      entry = lib.mkForce "${pkgs.writeShellScript "clippy-crates" ''
+        for manifest in pkgs/*/Cargo.toml; do
+          cargo clippy --manifest-path "$manifest" --all-targets -- -D warnings || exit 1
+        done
+      ''}";
+      pass_filenames = false;
+    };
+  };
+
   scripts = {
     secrets-build = {
       exec = ''

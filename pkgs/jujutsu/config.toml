@@ -29,3 +29,7 @@ stack = ["util", "exec", "--", "@jjUpload@", "stack"]
 
 [upload]
 bookmark-prefix = "nm/"
+
+[fix.tools.treefmt]
+command = ["treefmt", "--stdin", "$path"]
+patterns = ["glob:**"]
