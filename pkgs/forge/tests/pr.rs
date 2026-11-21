@@ -190,6 +190,37 @@ fn github_draft() {
     assert_eq!(v, merge(gh_exp(), json!({"draft": true})));
 }
 
+// CRLF normalization
+
+#[test]
+fn gitlab_crlf_in_title_and_body_is_normalized() {
+    let v = gl_view(json!({
+        "draft": true, "title": "Draft: a\r\nb", "description": "x\r\ny\r\n\r\nz\rw"
+    }));
+    assert_eq!(v["title"], "a\nb");
+    assert_eq!(v["draft"], true);
+    assert_eq!(v["body"], "x\ny\n\nz\rw");
+}
+
+#[test]
+fn github_crlf_in_title_and_body_is_normalized() {
+    let v = gh_view(json!({"title": "a\r\nb", "body": "x\r\ny\r\n\r\nz\rw"}));
+    assert_eq!(v["title"], "a\nb");
+    assert_eq!(v["body"], "x\ny\n\nz\rw");
+}
+
+#[test]
+fn list_crlf_is_normalized() {
+    let mut e = gh_repo();
+    e.route(
+        "GET repos/o/r/pulls?state=all&sort=updated&direction=desc&per_page=100",
+        json!([merge(gh_raw(), json!({"title": "a\r\nb", "body": "c\r\nd"}))]),
+    );
+    let v = e.forge(&["pr", "list"]).json();
+    assert_eq!(v[0]["title"], "a\nb");
+    assert_eq!(v[0]["body"], "c\nd");
+}
+
 // Null and missing fields
 
 fn without(mut v: Value, path: &[&str]) -> Value {

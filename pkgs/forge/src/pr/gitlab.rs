@@ -47,8 +47,9 @@ impl From<Mr> for Pr {
                 strip_draft(&m.title).to_string()
             } else {
                 m.title
-            },
-            body: m.description.unwrap_or_default(),
+            }
+            .replace("\r\n", "\n"),
+            body: m.description.unwrap_or_default().replace("\r\n", "\n"),
             base: m.target_branch,
             head: m.source_branch,
             head_sha: m.sha.filter(|s| !s.is_empty()),
