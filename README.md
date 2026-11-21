@@ -148,7 +148,7 @@ On btrfs the old `root` is kept in `old_roots/<timestamp>` for 30 days; on ZFS t
 
 `pkgs/<name>/default.nix` wraps an upstream package together with its config (`symlinkJoin` + `makeWrapper`; see `pkgs/rofi`). To add one: create `pkgs/<name>/`, register it in `pkgs/default.nix` (`<name> = pkgs.callPackage ./<name> {<name> = prev.<name>;};`) and use it as `pkgs.<name>`. Every derivation of that set is a flake package (`nix build .#<name>`; event handlers: `.#event-handlers.<name>`).
 
-Apps that keep state in `$HOME` (`bitwarden-cli`, `gh`, `heroic`, `moonlight-qt`, `obsidian`, `prismlauncher`, `zen-browser`) take an optional `dataDir` (`.override {dataDir = "/persist/generated/home/<user>/<app>";}`): `jail` then points their state at a persisted path. `claude` is customised with `.extend {...}`, see `pkgs/claude/README.md`.
+Apps that keep state in `$HOME` (`bitwarden-cli`, `gh`, `glab`, `heroic`, `moonlight-qt`, `obsidian`, `prismlauncher`, `zen-browser`) take an optional `dataDir` (`.override {dataDir = "/persist/generated/home/<user>/<app>";}`): `jail` then points their state at a persisted path. `claude` is customised with `.extend {...}`, see `pkgs/claude/README.md`.
 
 ### Tools
 
@@ -177,7 +177,7 @@ OpenTofu in `tofu/` manages what lives outside the repo. State is in the private
 Merging to `main` plans and applies (GitHub environment `tofu`, `BWS_ACCESS_TOKEN` of a read-only machine account). A plan that deletes or replaces anything fails the job: apply it locally after reading the plan, not while the workflow runs.
 
 - To stop managing a resource use `removed { from = ... lifecycle { destroy = false } }`, never just delete the block.
-- Drift: `tofu plan -detailed-exitcode` (exit 2 means changes). After a `devenv update` that bumps providers: `tofu init -upgrade`.
+- Drift: `tofu plan -detailed-exitcode` (exit 2 means changes). After a `flake.lock` update that bumps providers (they come from nixpkgs): `tofu init -upgrade`.
 - Importing: `import` blocks in `tofu/imports-<provider>.tf`, `tofu plan -generate-config-out=generated.tf` (git-ignored), move the resources into `tofu/<provider>.tf`, apply, delete the imports file.
 - Tailscale: edit the policy only in `tofu/tailscale-policy.json` (console edits are reverted; its `tests` block rejects a policy that breaks server connectivity). Break-glass if an apply locks the cluster out: the console's JSON editor (Access controls).
 - Oracle Cloud: the public IP of `triss` is ephemeral and not managed. `oci.tf` holds every rule of the default security list and route table (console-added ones are removed); keep TCP 22, UDP 51820 (WireGuard hostPort) and the default route. The budget mails as soon as the tenancy spends anything.
@@ -234,11 +234,12 @@ CI shares a binary cache in the Garage bucket `nix-cache` on `regis`: `http://ni
 
 - Only `hosts.yml` uploads, from the builds with placeholder secrets on push to `main`, over the S3 API on port 3900. The GitHub environment `nix-cache` (`main` only) holds exactly `NIX_CACHE_SIGNING_KEY`, `NIX_CACHE_ACCESS_KEY_ID` and `NIX_CACHE_SECRET_ACCESS_KEY`, nothing else. The repo secrets `TS_CACHE_OAUTH_CLIENT_ID` and `TS_CACHE_OAUTH_SECRET` are a Tailscale OAuth client (scope `auth_keys`, tag `tag:ci-cache` only). `deploy.yml` only reads.
 - Accepted risk: a push to `main` can sign paths that every host trusts, including `yenn` and `roach`. Recovery: generate `nix-cache-2`, replace the public key in all three places and the `NIX_CACHE_SIGNING_KEY` secret (and Bitwarden), empty the bucket, then redeploy every host: `deploy.yml` covers `geralt`, `regis` and `triss`; run `host-switch` on `yenn` and `host-deploy roach`.
-- The bucket has a 200 GiB quota. If it is full or broken, empty it with a temporary key; the next push to `main` uploads everything again:
+- The bucket has a 200 GiB quota. If it is full or broken, empty it with a temporary key; the next push to `main` uploads everything again. The `garage` commands run on `regis`; `aws` runs anywhere on the tailnet with the id and secret that `key create` printed:
   ```sh
   garage key create wipe
   garage bucket allow --read --write nix-cache --key wipe
-  aws s3 rm --recursive s3://nix-cache --endpoint-url http://100.100.215.91:3900 --region garage
+  export AWS_ACCESS_KEY_ID=<GK...> AWS_SECRET_ACCESS_KEY=<secret>
+  nix run nixpkgs#awscli2 -- s3 rm --recursive s3://nix-cache --endpoint-url http://100.100.215.91:3900 --region garage
   garage key delete --yes wipe
   ```
   To recreate it, on `regis` (a new `ci-nix-cache` key goes into the `nix-cache` environment and Bitwarden):
