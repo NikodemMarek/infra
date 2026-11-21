@@ -7,6 +7,9 @@ on:
       - pkgs/infra-tofu/**
       - pkgs/bws/**
       - pkgs/bws-project/**
+      - pkgs/default.nix
+      - overlays/**
+      - flake.nix
       - secretspec.toml
       - flake.lock
       - .github/workflows/tofu.yml
@@ -17,6 +20,9 @@ on:
       - pkgs/infra-tofu/**
       - pkgs/bws/**
       - pkgs/bws-project/**
+      - pkgs/default.nix
+      - overlays/**
+      - flake.nix
       - secretspec.toml
       - flake.lock
       - .github/workflows/tofu.yml
@@ -41,8 +47,11 @@ jobs:
         working-directory: tofu
         run: |
           tofu="$RUNNER_TEMP/infra-tofu/bin/infra-tofu"
+          "$tofu" fmt -check -diff
           "$tofu" init -backend=false -input=false
           "$tofu" validate
+          jq empty tailscale-policy.json
+          node --check mail-worker.js
 
   apply:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
