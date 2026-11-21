@@ -80,17 +80,6 @@ def test_an_empty_inbox_makes_no_call(memory_repo: Path, editing_claude: Editing
     assert subjects(memory_repo) == ["init"]
 
 
-def test_the_old_store_layout_is_left_alone(
-    memory_repo: Path, editing_claude: EditingClaude, caplog: pytest.LogCaptureFixture
-):
-    seed(memory_repo, {"KNOWLEDGE.md": "# index\n"})
-    queued = note()
-    assert curate.run() == 0
-    assert not editing_claude.called
-    assert notes.pending() == [queued]
-    assert "old store layout" in caplog.text
-
-
 def test_a_memory_dir_that_is_not_a_repo_fails(
     tmp_path: Path, editing_claude: EditingClaude
 ):

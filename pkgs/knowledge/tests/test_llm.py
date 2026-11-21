@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from fakes import FakeLlm
+from fakes import FakeLlm, LlmCall
 from knowledge.config import UsageError
 from knowledge.llm import (
     ALLOWED_TOOLS,
@@ -79,7 +79,6 @@ def argv(**changes: object) -> list[str]:
     args: dict[str, object] = {
         "binary": "claude",
         "system": "SYSTEM",
-        "add_dirs": [Path("/mem"), Path("/ws/skills")],
         "model": "sonnet",
         "effort": "medium",
     }
@@ -110,10 +109,6 @@ def test_argv_has_every_flag_in_order():
         '{"disableAllHooks":true}',
         "--append-system-prompt",
         "SYSTEM",
-        "--add-dir",
-        "/mem",
-        "--add-dir",
-        "/ws/skills",
     ]
 
 
@@ -139,7 +134,6 @@ def test_argv_has_no_positional_prompt():
         "--disallowedTools",
         "--settings",
         "--append-system-prompt",
-        "--add-dir",
     }
     rest = [
         x
@@ -158,11 +152,6 @@ def test_argv_denies_the_private_notes():
     assert denied == list(PRIVATE_DENY)
     assert "Read" not in denied  # only the private directory, not the tool
     assert a[a.index("--allowedTools") + 1] == "Read,Grep,Glob"
-
-
-def test_argv_without_extra_dirs():
-    a = argv(add_dirs=[])
-    assert "--add-dir" not in a
 
 
 def test_argv_without_tools_has_nothing_to_allow_or_deny():
@@ -186,7 +175,6 @@ def test_argv_with_edits_allows_only_edit_rules():
     )  # private/ stays denied
     assert a[a.index("--permission-mode") + 1] == "default"
     assert a.index("--permission-mode") < a.index("--strict-mcp-config")
-    assert a[-4:] == ["--add-dir", "/mem", "--add-dir", "/ws/skills"]
 
 
 def test_argv_with_edits_replaces_the_tools_argument():
@@ -204,7 +192,7 @@ def test_edits_must_be_absolute():
 
 
 def test_run_returns_the_result(fake_claude: Path, memory_repo: Path):
-    res = ClaudeCli().run("the system prompt", "the message", [memory_repo])
+    res = ClaudeCli().run("the system prompt", "the message")
     assert res == "```json\n{}\n```"
     seen = call(fake_claude)
     assert seen["stdin"] == "the message"
@@ -213,18 +201,17 @@ def test_run_returns_the_result(fake_claude: Path, memory_repo: Path):
     args = seen["argv"]
     assert isinstance(args, list)
     assert args[args.index("--append-system-prompt") + 1] == "the system prompt"
-    assert args[args.index("--add-dir") + 1] == str(memory_repo)
     assert args[args.index("--model") + 1] == "sonnet"
     assert args[args.index("--effort") + 1] == "medium"
 
 
 def test_tools_are_passed_through(fake_claude: Path, memory_repo: Path):
-    ClaudeCli(tools="").run("s", "m", [])
+    ClaudeCli(tools="").run("s", "m")
     args = call(fake_claude)["argv"]
     assert isinstance(args, list)
     assert args[args.index("--tools") + 1] == ""
     assert "--allowedTools" not in args
-    ClaudeCli().run("s", "m", [])
+    ClaudeCli().run("s", "m")
     args = call(fake_claude)["argv"]
     assert isinstance(args, list)
     assert args[args.index("--tools") + 1] == ALLOWED_TOOLS
@@ -232,7 +219,7 @@ def test_tools_are_passed_through(fake_claude: Path, memory_repo: Path):
 
 
 def test_edits_are_passed_through(fake_claude: Path, memory_repo: Path):
-    ClaudeCli(edits=["/mem/a.md"]).run("s", "m", [])
+    ClaudeCli(edits=["/mem/a.md"]).run("s", "m")
     args = call(fake_claude)["argv"]
     assert isinstance(args, list)
     assert args[args.index("--allowedTools") + 1] == "Edit(//mem/a.md)"
@@ -244,19 +231,17 @@ def test_permission_denials_fail_a_call_with_edits(
 ):
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "denied")
     with pytest.raises(LlmError, match="denied 1 tool call"):
-        ClaudeCli(edits=["/mem/a.md"]).run("s", "m", [])
-    assert (
-        ClaudeCli().run("s", "m", []) == "ok"
-    )  # a read-only call does not look at them
+        ClaudeCli(edits=["/mem/a.md"]).run("s", "m")
+    assert ClaudeCli().run("s", "m") == "ok"  # a read-only call does not look at them
 
 
 def test_the_child_does_not_see_claudecode(
     fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    ClaudeCli().run("s", "m", [])
+    ClaudeCli().run("s", "m")
     assert call(fake_claude)["claudecode"] is None
     monkeypatch.setenv("CLAUDECODE", "1")  # a nested launch from inside Claude Code
-    ClaudeCli().run("s", "m", [])
+    ClaudeCli().run("s", "m")
     assert call(fake_claude)["claudecode"] is None
     assert call(fake_claude)["curator"] == "1"
 
@@ -266,7 +251,7 @@ def test_model_and_effort_come_from_the_environment(
 ):
     monkeypatch.setenv("KNOWLEDGE_MODEL", "opus-test")
     monkeypatch.setenv("KNOWLEDGE_EFFORT", "high")
-    ClaudeCli().run("s", "m", [])
+    ClaudeCli().run("s", "m")
     args = call(fake_claude)["argv"]
     assert isinstance(args, list)
     assert args[args.index("--model") + 1] == "opus-test"
@@ -278,7 +263,7 @@ def test_a_failing_exit_is_an_error(
 ):
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "exit1")
     with pytest.raises(LlmError, match="status 1: boom: no credentials"):
-        ClaudeCli().run("s", "m", [])
+        ClaudeCli().run("s", "m")
 
 
 def test_output_that_is_not_json_is_an_error(
@@ -286,7 +271,7 @@ def test_output_that_is_not_json_is_an_error(
 ):
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "notjson")
     with pytest.raises(LlmError, match="did not print a JSON object"):
-        ClaudeCli().run("s", "m", [])
+        ClaudeCli().run("s", "m")
 
 
 def test_is_error_is_an_error(
@@ -294,7 +279,7 @@ def test_is_error_is_an_error(
 ):
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "iserror")
     with pytest.raises(LlmError, match="error_during_execution"):
-        ClaudeCli().run("s", "m", [])
+        ClaudeCli().run("s", "m")
 
 
 def test_no_result_is_an_error(
@@ -302,7 +287,7 @@ def test_no_result_is_an_error(
 ):
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "noresult")
     with pytest.raises(LlmError, match="no result"):
-        ClaudeCli().run("s", "m", [])
+        ClaudeCli().run("s", "m")
 
 
 def test_a_timeout_is_an_error(
@@ -311,7 +296,7 @@ def test_a_timeout_is_an_error(
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "sleep")
     monkeypatch.setenv("KNOWLEDGE_TIMEOUT", "1")
     with pytest.raises(LlmError, match="timed out after 1s"):
-        ClaudeCli().run("s", "m", [])
+        ClaudeCli().run("s", "m")
 
 
 def test_a_missing_binary_is_an_error(
@@ -319,7 +304,7 @@ def test_a_missing_binary_is_an_error(
 ):
     monkeypatch.setenv("KNOWLEDGE_CLAUDE", str(tmp_path / "no-such-claude"))
     with pytest.raises(LlmError, match="cannot run claude"):
-        ClaudeCli().run("s", "m", [])
+        ClaudeCli().run("s", "m")
 
 
 def test_a_bad_timeout_is_a_usage_error(monkeypatch: pytest.MonkeyPatch):
@@ -334,7 +319,7 @@ def test_a_bad_timeout_is_a_usage_error(monkeypatch: pytest.MonkeyPatch):
 def test_fake_llm_stands_in_for_the_runner():
     fake = FakeLlm(lambda message: f"echo {message}")
     llm: Llm = fake
-    assert llm.run("sys", "msg", [Path("/m")]) == "echo msg"
-    assert fake.calls[0].add_dirs == (Path("/m"),)
+    assert llm.run("sys", "msg") == "echo msg"
+    assert fake.calls[0] == LlmCall("sys", "msg")
     with pytest.raises(LlmError):
-        FakeLlm(error=LlmError("down")).run("s", "m", [])
+        FakeLlm(error=LlmError("down")).run("s", "m")

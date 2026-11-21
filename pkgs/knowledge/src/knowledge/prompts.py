@@ -10,8 +10,3 @@ def read(name: str) -> str:
         .joinpath("prompts", name)
         .read_text(encoding="utf-8")
     )
-
-
-def router_prompt() -> str:
-    """The text of `prompts/router.md` (`knowledge route`)."""
-    return read("router.md")

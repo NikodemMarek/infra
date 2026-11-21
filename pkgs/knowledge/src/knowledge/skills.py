@@ -106,7 +106,7 @@ def run() -> int:
     before = _mtimes(ideas)
     try:
         ClaudeCli(edits=[f"{memory.resolve()}/{DIR}/**"]).run(
-            prompts.read(PROMPT), _message(sorted(before)), []
+            prompts.read(PROMPT), _message(sorted(before))
         )
     except LlmError as e:
         log.error("the skills call failed: %s", e)
