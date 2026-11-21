@@ -74,6 +74,7 @@ in {
               pkgs.jujutsu
               pkgs.git
               pkgs.openssh
+              pkgs.claude-hooks
               cfg.glabPackage
               cfg.ghPackage
             ];

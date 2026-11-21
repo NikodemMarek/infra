@@ -10,7 +10,10 @@
   stop    (SubagentStop)    the stopping agent owns a workspace: squash its work into the base
                             change. The workspace stays, so the agent can be resumed.
   remove  (WorktreeRemove)  integrate leftovers, forget the workspace, delete its directory.
-  title   (statusline)      a session (s-MMDD-HHMMSS-N) that has a title: rename its jj workspace
+  drop    (jw reap, DIR)    forget and delete the workspace in DIR if it holds no changes, whatever
+                            its age; never integrates. Always exits 0 and prints at most one line,
+                            the reason DIR was kept.
+  title  (statusline)      a session (s-MMDD-HHMMSS-N) that has a title: rename its jj workspace
                             to s-<title>, once. The directory keeps its name. Prints nothing.
 
 Claude names agent worktrees `agent-<agent_id>`; their workspaces (and directories) are `a-<agent_id>`,
@@ -21,9 +24,11 @@ The registry lives in $CLAUDE_CONFIG_DIR/jj-agents/<repo-hash>/<name>.json (defa
 can't redirect the hook (`title` only adds `ws`). Claude never calls WorktreeRemove for agent
 worktrees, so `create` and `stop` garbage-collect all repos' registries: idle agent workspaces
 are deleted after GC_AGE unless they hold changes (`stop` reports those once), entries whose
-directory is gone are forgotten. A failed or conflicted squash keeps the
-workspace and is reported. `ws` holds the current jj workspace name when it differs from the
-registry key (agents: `a-<id>`, sessions after `title`). Older agent entries have no `ws`.
+directory is gone are forgotten. Inside an agent session ($AGENT_SESSION set) `create` also records
+each new workspace with `jw session worktree`, so `jw reap` can `drop` it with the session. A failed
+or conflicted squash keeps the workspace and is reported. `ws` holds the current jj workspace name
+when it differs from the registry key (agents: `a-<id>`, sessions after `title`). Older agent entries
+have no `ws`.
 """
 
 import fcntl
@@ -388,14 +393,18 @@ def last_activity(st):
     return max(times)
 
 
+def workspace_names(d):
+    return jj(
+        d, "--ignore-working-copy", "workspace", "list", "-T", 'name ++ "\\n"'
+    ).split()
+
+
 def has_work(st):
     """Whether an agent workspace still holds changes that aren't integrated into its base."""
     d = st["dir"]
     if not os.path.isdir(d):
         return False
-    if (st.get("ws") or st["name"]) not in jj(
-        d, "--ignore-working-copy", "workspace", "list", "-T", 'name ++ "\\n"'
-    ).split():
+    if (st.get("ws") or st["name"]) not in workspace_names(d):
         return False  # already forgotten: jj tracks nothing there any more
     refresh(d)
     if (
@@ -558,8 +567,28 @@ def create(inp):
             shutil.rmtree(d, ignore_errors=True)
             raise
         log(f"created jj workspace {wsname} at {d} on top of {base[:8]}")
+    if os.environ.get("AGENT_SESSION"):
+        track_worktree(d)
     gc()
     return d
+
+
+def track_worktree(d):
+    """Tell the session record about a workspace it created (best effort, stdout stays the path)."""
+    try:
+        p = subprocess.run(
+            ["jw", "session", "worktree", d],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log(f"jw session worktree {d}: {e}")
+        return
+    if p.returncode != 0:
+        log(f"jw session worktree {d}: {' '.join((p.stderr or p.stdout).split())}")
 
 
 def create_git(cwd, name, inp):
@@ -594,6 +623,16 @@ def find_agent(agent_id):
         if st:
             return os.path.dirname(path), st
     return None, None
+
+
+def find_dir(path):
+    """(registry, entry) of the registered workspace whose directory is path, if any."""
+    want = os.path.realpath(path)
+    for reg in glob.glob(os.path.join(REGISTRY, "*")):
+        for st in all_states(reg):
+            if os.path.realpath(st["dir"]) == want:
+                return reg, st
+    return None
 
 
 def stop(inp):
@@ -634,31 +673,52 @@ def remove(inp):
     path = inp.get("worktree_path")
     if not path or not os.path.isdir(path):
         return
-    for reg in glob.glob(os.path.join(REGISTRY, "*")):
-        for st in all_states(reg):
-            if os.path.realpath(st["dir"]) != os.path.realpath(path):
-                continue
-            with Lock(reg):
-                st = load(reg_path(reg, st["name"]))
-                if not st:
-                    return
-                if st["kind"] == "agent":
-                    msg = integrate(st)
-                    if msg:
-                        log(msg)
-                elif changed_files(st):
-                    log(
-                        f"keeping {path}: it has changes"
-                    )  # Claude's default for worktrees
-                    return
-                delete_workspace(reg, st)
-            return
+    found = find_dir(path)
+    if found:
+        reg, st = found
+        with Lock(reg):
+            st = load(reg_path(reg, st["name"]))
+            if not st:
+                return
+            if st["kind"] == "agent":
+                msg = integrate(st)
+                if msg:
+                    log(msg)
+            elif changed_files(st):
+                log(
+                    f"keeping {path}: it has changes"
+                )  # Claude's default for worktrees
+                return
+            delete_workspace(reg, st)
+        return
     if os.path.realpath(workspace_root(path) or "/nonexistent") == os.path.realpath(
         path
     ):
         return  # a jj workspace this hook doesn't manage
     if not git(path, "status", "--porcelain").strip():
         git(path, "worktree", "remove", path)
+
+
+def drop_dir(path):
+    """Delete the registered workspace in path unless it holds changes. Returns why it was kept, if it was."""
+    found = find_dir(path)
+    if not found:
+        return "not a workspace of claude-jj-workspace"
+    reg, st = found
+    with Lock(reg):
+        st = load(reg_path(reg, st["name"]))
+        if not st:
+            return "registry entry vanished" if os.path.isdir(path) else None
+        d = st["dir"]
+        # has_work treats an unknown name as already forgotten, which would delete unsnapshotted edits
+        if os.path.isdir(os.path.join(d, ".jj")) and (
+            st.get("ws") or st["name"]
+        ) not in workspace_names(d):
+            return "workspace name not in jj workspace list"
+        if has_work(st):
+            return "holds work"
+        delete_workspace(reg, st)
+    return None
 
 
 def slug(title):
@@ -725,6 +785,16 @@ def title(inp):
 
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else ""
+    if mode == "drop":
+        try:
+            if len(sys.argv) != 3:
+                raise Fail("usage: claude-jj-workspace drop DIR")
+            why = drop_dir(sys.argv[2])
+        except Exception as e:  # noqa: BLE001  # `jw reap` reads the reason, never the exit status
+            why = str(e)
+        if why:
+            print(" ".join(why.split()))
+        return 0
     try:
         inp = json.load(sys.stdin)
         if not isinstance(inp, dict):

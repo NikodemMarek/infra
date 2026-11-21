@@ -237,6 +237,7 @@
           jujutsu
           git
           mcpDefaults
+          jw
         ]
       }
       runHook postInstall
