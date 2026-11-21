@@ -5,38 +5,6 @@
   inputs,
   ...
 }: let
-  # Runs a command and answers deploy-rs's interactive sudo prompts with
-  # SUDO_PASSWORD_<host>, asking on the terminal for hosts without one
-  sudoExpect = pkgs.writeText "deploy-sudo.exp" ''
-    set timeout -1
-    foreach name [array names env SUDO_PASSWORD_*] {
-      set password([string range $name 14 end]) $env($name)
-      unset env($name)
-    }
-
-    spawn -noecho {*}$argv
-    expect {
-      -re {\(sudo for ([^)]+)\) Password: } {
-        set host $expect_out(1,string)
-        if {[info exists password($host)]} {
-          send -- "$password($host)\r"
-        } else {
-          send_user "(sudo for $host) Password: "
-          stty -echo
-          expect_user -re "(.*)\n"
-          stty echo
-          send_user "\n"
-          send -- "$expect_out(1,string)\r"
-        }
-        exp_continue
-      }
-      eof
-    }
-
-    lassign [wait] pid spawn_id os_error status
-    exit $status
-  '';
-
   # Sourced by the scripts below
   common = pkgs.writeText "common.sh" ''
     set -euo pipefail
@@ -66,12 +34,6 @@
       on_exit "rm -rf '$secrets'"
       secrets-build "$secrets" "$@"
     }
-
-    # [host user] login password from bws, fails if there is none
-    user_password() {
-      nix run "$DEVENV_ROOT#bws-project" -- hosts 2> /dev/null \
-        | jq -er --arg k "''${1,,}/users_''${2,,}_password" '.[$k] // empty'
-    }
   '';
 
   selectSecrets = ./pkgs/secrets-build/select-secrets.jq;
@@ -98,7 +60,6 @@ in {
     pkgs.secretspec
     pkgs.jq
     pkgs.yq-go
-    pkgs.expect
 
     pkgs.kubectl
     pkgs.fluxcd
@@ -304,13 +265,6 @@ in {
         host=$(hostname)
         build_secrets "$host"
 
-        # the login password is in bws too, use it to unlock sudo; if it
-        # doesn't match (yet), sudo below just prompts as usual
-        if password=$(user_password "$host" "$USER"); then
-          printf '%s\n' "$password" | sudo -S -p "" -v 2> /dev/null || true
-        fi
-        unset password
-
         sudo nixos-rebuild "''${@:-switch}" --flake ".#$host" --override-input secrets "path:$secrets"
       '';
       description = "[nixos-rebuild action] rebuild this host (default: switch)";
@@ -324,16 +278,6 @@ in {
           exit 1
         fi
 
-        # [node] the ssh user's password is in bws too, sudoExpect answers
-        # deploy-rs's sudo prompts with it; nodes without one are asked on the terminal
-        export_sudo_password() {
-          local user password
-          user=$(nix eval --raw ".#deploy.nodes.$1.profiles.system.sshUser")
-          if password=$(user_password "$1" "$user"); then
-            export "SUDO_PASSWORD_$1=$password"
-          fi
-        }
-
         build_secrets "$@"
 
         known_hosts=$(mktemp)
@@ -342,12 +286,11 @@ in {
 
         targets=()
         for n in "$@"; do
-          export_sudo_password "$n"
           targets+=(".#$n")
         done
 
         # deploy-rs's flake check evaluates every host, but $secrets only holds the requested ones
-        expect ${sudoExpect} deploy --skip-checks \
+        deploy --skip-checks \
           --ssh-opts "-o UserKnownHostsFile=$known_hosts -o StrictHostKeyChecking=yes" \
           --targets "''${targets[@]}" -- --override-input secrets "path:$secrets"
       '';
