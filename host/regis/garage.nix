@@ -16,7 +16,7 @@
   };
   users.groups.garage = {};
 
-  # The S3 port is not opened in the firewall: it is reachable only over the
+  # The S3 and web ports are not opened in the firewall: they are reachable only over the
   # trusted tailscale0 and cni0 interfaces, the LAN is blocked.
   services.garage = {
     enable = true;
@@ -35,6 +35,10 @@
       s3_api = {
         api_bind_addr = "0.0.0.0:3900";
         s3_region = "garage";
+      };
+      s3_web = {
+        bind_addr = "0.0.0.0:3902";
+        root_domain = ".web.garage";
       };
     };
   };
