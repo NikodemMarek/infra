@@ -13,7 +13,12 @@
     prompt_prefix = ""
   '';
 in {
-  options.services.agents.enable = lib.mkEnableOption "the local NATS server, the event handlers, the knowledge curator timer and the idle Claude session reaper";
+  options.services.agents = {
+    enable = lib.mkEnableOption "the local NATS server, the event handlers, the knowledge curator timer and the idle Claude session reaper";
+    jwPackage = lib.mkPackageOption pkgs "jw" {};
+    ghPackage = lib.mkPackageOption pkgs "gh" {};
+    glabPackage = lib.mkPackageOption pkgs "glab" {};
+  };
 
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [pkgs.shpool pkgs.natscli];
@@ -69,13 +74,13 @@ in {
               pkgs.jujutsu
               pkgs.git
               pkgs.openssh
-              pkgs.glab
-              pkgs.gh
+              cfg.glabPackage
+              cfg.ghPackage
             ];
             environment.SSH_AUTH_SOCK = "%t/ssh-agent";
             serviceConfig = {
               Type = "oneshot";
-              ExecStart = "${pkgs.jw}/bin/jw reap";
+              ExecStart = "${cfg.jwPackage}/bin/jw reap";
               TimeoutStartSec = "15min";
             };
             startAt = "*:0/10";

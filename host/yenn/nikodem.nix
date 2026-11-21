@@ -6,6 +6,9 @@
   projects = "/persist/data/home/nikodem/projects";
   generated = "/persist/generated/home/nikodem";
   bitwarden = "${generated}/bitwarden";
+  gh = pkgs.gh.override {dataDir = "${generated}/gh";};
+  glab = pkgs.glab.override {dataDir = "${generated}/glab";};
+  jw = pkgs.jw.override {projectsRoot = projects;};
 
   # regis is always on and cabled to geralt's LAN, so it can send the magic packet.
   wake-geralt = pkgs.writeShellApplication {
@@ -36,9 +39,9 @@ in {
       pkgs.agent-task
       pkgs.tm
       pkgs.jj-upload
-      (pkgs.gh.override {dataDir = "${generated}/gh";})
-      (pkgs.glab.override {dataDir = "${generated}/glab";})
-      (pkgs.jw.override {projectsRoot = projects;})
+      gh
+      glab
+      jw
       (pkgs.bitwarden-cli.override {dataDir = bitwarden;})
       pkgs.git
 
@@ -169,7 +172,12 @@ in {
   ];
 
   services = {
-    agents.enable = true;
+    agents = {
+      enable = true;
+      ghPackage = gh;
+      glabPackage = glab;
+      jwPackage = jw;
+    };
     hypridle.enable = true;
     syncthing.user = "nikodem";
   };
