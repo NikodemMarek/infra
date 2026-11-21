@@ -10,6 +10,7 @@
   writeShellApplication,
   writeShellScriptBin,
   claude,
+  claude-hooks,
   jw,
   event-handlers,
   jujutsu,
@@ -98,7 +99,7 @@
 
   entrypoint = writeShellApplication {
     name = "shani-entrypoint";
-    runtimeInputs = [shaniEventHandlers shaniJw forwardNotify];
+    runtimeInputs = [shaniEventHandlers shaniJw forwardNotify claude-hooks];
     text = ''
       socket=$XDG_RUNTIME_DIR/shpool/shpool.socket
       rm -f "$socket"
