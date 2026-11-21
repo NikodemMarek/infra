@@ -34,7 +34,9 @@ spec:
             - -c
             - |
               mkdir -p /data/plugins
-              wget -O /data/plugins/audiomuseai.ndp https://github.com/NeptuneHub/AudioMuse-AI-NV-plugin/releases/download/v10/audiomuseai.ndp
+              wget -O /data/plugins/audiomuseai.ndp.part https://github.com/NeptuneHub/AudioMuse-AI-NV-plugin/releases/download/v10/audiomuseai.ndp \
+                && mv /data/plugins/audiomuseai.ndp.part /data/plugins/audiomuseai.ndp \
+                || [ -s /data/plugins/audiomuseai.ndp ]
           volumeMounts:
             - name: data
               mountPath: /data
