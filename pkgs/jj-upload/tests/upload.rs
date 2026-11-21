@@ -4,17 +4,11 @@ use common::{stack_block, Change, Env, Forge};
 use serde_json::{json, Value};
 
 fn target(v: &Value) -> &str {
-    v.get("target_branch")
-        .or_else(|| v.pointer("/base/ref"))
-        .and_then(Value::as_str)
-        .expect("target")
+    v["base"].as_str().expect("base")
 }
 
 fn desc(v: &Value) -> &str {
-    v.get("description")
-        .or_else(|| v.get("body"))
-        .and_then(Value::as_str)
-        .expect("description")
+    v["body"].as_str().expect("body")
 }
 
 fn stack(forge: Forge) -> (Env, Change, Change) {
@@ -28,6 +22,14 @@ fn refs(forge: Forge) -> [&'static str; 2] {
         Forge::GitLab => ["!1", "!2"],
         Forge::GitHub => ["#1", "#2"],
     }
+}
+
+fn argv(parts: &[&str]) -> Vec<String> {
+    parts.iter().map(|s| s.to_string()).collect()
+}
+
+fn count_pr(e: &Env, sub: &str) -> usize {
+    e.calls().iter().filter(|c| Env::is_pr(c, sub)).count()
 }
 
 #[test]
@@ -48,30 +50,31 @@ fn gitlab_stack_creates_one_mr_per_change() {
 
     let r = refs(Forge::GitLab);
     let mr1 = e.mr(1);
-    assert_eq!(mr1["source_branch"], a.branch.as_str());
+    assert_eq!(mr1["head"], a.branch.as_str());
     assert_eq!(target(&mr1), "main");
     assert_eq!(mr1["title"], "feat: a");
+    assert_eq!(mr1["draft"], json!(false));
     assert_eq!(
         desc(&mr1),
         format!("Body A\n\n{}", stack_block(&r, "!1", Forge::GitLab))
     );
     let mr2 = e.mr(2);
-    assert_eq!(mr2["source_branch"], b.branch.as_str());
+    assert_eq!(mr2["head"], b.branch.as_str());
     assert_eq!(target(&mr2), a.branch);
     assert_eq!(mr2["title"], "feat: b");
     assert_eq!(desc(&mr2), stack_block(&r, "!2", Forge::GitLab));
 
-    let creates: Vec<_> = e
-        .calls()
-        .into_iter()
-        .filter(|c| c.iter().any(|a| a == "POST"))
-        .collect();
-    assert_eq!(creates.len(), 2);
-    for c in &creates {
-        assert!(
-            c.iter().any(|a| a == "remove_source_branch=true"),
-            "missing remove_source_branch=true: {c:?}"
-        );
+    assert_eq!(count_pr(&e, "create"), 2);
+    let calls = e.calls();
+    assert!(
+        calls.contains(&argv(&["--remote", "origin", "repo"])),
+        "no repo call: {calls:?}"
+    );
+    for branch in [&a.branch, &b.branch] {
+        let want = argv(&[
+            "--remote", "origin", "pr", "list", "--head", branch, "--limit", "1",
+        ]);
+        assert!(calls.contains(&want), "no find call {want:?}: {calls:?}");
     }
 
     for (branch, change) in [(&a.branch, &a), (&b.branch, &b)] {
@@ -94,7 +97,7 @@ fn gitlab_stack_creates_one_mr_per_change() {
 
     let jw = e.jw_calls();
     for n in [1, 2] {
-        let url = e.mr(n)["web_url"].as_str().unwrap().to_string();
+        let url = e.mr(n)["url"].as_str().unwrap().to_string();
         let hits = jw
             .iter()
             .filter(|c| {
@@ -117,7 +120,7 @@ fn reupload_updates_existing_mrs() {
 
     let mut mr1 = e.mr(1);
     mr1["title"] = json!("feat: a edited");
-    mr1["description"] = json!(format!("Edited body\n\n{block}"));
+    mr1["body"] = json!(format!("Edited body\n\n{block}"));
     e.set_mr(1, &mr1);
 
     e.write("b.txt", "changed\n");
@@ -128,7 +131,7 @@ fn reupload_updates_existing_mrs() {
 
     let new_calls = &e.calls()[calls_before..];
     assert!(
-        !new_calls.iter().any(|c| c.iter().any(|a| a == "POST")),
+        !new_calls.iter().any(|c| Env::is_pr(c, "create")),
         "unexpected create: {new_calls:?}"
     );
     assert_eq!(e.mr_count(), 2);
@@ -138,8 +141,8 @@ fn reupload_updates_existing_mrs() {
         e.description_of(&a.change).trim(),
         "feat: a edited\n\nEdited body"
     );
-    assert_eq!(e.mr(1)["source_branch"], a.branch.as_str());
-    assert_eq!(e.mr(2)["source_branch"], b.branch.as_str());
+    assert_eq!(e.mr(1)["head"], a.branch.as_str());
+    assert_eq!(e.mr(2)["head"], b.branch.as_str());
     assert_eq!(desc(&e.mr(1)), format!("Edited body\n\n{block}"));
 }
 
@@ -157,7 +160,7 @@ fn github_stack_creates_one_pr_per_change() {
 
     let r = refs(Forge::GitHub);
     let pr1 = e.mr(1);
-    assert_eq!(pr1["head"]["ref"], a.branch.as_str());
+    assert_eq!(pr1["head"], a.branch.as_str());
     assert_eq!(target(&pr1), "main");
     assert_eq!(pr1["title"], "feat: a");
     assert_eq!(pr1["draft"], json!(false));
@@ -166,7 +169,7 @@ fn github_stack_creates_one_pr_per_change() {
         format!("Body A\n\n{}", stack_block(&r, "#1", Forge::GitHub))
     );
     let pr2 = e.mr(2);
-    assert_eq!(pr2["head"]["ref"], b.branch.as_str());
+    assert_eq!(pr2["head"], b.branch.as_str());
     assert_eq!(target(&pr2), a.branch);
     assert_eq!(pr2["title"], "feat: b");
     assert_eq!(pr2["draft"], json!(false));
@@ -196,14 +199,15 @@ fn merged_bottom_retargets_rest() {
     e.set_remote_main(&a_sha);
     let mut mr1 = e.mr(1);
     mr1["state"] = json!("merged");
-    mr1["sha"] = json!(a_sha);
+    mr1["head_sha"] = json!(a_sha);
+    mr1["landed"] = json!([a_sha]);
     e.set_mr(1, &mr1);
 
     e.upload(&[]).ok();
 
     assert_eq!(e.mr_count(), 2);
     let mr2 = e.mr(2);
-    assert_eq!(mr2["source_branch"], b.branch.as_str());
+    assert_eq!(mr2["head"], b.branch.as_str());
     assert_eq!(target(&mr2), "main");
     assert!(!desc(&mr2).contains("jj-stack"), "{}", desc(&mr2));
 }
@@ -219,9 +223,7 @@ fn abandoned_change_closes_mr_and_deletes_branch() {
 
     assert_eq!(e.mr(2)["state"], "closed");
     assert!(
-        e.calls()
-            .iter()
-            .any(|c| c.iter().any(|a| a == "state_event=close")),
+        e.calls().iter().any(|c| Env::is_pr(c, "close")),
         "no close call: {:?}",
         e.calls()
     );
@@ -237,8 +239,8 @@ fn stack_status_lines() {
     let c = e.add_change("c.txt", "feat: c");
 
     let out = e.upload(&["stack", "status"]);
-    let url1 = e.mr(1)["web_url"].as_str().unwrap().to_string();
-    let url2 = e.mr(2)["web_url"].as_str().unwrap().to_string();
+    let url1 = e.mr(1)["url"].as_str().unwrap().to_string();
+    let url2 = e.mr(2)["url"].as_str().unwrap().to_string();
     assert_eq!(
         out.stdout,
         format!(
@@ -282,4 +284,194 @@ fn dry_run_writes_nothing() {
         e.calls()
     );
     assert_eq!(e.mr_count(), 0);
+}
+
+fn closed_mr_env(forge: Forge) -> (Env, Change) {
+    let (e, a, _b) = stack(forge);
+    e.upload(&[]).ok();
+    let mut mr1 = e.mr(1);
+    mr1["state"] = json!("closed");
+    e.set_mr(1, &mr1);
+    (e, a)
+}
+
+#[test]
+fn closed_mr_is_reopened() {
+    let (e, _a) = closed_mr_env(Forge::GitLab);
+
+    e.upload(&[]).ok();
+
+    assert_eq!(e.mr_count(), 2);
+    assert_eq!(e.mr(1)["state"], "open");
+    assert!(
+        e.calls().iter().any(|c| Env::is_pr(c, "reopen")),
+        "no reopen call: {:?}",
+        e.calls()
+    );
+}
+
+#[test]
+fn refused_reopen_warns_and_creates_a_new_mr() {
+    let (e, a) = closed_mr_env(Forge::GitLab);
+    e.fake_on("reopen_refuse");
+
+    let out = e.upload(&[]);
+
+    out.ok();
+    assert!(
+        out.stderr.to_lowercase().contains("reopen"),
+        "no reopen warning:\n{}",
+        out.stderr
+    );
+    assert_eq!(e.mr_count(), 3);
+    assert_eq!(e.mr(1)["state"], "closed");
+    let new = e.mr(3);
+    assert_eq!(new["state"], "open");
+    assert_eq!(new["head"], a.branch.as_str());
+    assert_eq!(target(&new), "main");
+    assert_eq!(new["title"], "feat: a");
+}
+
+fn picture_env(forge: Forge) -> Env {
+    let e = Env::new(forge);
+    e.write(".gitignore", "shot.png\n");
+    e.write("shot.png", "png\n");
+    e.add_change("p.txt", "feat: pic\n\n![shot](shot.png)");
+    e
+}
+
+#[test]
+fn ignored_image_is_uploaded_and_link_rewritten() {
+    let e = picture_env(Forge::GitLab);
+
+    e.upload(&[]).ok();
+
+    assert_eq!(e.mr_count(), 1);
+    let body = desc(&e.mr(1)).to_string();
+    assert!(
+        body.contains("![shot](/uploads/") && body.contains("shot.png)"),
+        "link not rewritten: {body}"
+    );
+    assert!(
+        e.calls()
+            .iter()
+            .any(|c| matches!(Env::args(c), [u, ..] if u == "upload")),
+        "no upload call: {:?}",
+        e.calls()
+    );
+}
+
+#[test]
+fn failed_image_upload_leaves_link_and_warns() {
+    let e = picture_env(Forge::GitLab);
+    e.fake_on("upload_fail");
+
+    let out = e.upload(&[]);
+
+    out.ok();
+    assert_eq!(e.mr_count(), 1);
+    assert!(
+        desc(&e.mr(1)).contains("![shot](shot.png)"),
+        "link changed: {}",
+        desc(&e.mr(1))
+    );
+    assert!(
+        out.stderr.contains("shot.png"),
+        "no warning naming the file:\n{}",
+        out.stderr
+    );
+}
+
+fn pr_create_calls(e: &Env) -> Vec<Vec<String>> {
+    e.calls()
+        .into_iter()
+        .filter(|c| Env::is_pr(c, "create"))
+        .collect()
+}
+
+#[test]
+fn draft_flag_creates_draft_mrs() {
+    let (e, _a, _b) = stack(Forge::GitLab);
+
+    e.upload(&["--draft"]).ok();
+
+    assert_eq!(e.mr_count(), 2);
+    assert_eq!(e.mr(1)["draft"], json!(true));
+    assert_eq!(e.mr(2)["draft"], json!(true));
+    let creates = pr_create_calls(&e);
+    assert_eq!(creates.len(), 2);
+    assert!(creates.iter().all(|c| c.iter().any(|a| a == "--draft")));
+}
+
+#[test]
+fn draft_config_creates_draft_mrs() {
+    let (e, _a, _b) = stack(Forge::GitLab);
+    e.jj(&["config", "set", "--repo", "upload.draft", "true"]);
+
+    e.upload(&[]).ok();
+
+    assert_eq!(e.mr(1)["draft"], json!(true));
+    assert!(pr_create_calls(&e)
+        .iter()
+        .all(|c| c.iter().any(|a| a == "--draft")));
+}
+
+#[test]
+fn no_draft_flag_by_default() {
+    let (e, _a, _b) = stack(Forge::GitLab);
+
+    e.upload(&[]).ok();
+
+    assert!(!pr_create_calls(&e).is_empty());
+    assert!(pr_create_calls(&e)
+        .iter()
+        .all(|c| !c.iter().any(|a| a == "--draft")));
+}
+
+#[test]
+fn github_image_link_warns_and_is_left_alone() {
+    let e = picture_env(Forge::GitHub);
+
+    let out = e.upload(&[]);
+
+    out.ok();
+    assert_eq!(e.mr_count(), 1);
+    assert!(
+        desc(&e.mr(1)).contains("![shot](shot.png)"),
+        "link changed: {}",
+        desc(&e.mr(1))
+    );
+    assert!(
+        out.stderr.contains("shot.png") && out.stderr.contains("github has no file upload API"),
+        "no warning:\n{}",
+        out.stderr
+    );
+}
+
+#[test]
+fn status_finds_mr_through_recent_list_without_local_bookmark() {
+    let (e, a, _b) = stack(Forge::GitLab);
+    e.upload(&[]).ok();
+    e.jj(&["bookmark", "forget", "--include-remotes", &a.branch]);
+    let before = e.calls().len();
+
+    let out = e.upload(&["stack", "status"]);
+
+    let url1 = e.mr(1)["url"].as_str().unwrap().to_string();
+    assert!(
+        out.stdout
+            .contains(&format!("{}\topen\t{url1}\t", a.change)),
+        "stdout: {}\nstderr: {}",
+        out.stdout,
+        out.stderr
+    );
+    let calls = e.calls();
+    assert!(
+        calls[before..].iter().any(|c| matches!(
+            Env::args(c),
+            [pr, list] if pr == "pr" && list == "list"
+        )),
+        "no `pr list` without --head: {:?}",
+        &calls[before..]
+    );
 }

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::cmd::Result;
-use crate::forge::{make_forge, strip_stack, Forge, Mr};
+use crate::forge::{strip_stack, Forge, Mr};
 use crate::jj::{choose_bookmark, trunc, Commit, Jj, DEFAULT_REVSET, REMOTE_TITLE};
 
 fn first_line(text: &str) -> &str {
@@ -18,7 +18,7 @@ fn names_of(commits: &[Commit], prefix: &str) -> HashMap<String, String> {
 
 pub fn pull_descriptions(
     commits: &[Commit],
-    fg: &dyn Forge,
+    fg: &Forge,
     prefix: &str,
     pushed: &BTreeMap<String, String>,
     dry_run: bool,
@@ -35,7 +35,7 @@ pub fn pull_descriptions(
             continue;
         };
         let mut remote_desc = mr.title.trim().to_string();
-        let body = strip_stack(&mr.description);
+        let body = strip_stack(&mr.body);
         if !body.is_empty() {
             remote_desc.push_str("\n\n");
             remote_desc.push_str(&body);
@@ -64,13 +64,13 @@ fn merged_bottom(
 ) -> Vec<Commit> {
     let lookup = || -> Result<Vec<Commit>> {
         let mut merged = Vec::new();
-        let mut fg = make_forge(remote)?;
+        let mut fg = Forge::new(remote);
         for c in commits {
             let name = match branch.get(&c.change) {
                 Some((b, _)) => Some(b.as_str()),
                 None => names.get(&c.change).map(String::as_str),
             };
-            let mr = find_mr(&mut *fg, c, name, prefix)?;
+            let mr = find_mr(&mut fg, c, name, prefix)?;
             let state = change_state(c, mr.as_ref())?;
             if let Some(mr) = &mr {
                 if state == "changed" {
@@ -102,7 +102,7 @@ fn merged_bottom(
 }
 
 pub fn find_mr(
-    fg: &mut dyn Forge,
+    fg: &mut Forge,
     c: &Commit,
     branch: Option<&str>,
     prefix: &str,
@@ -115,7 +115,7 @@ pub fn find_mr(
     if let Some(mr) = fg
         .recent()?
         .iter()
-        .find(|m| m.source.starts_with(prefix) && m.source.ends_with(&suffix))
+        .find(|m| m.head.starts_with(prefix) && m.head.ends_with(&suffix))
     {
         return Ok(Some(mr.clone()));
     }
@@ -136,7 +136,7 @@ pub fn change_state(c: &Commit, mr: Option<&Mr>) -> Result<String> {
     if mr.state != "merged" {
         return Ok(mr.state.clone());
     }
-    let unchanged = match mr.head.as_deref() {
+    let unchanged = match mr.head_sha.as_deref() {
         Some(head) if !Jj::commit_ids(&format!("present({head})"))?.is_empty() => {
             head == c.commit || Jj::interdiff_is_empty(head, &c.commit)?
         }
@@ -149,7 +149,7 @@ pub fn change_state(c: &Commit, mr: Option<&Mr>) -> Result<String> {
         .landed
         .iter()
         .map(String::as_str)
-        .chain(mr.head.as_deref())
+        .chain(mr.head_sha.as_deref())
     {
         if !Jj::commit_ids(&format!("present({s}) & ::trunk()"))?.is_empty() {
             return Ok("merged".to_string());
@@ -166,16 +166,11 @@ fn stack_lines(remote: &str, prefix: &str) -> Result<(Vec<String>, bool)> {
     let names = names_of(&before, prefix);
     Jj::fetch()?;
     let commits = Jj::commits(DEFAULT_REVSET)?;
-    let mut fg = make_forge(remote)?;
+    let mut fg = Forge::new(remote);
     let mut lines = Vec::new();
     let mut merged = true;
     for c in &commits {
-        let mr = find_mr(
-            &mut *fg,
-            c,
-            names.get(&c.change).map(String::as_str),
-            prefix,
-        )?;
+        let mr = find_mr(&mut fg, c, names.get(&c.change).map(String::as_str), prefix)?;
         let state = change_state(c, mr.as_ref())?;
         merged &= state == "merged";
         let title = first_line(&c.description).replace(['\t', '\r', '\n'], " ");

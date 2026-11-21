@@ -71,23 +71,26 @@ impl Env {
         let remote = dir.join("remote.git");
 
         let fake = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake");
-        for (src, dst) in [("forge", "glab"), ("forge", "gh"), ("jw", "jw")] {
-            let to = dir.join("bin").join(dst);
-            fs::copy(fake.join(src), &to).unwrap();
+        for name in ["forge", "jw"] {
+            let to = dir.join("bin").join(name);
+            fs::copy(fake.join(name), &to).unwrap();
             fs::set_permissions(&to, fs::Permissions::from_mode(0o755)).unwrap();
         }
 
-        let (kind, host, project) = match forge {
-            Forge::GitLab => ("gitlab", "gitlab.example.com", "g/p"),
-            Forge::GitHub => ("github", "github.example.com", "o/p"),
-        };
         fs::write(
             dir.join("jj-config.toml"),
-            format!(
-                "[user]\nname = \"Test\"\nemail = \"test@example.com\"\n\n\
-                 [remotes.origin]\nauto-track-created-bookmarks = \"*\"\n\n\
-                 [upload]\nbookmark-prefix = \"nm/\"\nforge = \"{kind}\"\nhost = \"{host}\"\nproject = \"{project}\"\n"
-            ),
+            "[user]\nname = \"Test\"\nemail = \"test@example.com\"\n\n\
+             [remotes.origin]\nauto-track-created-bookmarks = \"*\"\n\n\
+             [upload]\nbookmark-prefix = \"nm/\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("forge")).unwrap();
+        fs::write(
+            dir.join("forge/kind"),
+            match forge {
+                Forge::GitLab => "gitlab",
+                Forge::GitHub => "github",
+            },
         )
         .unwrap();
 
@@ -142,7 +145,6 @@ impl Env {
             .env("JJ_CONFIG", self.dir.join("jj-config.toml"))
             .env("JJ_EDITOR", "true")
             .env("FAKE_FORGE_DIR", self.forge_dir())
-            .env("FAKE_REMOTE", &self.remote)
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .env_remove("AGENT_SESSION")
             .envs(self.git_env());
@@ -281,31 +283,42 @@ impl Env {
         ]));
     }
 
-    pub fn mr_path(&self, n: usize) -> PathBuf {
-        self.forge_dir().join(format!("{n}.json"))
+    fn prs_path(&self) -> PathBuf {
+        self.forge_dir().join("prs.json")
+    }
+
+    // All PRs in the fake forge's state, contract-shaped, in creation order.
+    pub fn prs(&self) -> Vec<Value> {
+        match fs::read_to_string(self.prs_path()) {
+            Ok(s) => serde_json::from_str(&s).unwrap(),
+            Err(_) => Vec::new(),
+        }
     }
 
     pub fn mr(&self, n: usize) -> Value {
-        let p = self.mr_path(n);
-        let s = fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
-        serde_json::from_str(&s).unwrap()
+        self.prs()
+            .into_iter()
+            .find(|p| p["number"] == n)
+            .unwrap_or_else(|| panic!("no PR {n} in the fake forge"))
     }
 
     pub fn set_mr(&self, n: usize, v: &Value) {
-        fs::write(self.mr_path(n), serde_json::to_string(v).unwrap()).unwrap();
+        let mut all = self.prs();
+        let slot = all
+            .iter_mut()
+            .find(|p| p["number"] == n)
+            .unwrap_or_else(|| panic!("no PR {n} in the fake forge"));
+        *slot = v.clone();
+        fs::write(self.prs_path(), serde_json::to_string(&all).unwrap()).unwrap();
     }
 
     pub fn mr_count(&self) -> usize {
-        fs::read_dir(self.forge_dir())
-            .map(|d| {
-                d.filter_map(|e| e.ok())
-                    .filter(|e| {
-                        let n = e.file_name().to_string_lossy().into_owned();
-                        n.ends_with(".json") && n.chars().next().unwrap().is_ascii_digit()
-                    })
-                    .count()
-            })
-            .unwrap_or(0)
+        self.prs().len()
+    }
+
+    // Switches a fake behaviour on: "reopen_refuse" or "upload_fail".
+    pub fn fake_on(&self, flag: &str) {
+        fs::write(self.forge_dir().join(flag), "").unwrap();
     }
 
     fn log_lines(&self, name: &str) -> Vec<Vec<String>> {
@@ -316,7 +329,7 @@ impl Env {
             .collect()
     }
 
-    // argv of each glab/gh call, in order.
+    // argv of each forge call, in order.
     pub fn calls(&self) -> Vec<Vec<String>> {
         self.log_lines("calls.log")
     }
@@ -326,9 +339,24 @@ impl Env {
         self.log_lines("jw.log")
     }
 
+    // argv without the leading `--remote NAME`.
+    pub fn args(call: &[String]) -> &[String] {
+        match call {
+            [flag, _, rest @ ..] if flag == "--remote" => rest,
+            _ => call,
+        }
+    }
+
+    // True for `pr <sub>` with the given sub (create, edit, close, reopen, ...).
+    pub fn is_pr(call: &[String], sub: &str) -> bool {
+        matches!(Env::args(call), [pr, s, ..] if pr == "pr" && s == sub)
+    }
+
     pub fn is_mutating(call: &[String]) -> bool {
-        call.iter()
-            .any(|a| matches!(a.as_str(), "POST" | "PUT" | "PATCH"))
+        ["create", "edit", "close", "reopen"]
+            .iter()
+            .any(|s| Env::is_pr(call, s))
+            || matches!(Env::args(call), [u, ..] if u == "upload")
     }
 }
 

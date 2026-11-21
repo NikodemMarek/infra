@@ -3,124 +3,151 @@ use std::env;
 use std::path::Path;
 
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
 
 use crate::cmd::{run, Output, Result};
-use crate::jj::{forge_target, re, repr, Jj};
-
-mod github;
-mod gitlab;
-
-use github::GitHub;
-use gitlab::GitLab;
+use crate::jj::{re, Jj};
 
 const STACK_START: &str = "<!-- jj-stack:start -->";
 const STACK_END: &str = "<!-- jj-stack:end -->";
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize)]
 pub struct Mr {
-    pub id: String,
+    pub number: u64,
+    #[serde(rename = "ref")]
     pub reference: String,
     pub url: String,
     pub state: String,
-    pub draft: bool,
     pub title: String,
-    pub target: String,
-    pub source: String,
-    pub description: String,
-    pub head: Option<String>,
+    pub body: String,
+    pub base: String,
+    pub head: String,
+    pub head_sha: Option<String>,
     pub landed: Vec<String>,
 }
 
-pub trait Forge {
-    fn term(&self) -> &'static str;
-    fn find(&self, branch: &str) -> Result<Option<Mr>>;
-    fn recent(&mut self) -> Result<&[Mr]>;
-    fn create(
-        &self,
-        source: &str,
-        target: &str,
-        title: &str,
-        description: &str,
-        draft: bool,
-    ) -> Result<Mr>;
-    fn update(
-        &self,
-        mr: &Mr,
-        title: Option<&str>,
-        target: Option<&str>,
-        description: Option<&str>,
-    ) -> Result<Mr>;
-    fn set_state(&self, mr: &Mr, open: bool) -> Result<Option<Mr>>;
-    fn upload(&self, path: &str) -> Result<Option<String>>;
+#[derive(Deserialize)]
+struct Repo {
+    forge: String,
 }
 
-pub fn make_forge(remote: &str) -> Result<Box<dyn Forge>> {
-    let (host, project) = forge_target(remote)?;
-    let kind = match Jj::config("upload.forge")? {
-        Some(kind) => kind,
-        None => ["gitlab", "github"]
-            .into_iter()
-            .find(|n| host.to_lowercase().contains(n))
-            .unwrap_or("gitlab")
-            .to_string(),
-    };
-    match kind.as_str() {
-        "gitlab" => Ok(Box::new(GitLab::new(host, &project))),
-        "github" => Ok(Box::new(GitHub::new(host, &project))),
-        _ => Err(format!(
-            "unknown upload.forge {}; known: gitlab, github",
-            repr(&kind)
-        )),
+#[derive(Deserialize)]
+struct Upload {
+    url: String,
+}
+
+fn decode<T: DeserializeOwned>(out: &str) -> Result<T> {
+    serde_json::from_str(out).map_err(|e| format!("`forge` returned an unexpected response: {e}"))
+}
+
+pub struct Forge {
+    remote: String,
+    recent: Option<Vec<Mr>>,
+}
+
+impl Forge {
+    pub fn new(remote: &str) -> Forge {
+        Forge {
+            remote: remote.to_string(),
+            recent: None,
+        }
     }
-}
 
-struct Api {
-    bin: &'static str,
-    host: String,
-}
-
-impl Api {
     fn run(&self, args: &[&str], check: bool) -> Result<Output> {
-        let head = [self.bin, "api", "--hostname", &self.host];
+        let head = ["forge", "--remote", &self.remote];
         run(&[&head[..], args].concat(), check)
     }
 
-    fn decode<T: DeserializeOwned>(&self, out: &str) -> Result<Option<T>> {
-        if out.trim().is_empty() {
+    fn json<T: DeserializeOwned>(&self, args: &[&str]) -> Result<T> {
+        decode(&self.run(args, true)?.stdout)
+    }
+
+    pub fn term(&self) -> Result<&'static str> {
+        let repo: Repo = self.json(&["repo"])?;
+        Ok(if repo.forge == "github" { "PR" } else { "MR" })
+    }
+
+    pub fn find(&self, branch: &str) -> Result<Option<Mr>> {
+        let mrs: Vec<Mr> = self.json(&["pr", "list", "--head", branch, "--limit", "1"])?;
+        Ok(mrs.into_iter().next())
+    }
+
+    pub fn recent(&mut self) -> Result<&[Mr]> {
+        if self.recent.is_none() {
+            self.recent = Some(self.json(&["pr", "list"])?);
+        }
+        Ok(self.recent.as_deref().unwrap_or_default())
+    }
+
+    pub fn create(
+        &self,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+        draft: bool,
+    ) -> Result<Mr> {
+        let mut args = vec![
+            "pr", "create", "--head", head, "--base", base, "--title", title, "--body", body,
+        ];
+        if draft {
+            args.push("--draft");
+        }
+        self.json(&args)
+    }
+
+    pub fn update(
+        &self,
+        mr: &Mr,
+        title: Option<&str>,
+        base: Option<&str>,
+        body: Option<&str>,
+    ) -> Result<Mr> {
+        if title.is_none() && base.is_none() && body.is_none() {
+            return Ok(mr.clone());
+        }
+        let number = mr.number.to_string();
+        let mut args = vec!["pr", "edit", number.as_str()];
+        for (flag, value) in [("--title", title), ("--base", base), ("--body", body)] {
+            if let Some(value) = value {
+                args.extend([flag, value]);
+            }
+        }
+        self.json(&args)
+    }
+
+    pub fn close(&self, mr: &Mr) -> Result<()> {
+        self.run(&["pr", "close", &mr.number.to_string()], true)?;
+        Ok(())
+    }
+
+    pub fn reopen(&self, mr: &Mr) -> Result<Option<Mr>> {
+        let p = self.run(&["pr", "reopen", &mr.number.to_string()], false)?;
+        if !p.ok {
+            eprintln!(
+                "  cannot reopen {}: {}; opening a new one",
+                mr.reference,
+                p.stderr.trim()
+            );
             return Ok(None);
         }
-        serde_json::from_str(out)
-            .map_err(|e| format!("`{}` returned an unexpected response: {e}", self.bin))
+        decode(&p.stdout).map(Some)
     }
 
-    fn one<T: DeserializeOwned>(&self, args: &[&str]) -> Result<Option<T>> {
-        self.decode(&self.run(args, true)?.stdout)
-    }
-
-    fn many<T: DeserializeOwned>(&self, args: &[&str]) -> Result<Vec<T>> {
-        Ok(self.one::<Vec<T>>(args)?.unwrap_or_default())
-    }
-
-    fn required<T: DeserializeOwned>(&self, args: &[&str]) -> Result<T> {
-        self.one(args)?
-            .ok_or_else(|| format!("`{}` returned no merge request", self.bin))
-    }
-}
-
-pub fn quote(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        if b.is_ascii_alphanumeric() || b"_.-~".contains(&b) {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
+    pub fn upload(&self, path: &str) -> Result<Option<String>> {
+        let p = self.run(&["upload", path], false)?;
+        match p.ok.then(|| decode::<Upload>(&p.stdout).ok()).flatten() {
+            Some(upload) => Ok(Some(upload.url)),
+            None => {
+                let reason = match p.stderr.trim() {
+                    "" => "invalid response",
+                    stderr => stderr,
+                };
+                eprintln!("  {path}: upload failed: {reason}; link left as is");
+                Ok(None)
+            }
         }
     }
-    out
-}
-
-fn quote_plus(s: &str) -> String {
-    quote(s).replace("%20", "+")
 }
 
 pub fn stack_section(entries: &[(&str, &str)], current: &str, term: &str) -> String {
@@ -188,7 +215,7 @@ fn tracked(path: &str, root: &str) -> Result<bool> {
     Jj::file_tracked(path)
 }
 
-pub fn upload_media(text: &str, fg: &dyn Forge) -> Result<String> {
+pub fn upload_media(text: &str, fg: &Forge) -> Result<String> {
     if !text.contains("![") {
         return Ok(text.to_string());
     }
