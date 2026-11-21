@@ -56,7 +56,7 @@
     };
 
     outlay = {
-      url = "github:Papayah/outlay";
+      url = "github:NikodemMarek/outlay/nm/feat-nix-watch-module";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };

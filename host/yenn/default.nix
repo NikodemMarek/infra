@@ -1,4 +1,5 @@
 {
+  inputs,
   pkgs,
   config,
   ...
@@ -16,6 +17,8 @@
     ../features/optional/pipewire.nix
     ../features/optional/libvirt.nix
     ../features/optional/dictate.nix
+
+    inputs.outlay.nixosModules.default
   ];
 
   networking.hostName = "yenn";
@@ -46,6 +49,7 @@
   };
 
   services = {
+    outlay.enable = true;
     greetd = {
       enable = true;
       useTextGreeter = true;
