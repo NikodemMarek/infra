@@ -29,7 +29,7 @@ tofu/                  OpenTofu: Cloudflare, Tailscale, Oracle Cloud
 | `triss` | aarch64 | k3s server, Oracle Cloud instance (qemu guest) |
 | `alp` | x86_64 | installer ISO (`mkiso`), not in `nixosConfigurations` |
 
-`geralt`, `regis` and `triss` are deploy-rs nodes: ssh as `maintenance`, passwordless sudo only for deploy-rs activation. Break-glass for `triss`: `ssh maintenance@141.147.2.187`; there `k3s.yaml` is root-only (`sudo kubectl`).
+`geralt`, `regis`, `roach` and `triss` are deploy-rs nodes: ssh as `maintenance`, passwordless sudo only for deploy-rs activation. Break-glass for `triss`: `ssh maintenance@141.147.2.187`; there `k3s.yaml` is root-only (`sudo kubectl`).
 
 `geralt` runs [Wolf](https://github.com/games-on-whales/wolf) (`host/features/optional/wolf.nix`, state `/etc/wolf`; the pairing PIN URL is in `docker logs -f wolf`). Wake it with `wake-geralt` on `yenn` (`.link` changes apply only when the NIC appears: reboot once after deploying them). It suspends after 30 min without a stream or SSH login (`host/geralt/idle-suspend.nix`, `journalctl -u idle-suspend`); pause: `sudo systemd-run --unit=stay-awake systemd-inhibit --what=sleep sleep 4h` (cancel: `sudo systemctl stop stay-awake`).
 
