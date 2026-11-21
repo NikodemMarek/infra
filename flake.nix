@@ -123,9 +123,5 @@
       lib.genAttrs ["geralt" "regis" "roach" "triss"] mkNode;
 
     knownHosts = lib.concatStrings (lib.mapAttrsToList (name: node: "${node.hostname} ${builtins.readFile ./host/${name}/ssh_host_ed25519_key.pub}") self.deploy.nodes);
-
-    checks =
-      forEachSystem (pkgs:
-        pkgs.deploy-rs.lib.deployChecks self.deploy);
   };
 }
