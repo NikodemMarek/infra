@@ -37,7 +37,7 @@ tofu/                  OpenTofu config of the external infrastructure: Cloudflar
 | `triss` | aarch64 | k3s server (control plane), qemu/virtio guest |
 | `alp` | x86_64 | installer ISO, not in `nixosConfigurations` (see `mkiso`) |
 
-`geralt`, `regis` and `triss` are deploy-rs nodes (`deploy.nodes` in `flake.nix`): ssh as `maintenance`, interactive sudo.
+`geralt`, `regis` and `triss` are deploy-rs nodes (`deploy.nodes` in `flake.nix`): ssh as `maintenance`, passwordless sudo.
 
 Cluster access: the dev shell sets `KUBECONFIG` to `kubeconfig.yaml` in the `default` jj workspace root, so `kubectl` works from the workstation. On `triss` itself `k3s.yaml` is root-only (`sudo kubectl`).
 
@@ -90,7 +90,7 @@ host-switch test       # any nixos-rebuild action
 host-deploy geralt roach
 ```
 
-`host-deploy` builds the secrets for the requested nodes, checks their ssh host keys, answers deploy-rs's sudo prompt with the `maintenance` password from the project `hosts` (`<node>/USERS_MAINTENANCE_PASSWORD`, or asks), and runs `deploy --skip-checks`.
+`host-deploy` builds the secrets for the requested nodes, checks their ssh host keys and runs `deploy --skip-checks`.
 
 Merges to `main` deploy `geralt`, `regis` and `triss` (`.github/workflows/deploy.yml`). Hosts that are offline are skipped (a notice in the log); re-running an old run redeploys that old commit. The logs print nothing but failures, by design.
 
