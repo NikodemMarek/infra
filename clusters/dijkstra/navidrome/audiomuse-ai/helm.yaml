@@ -4,7 +4,7 @@ metadata:
   name: audiomuse-ai-repo
   namespace: navidrome
 spec:
-  interval: 10m0s
+  interval: 1h
   url: https://NeptuneHub.github.io/AudioMuse-AI-helm
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
@@ -21,7 +21,7 @@ spec:
         kind: HelmRepository
         name: audiomuse-ai-repo
       version: v1.1.6
-  interval: 10m0s
+  interval: 30m
   values:
     image:
       tag: "3.6.4"
