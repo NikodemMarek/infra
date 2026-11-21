@@ -13,13 +13,19 @@
     {
       "src": ["tag:ci"],
       "dst": ["tag:server"],
-      "ip": ["tcp:22"]
+      "ip": ["tcp:22", "tcp:3902"]
+    },
+    {
+      "src": ["tag:ci-cache"],
+      "dst": ["tag:server"],
+      "ip": ["tcp:3900", "tcp:3902"]
     }
   ],
   "tagOwners": {
     "tag:server": [],
     "tag:management": [],
-    "tag:ci": []
+    "tag:ci": [],
+    "tag:ci-cache": []
   },
   "autoApprovers": {
     "routes": {
@@ -37,8 +43,13 @@
     },
     {
       "src": "tag:ci",
-      "accept": ["tag:server:22"],
-      "deny": ["tag:server:80", "tag:server:443", "tag:server:6443", "tag:management:22", "tag:ci:22", "10.42.0.1:22", "10.42.0.1:443"]
+      "accept": ["tag:server:22", "tag:server:3902"],
+      "deny": ["tag:server:80", "tag:server:443", "tag:server:3900", "tag:server:6443", "tag:management:22", "tag:ci:22", "10.42.0.1:22", "10.42.0.1:443"]
+    },
+    {
+      "src": "tag:ci-cache",
+      "accept": ["tag:server:3900", "tag:server:3902"],
+      "deny": ["tag:server:22", "tag:server:80", "tag:server:443", "tag:server:6443", "tag:management:22", "10.42.0.1:22", "10.42.0.1:443"]
     }
   ]
 }
