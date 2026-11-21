@@ -113,7 +113,7 @@ Modules never talk to sops directly:
 - `secretspec.toml` is the inventory: the profile named after the host lists its secrets as uppercased names; evaluation fails if modules and profile diverge (names match `^[a-z0-9_]+$`). `ci` and `tofu` are used by no host.
 - Values live in the project `hosts`, named `<profile>/<KEY>` (case-insensitive). `tofu` has its own project with plain key names.
 
-`secrets-build <outdir> <host...>` keeps exactly the declared secrets, checks the ssh private keys against the `.pub` files and the host's age key against `.sops.yaml`, hashes `USERS_*_PASSWORD`, and writes `<outdir>/<host>.yaml` encrypted for the host. Keys marked `composed` in `secretspec.toml` are assembled from other keys. The `secrets` flake input is `path:./secrets-stub`; the scripts pass `--override-input secrets path:<outdir>`. By hand:
+`secrets-build <outdir> <host...>` keeps exactly the declared secrets, checks the ssh private keys against the `.pub` files and the host's age key against `.sops.yaml`, hashes `USERS_*_PASSWORD`, and writes `<outdir>/<host>.yaml` encrypted for the host. The `secrets` flake input is `path:./secrets-stub`; the scripts pass `--override-input secrets path:<outdir>`. By hand:
 
 ```sh
 secrets-build /tmp/s geralt
