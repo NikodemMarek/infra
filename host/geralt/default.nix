@@ -50,12 +50,22 @@
     };
     networks = {
       "10-default-dhcp" = {
-        matchConfig.Type = "ether wlan wwan";
+        matchConfig.Type = "ether wwan";
         networkConfig = {
           DHCP = "yes";
           IPv6AcceptRA = "yes";
           IgnoreCarrierLoss = "3s";
         };
+      };
+      "10-wireless-dhcp" = {
+        matchConfig.Type = "wlan";
+        networkConfig = {
+          DHCP = "yes";
+          IPv6AcceptRA = "yes";
+          IgnoreCarrierLoss = "3s";
+        };
+        dhcpV4Config.RouteMetric = 2048;
+        ipv6AcceptRAConfig.RouteMetric = 2048;
       };
     };
   };
