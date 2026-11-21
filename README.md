@@ -42,6 +42,37 @@ tofu/                  OpenTofu config of the external infrastructure: Cloudflar
 
 Cluster access: the dev shell sets `KUBECONFIG` to `kubeconfig.yaml` in the `default` jj workspace root, so `kubectl` works from the workstation. On `triss` itself `k3s.yaml` is root-only (`sudo kubectl`).
 
+### geralt hardware
+
+- CPU: AMD Ryzen 9 3900X (12C/24T), stock AMD Wraith Prism RGB cooler
+- Motherboard: Gigabyte B450M DS3H (AM4), BIOS F41
+- RAM: 32 GB, 2x Kingston FURY Beast 16 GB DDR4-3600 CL18 (KF3600C18D4/16GX) in DIMM 1 of channels A and B; 2 of 4 slots used, max 128 GB
+- GPU: Gigabyte Radeon RX 5500 XT OC 4G (GV-R55XTOC-4GD, Navi 14)
+- SSD: Crucial P1 1 TB NVMe (CT1000P1SSD8)
+- Ethernet: onboard Realtek RTL8111/8168 1 GbE, Wake-on-LAN, MAC `b4:2e:99:a4:86:1c`
+- WiFi: TP-Link Archer T2U Nano USB (RTL8811AU, driver `rtw88_8821au`)
+- PSU: Corsair RM750x (unverified)
+
+### yenn hardware
+
+- Model: Framework Laptop 13 (AMD Ryzen AI 300 Series), board FRANMGCP05, BIOS 03.05 (2025-10-30)
+- CPU: AMD Ryzen AI 5 340 (6C/12T), iGPU Radeon 840M
+- RAM: 16 GB, 1x ADATA 16 GB DDR5-5600 SODIMM (AD5S560016G-SFW) in channel B; 1 of 2 slots used, max 64 GB
+- SSD: WD_BLACK SN7100 1 TB NVMe
+- Display: 13.5" 2256x1504
+- WiFi/Bluetooth: MediaTek MT7925 (`mt7925e`)
+- Battery: 61 Wh (FRANGWA)
+- Other: Goodix fingerprint reader, Framework webcam module (2nd gen), HDMI expansion card
+
+### regis hardware
+
+- Model: TerraMaster F4-425 Pro (board M-TWLN01), BIOS BJFX-TWLX-108 (2026-02-02)
+- CPU: Intel Core i3-N305 (8C/8T), iGPU Intel UHD (`i915`)
+- RAM: 8 GB, 1x Shenzhen Zhongteng 8 GB DDR4-3200 SODIMM (no part number) in Controller0-ChannelA-DIMM0; 1 of 2 slots used, max 64 GB
+- SSD: Samsung 990 PRO 1 TB NVMe (`rpool`)
+- HDD: 2x Seagate IronWolf Pro 18 TB (ST18000NE000), ZFS mirror (`tank`); 2 of 4 bays used
+- Ethernet: 2x onboard Realtek RTL8126 5 GbE (out-of-tree `r8126`), MACs `6c:bf:b5:05:77:88`, `6c:bf:b5:05:77:89`
+
 ## Game streaming (geralt)
 
 `host/features/optional/wolf.nix` runs [Wolf](https://github.com/games-on-whales/wolf) (Moonlight server) as a docker container, pinned by image digest.
