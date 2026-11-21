@@ -35,6 +35,9 @@ pub struct Record {
     /// The MRs of mrs the session was told are merged.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub merged_mrs: Vec<String>,
+    /// Workspaces the session created (`jw session worktree`); `jw reap` drops them once it is done.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub worktrees: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -78,6 +81,7 @@ impl Record {
             url: text("url"),
             mrs: texts("mrs"),
             merged_mrs: texts("merged_mrs"),
+            worktrees: texts("worktrees"),
             status: text("status"),
             status_at: number("status_at"),
             waiting_for: text("waiting_for"),

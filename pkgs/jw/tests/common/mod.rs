@@ -17,6 +17,10 @@ const FAKES: &[(&str, &str)] = &[
     ("claude", include_str!("../fake/claude")),
     ("jj-stack", include_str!("../fake/jj-stack")),
     ("gitlab-context", include_str!("../fake/gitlab-context")),
+    (
+        "claude-jj-workspace",
+        include_str!("../fake/claude-jj-workspace"),
+    ),
 ];
 
 pub struct Env {

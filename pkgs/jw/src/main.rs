@@ -42,7 +42,7 @@ enum Command {
     Clone(CloneArgs),
     /// remove the workspaces whose stack is merged and broken ones in all repos, and the idle detached Claude shpool sessions in merged ones (killing a session kills its background jobs)
     Prune(PruneArgs),
-    /// stop the finished sessions (jw done, or merged MRs) once idle and detached, and remove their merged workspaces; stop the detached Claude shpool sessions idle or stuck on a permission prompt for 4 hours (their workspaces stay; resume with jw resume --session NAME)
+    /// stop the finished sessions (jw done, or merged MRs) once idle and detached, and remove their merged workspaces (after jw done also the worktrees the session created, unless they hold work); stop the detached Claude shpool sessions idle or stuck on a permission prompt for 4 hours (their workspaces stay; resume with jw resume --session NAME)
     Reap,
     /// print the jj workspace and stack of the current directory as JSON
     Info,
@@ -58,12 +58,12 @@ enum Command {
     Attach(AttachArgs),
     /// send a message to a running Claude session: delivered right away, between the tool calls of a busy session or as a new turn of an idle one; fails if the session is not running
     Msg(MsgArgs),
-    /// read or update the record of an agent session (kind, title, description, url, workspace, mrs), a JSON file in $XDG_STATE_HOME/agent-sessions that agent-inbox and the notifications show
+    /// read or update the record of an agent session (kind, title, description, url, workspace, mrs, worktrees), a JSON file in $XDG_STATE_HOME/agent-sessions that agent-inbox and the notifications show
     Session {
         #[command(subcommand)]
         action: SessionAction,
     },
-    /// mark this agent session finished: it is stopped once it is idle and detached
+    /// mark this agent session finished: it is stopped once it is idle and detached, and the worktrees it created are removed
     Done,
 }
 
@@ -152,6 +152,8 @@ enum SessionAction {
     Set(SessionSetArgs),
     /// set the status of this session's record (hooks run this); not for done, see jw done; allowed in GitLab event sessions
     Status(SessionStatusArgs),
+    /// record a workspace this session created, so `jw reap` drops it after jw done if it holds no work (hooks run this); allowed in GitLab event sessions
+    Worktree(SessionWorktreeArgs),
 }
 
 #[derive(Args)]
@@ -196,6 +198,12 @@ struct SessionStatusArgs {
     cache_expires_at: Option<i64>,
 }
 
+#[derive(Args)]
+struct SessionWorktreeArgs {
+    /// absolute path of the workspace directory
+    dir: String,
+}
+
 fn main() {
     let cli = Cli::parse();
     let result = workspace::init_root().and_then(|()| match cli.command {
@@ -215,6 +223,7 @@ fn main() {
             SessionAction::Get(a) => session::cmd_session_get(a),
             SessionAction::Set(a) => session::cmd_session_set(a),
             SessionAction::Status(a) => session::cmd_session_status(a),
+            SessionAction::Worktree(a) => session::cmd_session_worktree(a),
         },
         Command::Done => session::cmd_done(),
     });

@@ -1,7 +1,9 @@
 use std::env;
+use std::fs;
+use std::path::Path;
 
 use crate::record::{now, valid_name, Record, Records};
-use crate::{SessionGetArgs, SessionSetArgs, SessionStatusArgs};
+use crate::{SessionGetArgs, SessionSetArgs, SessionStatusArgs, SessionWorktreeArgs};
 
 const URL_MAX: usize = 2048;
 
@@ -108,6 +110,27 @@ pub fn cmd_session_status(a: SessionStatusArgs) -> Result<(), String> {
     )
 }
 
+pub fn cmd_session_worktree(a: SessionWorktreeArgs) -> Result<(), String> {
+    let name = agent_session_name()?;
+    let real = Some(Path::new(&a.dir))
+        .filter(|d| d.is_absolute())
+        .and_then(|d| fs::canonicalize(d).ok())
+        .filter(|d| d.is_dir())
+        .and_then(|d| d.into_os_string().into_string().ok())
+        .ok_or_else(|| format!("not an absolute directory: {}", a.dir))?;
+    Records::new().update(&name, |r| {
+        let known = r.worktrees.len();
+        r.worktrees.retain(|w| Path::new(w).exists());
+        let pruned = r.worktrees.len() != known;
+        if r.worktrees.contains(&real) {
+            return pruned;
+        }
+        r.worktrees.push(real);
+        true
+    })?;
+    Ok(())
+}
+
 pub fn cmd_done() -> Result<(), String> {
     let name = agent_session_name()?;
     Records::new().update(&name, |r| {
@@ -116,6 +139,6 @@ pub fn cmd_done() -> Result<(), String> {
         r.waiting_for = None;
         true
     })?;
-    eprintln!("jw: {name} is done; it is stopped once it is idle and detached");
+    eprintln!("jw: {name} is done; it is stopped once it is idle and detached, and the worktrees it created are removed");
     Ok(())
 }

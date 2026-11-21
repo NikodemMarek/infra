@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, OpenOptions, TryLockError};
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -11,12 +12,12 @@ use crate::agent::runtime_dir;
 use crate::cmd::{output_timeout, which};
 use crate::jj::Jj;
 use crate::msg::deliver;
-use crate::procs::{claude_sessions, in_use, live_claudes, session_procs, Claude};
+use crate::procs::{claude_dir, claude_sessions, in_use, live_claudes, session_procs, Claude};
 use crate::record::{now, write_error, Record, Records};
 use crate::shpool::Shpool;
 use crate::workspace::{
-    agent_workspace, ask_lost, basename, confirm, is_dir, is_gitlab, recent, remove, remove_broken,
-    repos, root,
+    agent_workspace, ask_lost, basename, confirm, is_dir, is_gitlab, realpath, recent, remove,
+    remove_broken, repos, root,
 };
 use crate::PruneArgs;
 
@@ -26,6 +27,8 @@ const IDLE_LIMIT: f64 = 4.0 * 3600.0;
 const FINISHED_IDLE: u64 = 600;
 /// The time the reaper works through the session records, so the run ends within its timeout.
 const REAP_DEADLINE: Duration = Duration::from_secs(600);
+/// The time `claude-jj-workspace drop` gets for one worktree.
+const DROP_TIMEOUT: Duration = Duration::from_secs(300);
 const WRAP_UP: &str = "The merge requests of this session are merged. Finish what is left of this work (e.g. record the outcome), then run `jw done`. The session is stopped once it is idle and nobody is attached.";
 
 /// (shpool session, Claude session id) of a stopped session.
@@ -316,8 +319,65 @@ fn mark_record(name: &str, mark: impl FnOnce(&mut Record)) {
     }
 }
 
+/// Asks `claude-jj-workspace drop` to delete the worktree d, waiting at most limit, and describes the outcome; the hook
+/// decides whether d holds work.
+fn drop_worktree(d: &str, limit: Duration) -> String {
+    let mut cmd = Command::new("claude-jj-workspace");
+    cmd.args(["drop", d])
+        .env("CLAUDE_CONFIG_DIR", claude_dir())
+        .stderr(Stdio::inherit());
+    match output_timeout(&mut cmd, None, limit) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            format!("kept {d}: claude-jj-workspace not found")
+        }
+        Err(e) => format!("kept {d}: {e}"),
+        Ok(None) => format!("kept {d}: claude-jj-workspace timed out"),
+        Ok(Some(out)) => {
+            if !Path::new(d).exists() {
+                return format!("removed {d}");
+            }
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let why = stdout
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .unwrap_or("holds work");
+            format!("kept {d}: {why}")
+        }
+    }
+}
+
+/// Drops the worktrees a done session created, except workspaces of session records (workspaces: realpath to session
+/// name) and those in use; gone ones are skipped. Stops dropping at the deadline.
+fn drop_worktrees(worktrees: &[String], workspaces: &HashMap<PathBuf, String>, deadline: Instant) {
+    for d in worktrees {
+        if !Path::new(d).is_absolute() || !Path::new(d).exists() {
+            continue;
+        }
+        if let Some(owner) = workspaces.get(&realpath(d)) {
+            println!("kept {d}: workspace of session {owner}");
+        } else if in_use(d, &HashSet::new()) {
+            println!("kept {d}: in use by other processes");
+        } else {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                println!("kept {d}: out of time");
+            } else {
+                println!("{}", drop_worktree(d, left.min(DROP_TIMEOUT)));
+            }
+        }
+    }
+}
+
 /// Stops and removes the workspace of the session record r if its work is finished; see cmd_reap.
-fn reap_record(name: &str, r: &Record, now: f64, seen: &mut HashSet<String>) {
+fn reap_record(
+    name: &str,
+    r: &Record,
+    now: f64,
+    workspaces: &HashMap<PathBuf, String>,
+    deadline: Instant,
+    seen: &mut HashSet<String>,
+) {
     let done = r.status.as_deref() == Some("done");
     let Some((home, ws_name, path)) = agent_workspace(r.workspace.as_deref()) else {
         return;
@@ -333,6 +393,7 @@ fn reap_record(name: &str, r: &Record, now: f64, seen: &mut HashSet<String>) {
             // not idle and detached yet
             Err(_) => return,
         }
+        drop_worktrees(&r.worktrees, workspaces, deadline);
         if !gitlab {
             match retire(&home, &ws_name, true, FINISHED_IDLE) {
                 Ok(killed) => {
@@ -484,8 +545,9 @@ fn idle_sessions(
 }
 
 /// Stops the sessions whose work is finished (`jw done`, or their MRs are merged) once they are idle for
-/// FINISHED_IDLE and detached, and removes their merged workspaces; a session whose MRs got merged is first asked to
-/// wrap up. Then stops the detached Claude shpool sessions idle for IDLE_LIMIT, whose workspaces stay.
+/// FINISHED_IDLE and detached, and removes their merged workspaces; a session that ran `jw done` also loses the worktrees
+/// it created (`jw session worktree`) that `claude-jj-workspace drop` finds empty. A session whose MRs got merged is
+/// first asked to wrap up. Then stops the detached Claude shpool sessions idle for IDLE_LIMIT, whose workspaces stay.
 pub fn cmd_reap() -> Result<(), String> {
     let lock_path = format!("{}/jw-reap.lock", runtime_dir());
     let lock = OpenOptions::new()
@@ -501,7 +563,7 @@ pub fn cmd_reap() -> Result<(), String> {
         }
         Err(TryLockError::Error(e)) => return Err(format!("{lock_path}: {e}")),
     }
-    let missing: Vec<&str> = ["jj", "git", "forge"]
+    let missing: Vec<&str> = ["jj", "git", "forge", "claude-jj-workspace"]
         .into_iter()
         .filter(|t| !which(t))
         .collect();
@@ -511,6 +573,16 @@ pub fn cmd_reap() -> Result<(), String> {
     let mut seen = HashSet::new();
     let started = now();
     let records = Records::new().load_all();
+    let workspaces: HashMap<PathBuf, String> = records
+        .iter()
+        .filter_map(|(name, r)| {
+            let ws = r
+                .workspace
+                .as_deref()
+                .filter(|w| Path::new(w).is_absolute())?;
+            Some((realpath(ws), name.clone()))
+        })
+        .collect();
     let deadline = Instant::now() + REAP_DEADLINE;
     for (i, (name, record)) in records.iter().enumerate() {
         if Instant::now() > deadline {
@@ -520,7 +592,7 @@ pub fn cmd_reap() -> Result<(), String> {
             );
             break;
         }
-        reap_record(name, record, started, &mut seen);
+        reap_record(name, record, started, &workspaces, deadline, &mut seen);
     }
     let mut failed = false;
     let idle = idle_sessions(&live_claudes(), &Shpool.list()?, now());
