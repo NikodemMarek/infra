@@ -40,6 +40,7 @@ spec:
             - webdav
             - /data/library
             - --copy-links
+            - --read-only
             - --addr
             - :80
             - --user
@@ -49,6 +50,7 @@ spec:
           volumeMounts:
             - name: books
               mountPath: /data
+              readOnly: true
           resources:
             requests:
               memory: "32Mi"
