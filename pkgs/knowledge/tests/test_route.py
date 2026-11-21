@@ -2,9 +2,8 @@ from pathlib import Path
 
 import pytest
 from fakes import FakeLlm
-from knowledge import route
+from knowledge import prompts, route
 from knowledge.llm import LlmError
-from knowledge.prompts import router_prompt
 from runner import Runner
 
 
@@ -225,20 +224,13 @@ def test_parse_rejects_what_is_not_an_answer(text: str, error: str):
 # route
 
 
-def test_route_asks_the_router_prompt_with_no_extra_dirs(
-    memory_repo: Path, tmp_path: Path
-):
+def test_route_asks_the_router_prompt(memory_repo: Path, tmp_path: Path):
     app = make_repo(tmp_path, "app", "Billing.\n")
     fake = answering("app")
     assert route.route("pay the bill", [app], fake) == route.Answer("app", "because")
     (call,) = fake.calls
-    assert call.add_dirs == ()
-    assert call.system == router_prompt()
+    assert call.system == prompts.read(route.PROMPT)
     assert call.message.startswith("Task:\npay the bill\n")
-
-
-def test_router_prompt_is_filled():
-    assert "@@" not in router_prompt()
 
 
 def test_route_uses_the_haiku_low_runner_without_tools(

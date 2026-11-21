@@ -142,9 +142,7 @@ def _curate(git: Git, memory: Path, pending: Sequence[Path]) -> int:
     marker = config.ensure_private(config.state_dir()) / MARKER
     marker.touch()
     try:
-        answer = ClaudeCli(edits=_edit_globs(memory)).run(
-            prompts.read(PROMPT), message, []
-        )
+        answer = ClaudeCli(edits=_edit_globs(memory)).run(prompts.read(PROMPT), message)
         problem = _problem(git, memory)
         if problem is None:
             git.commit(_files(git), f"curator: {len(pending)} notes", answer)
@@ -174,9 +172,6 @@ def run() -> int:
     memory = config.memory_dir()
     if not memory.is_dir():
         log.info("no memory dir at %s: nothing to curate", memory)
-        return 0
-    if (memory / "KNOWLEDGE.md").exists():
-        log.warning("%s: old store layout, migrate first", memory)
         return 0
     git = Git(memory, memory_lock())
     # SIGTERM (systemd stop, logout, reboot) must run the revert in `_curate`: the default handler kills without a `finally`

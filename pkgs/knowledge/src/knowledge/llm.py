@@ -4,7 +4,6 @@ import logging
 import os
 import subprocess
 from collections.abc import Sequence
-from pathlib import Path
 from typing import Protocol
 
 from . import data
@@ -28,7 +27,7 @@ class LlmError(Exception):
 
 
 class Llm(Protocol):
-    def run(self, system: str, message: str, add_dirs: Sequence[Path]) -> str:
+    def run(self, system: str, message: str) -> str:
         """One call: `message` on stdin, `system` appended to the system prompt; returns the answer text."""
         ...
 
@@ -41,14 +40,13 @@ def _tail(text: str) -> str:
 def build_argv(
     binary: str,
     system: str,
-    add_dirs: Sequence[Path],
     model: str,
     effort: str,
     tools: str = ALLOWED_TOOLS,
     edits: Sequence[str] = (),
 ) -> list[str]:
-    """The command line. --tools and --add-dir take several values, so a flag follows --tools and
-    --add-dir comes last; the message is on stdin (never a positional argument).
+    """The command line. --tools takes several values, so a flag follows it; the message is on stdin (never a
+    positional argument).
     `tools` "": no tools at all (so nothing to allow or deny).
     `edits`: absolute paths or globs the model may edit; `tools` is then EDIT_TOOLS and the allow rules are
     `Edit(//<path without its leading slash>)` only, with the permission mode given explicitly."""
@@ -88,7 +86,6 @@ def build_argv(
         data.dumps({"disableAllHooks": True}),
         "--append-system-prompt",
         system,
-        *(arg for d in add_dirs for arg in ("--add-dir", str(d))),
     ]
 
 
@@ -121,11 +118,10 @@ class ClaudeCli:
         self.tools = tools
         self.edits = tuple(edits)
 
-    def run(self, system: str, message: str, add_dirs: Sequence[Path]) -> str:
+    def run(self, system: str, message: str) -> str:
         argv = build_argv(
             self.binary,
             system,
-            add_dirs,
             self.model,
             self.effort,
             self.tools,

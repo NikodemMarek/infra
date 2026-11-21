@@ -4,13 +4,13 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import data
+from . import data, prompts
 from .config import memory_dir
 from .context import ProjectRow, project_for_cwd, projects_index
 from .data import ParseError
 from .llm import ClaudeCli, Llm, LlmError
-from .prompts import router_prompt
 
+PROMPT = "router.md"
 MODEL = "haiku"
 EFFORT = "low"
 TIMEOUT = 60.0  # seconds
@@ -132,4 +132,4 @@ def route(task: str, candidates: Sequence[Path], llm: Llm | None = None) -> Answ
     """The repo among the candidates the task belongs in. Raises LlmError if the call or its answer fails."""
     msg = message(task, candidates, memory_dir())
     llm = llm or ClaudeCli(model=MODEL, effort=EFFORT, timeout=TIMEOUT, tools="")
-    return parse(llm.run(router_prompt(), msg, []), [p.name for p in candidates])
+    return parse(llm.run(prompts.read(PROMPT), msg), [p.name for p in candidates])
