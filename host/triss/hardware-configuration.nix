@@ -16,6 +16,5 @@
       kernelModules = ["kvm" "br_netfilter" "overlay" "veth" "vxlan"];
     };
   };
-  security.rtkit.enable = true;
   nixpkgs.hostPlatform.system = "aarch64-linux";
 }
