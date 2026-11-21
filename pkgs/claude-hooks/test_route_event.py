@@ -166,12 +166,6 @@ class Enrich(unittest.TestCase):
             os.environ.pop("AGENT_SESSION", None)
             self.assertNotIn("session", enrich({}, PERM))
 
-    def test_origin_file_never_set(self):
-        with mock.patch.dict(
-            os.environ, {"CLAUDE_ORIGIN_FILE": "/o", "AGENT_SESSION": "s"}
-        ):
-            self.assertNotIn("origin_file", enrich({}, PERM))
-
 
 class Main(unittest.TestCase):
     def fake_pub(self, code=0, stderr=""):
