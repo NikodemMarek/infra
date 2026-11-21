@@ -15,6 +15,10 @@
 
   boot.loader.systemd-boot.configurationLimit = lib.mkForce 1;
   boot.kernelModules = ["wireguard"];
+  nix.settings = {
+    extra-substituters = lib.mkForce [];
+    extra-trusted-public-keys = lib.mkForce [];
+  };
   networking = {
     hostName = "triss";
   };
