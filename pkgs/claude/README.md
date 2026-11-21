@@ -17,7 +17,7 @@ nix build .#claude                                # build it (from the repo root
 
 `@memoryDir@`, `@dataDir@` and `@projectsDir@` in the markdown files and the settings are substituted at build time.
 
-The wrapper takes `knowledge`, `claude-hooks`, `claude-statusline` and `jj-upload` from the package set (`callPackage`) and puts them on its `PATH`, so overriding any of them propagates into `claude`. Its default skills come from `agent-skills` the same way. `pkgs/default.nix` passes `null` for `instructions`, `agents`, `skills` and `settings` so that callPackage never injects a same-named package and the bundled defaults are used.
+The wrapper takes `knowledge`, `claude-hooks`, `claude-statusline`, `forge` and `jj-upload` from the package set (`callPackage`) and puts them on its `PATH`, so overriding any of them propagates into `claude`. Its default skills come from `agent-skills` the same way. `pkgs/default.nix` passes `null` for `instructions`, `agents`, `skills` and `settings` so that callPackage never injects a same-named package and the bundled defaults are used.
 
 ## Using it in this flake
 
