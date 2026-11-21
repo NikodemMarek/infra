@@ -1,14 +1,10 @@
-use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::thread::{self, sleep};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{env, fs};
 
 use serde_json::Value;
 
-use crate::cmd::Result;
+use crate::cmd::{Result, run};
 use crate::jj::Jj;
 
 fn env_nonempty(key: &str) -> Option<String> {
@@ -92,42 +88,14 @@ pub fn record_mr(url: &str) {
 }
 
 fn set_session_mr(url: &str) -> Result<()> {
-    let mut child = Command::new("jw")
-        .args(["session", "set", "--mr", url])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    let mut pipe = child.stderr.take().ok_or("no stderr pipe")?;
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = pipe.read_to_end(&mut buf);
-        let _ = tx.send(buf);
-    });
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let status = loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
-            Some(status) => break status,
-            None if Instant::now() < deadline => sleep(Duration::from_millis(20)),
-            None => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("timed out after 10 seconds".to_string());
-            }
-        }
-    };
-    if status.success() {
+    let out = run(&["jw", "session", "set", "--mr", url], false)?;
+    if out.ok {
         return Ok(());
     }
-    let stderr = rx
-        .recv_timeout(Duration::from_millis(500))
-        .map(|b| String::from_utf8_lossy(&b).trim().to_string())
-        .unwrap_or_default();
+    let stderr = out.stderr.trim();
     Err(if stderr.is_empty() {
-        format!("exit {}", status.code().unwrap_or(-1))
+        "jw failed".to_string()
     } else {
-        stderr
+        stderr.to_string()
     })
 }
