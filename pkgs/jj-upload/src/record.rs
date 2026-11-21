@@ -9,11 +9,22 @@ use std::{env, fs};
 use serde_json::Value;
 
 use crate::cmd::Result;
-use crate::forge::quote;
 use crate::jj::Jj;
 
 fn env_nonempty(key: &str) -> Option<String> {
     env::var(key).ok().filter(|v| !v.is_empty())
+}
+
+fn quote(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"_.-~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 pub fn repo_name(root: &str) -> String {

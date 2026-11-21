@@ -5,7 +5,7 @@ description: How to work with Jujutsu (jj) version control non-interactively, an
 
 # Jujutsu (jj)
 
-jj 0.45, Git backend, remote on GitLab or GitHub (`jj upload` picks the forge from the remote host, or `upload.forge`). Config: the Nix-wrapped `jj` sets `JJ_CONFIG` to its read-only store config (`jj config path --user`); `~/.config/jj/config.toml` is not read and `jj config set --user` fails. Per-repo config (`jj config set --repo`) works.
+jj 0.45, Git backend, remote on GitLab or GitHub (`jj upload` talks to it through `forge`, which picks the forge from the remote host, or `forge.kind`). Config: the Nix-wrapped `jj` sets `JJ_CONFIG` to its read-only store config (`jj config path --user`); `~/.config/jj/config.toml` is not read and `jj config set --user` fails. Per-repo config (`jj config set --repo`) works.
 
 **Is this a jj repo?** `jj root` succeeds or `.jj/` exists → use `jj` for **every write** (commit, rebase, branch, push). A `.git/` next to it ("colocated") is fine for read-only git tools, but never `git commit/checkout/rebase/reset/stash/push` there. git sees a detached HEAD and that is normal.
 
