@@ -3,6 +3,7 @@
     ./hardware-configuration.nix
 
     ../features
+    ../features/optional/iwd.nix
     ../features/optional/systemd-boot.nix
     ../features/optional/tailscale-server.nix
     ../features/optional/maintenance.nix
@@ -62,20 +63,6 @@
       };
     };
   };
-  networking.wireless.iwd = {
-    enable = true;
-    settings = {
-      Network.EnableIPv6 = true;
-      Settings.AutoConnect = true;
-    };
-  };
-  persist.generated.directories = [
-    {
-      directory = "/var/lib/iwd";
-      user = "root";
-      group = "root";
-    }
-  ];
 
   services.k3s.role = "agent";
 }
