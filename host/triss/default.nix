@@ -48,7 +48,6 @@
   };
 
   services = {
-    flux-sops-age.enable = true;
     eso-bws-token.enable = true;
 
     k3s = {

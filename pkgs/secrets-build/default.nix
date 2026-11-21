@@ -1,6 +1,5 @@
 {
   writeShellApplication,
-  age,
   jq,
   mkpasswd,
   openssh,
@@ -12,7 +11,7 @@
 # run from the repo root, needs BWS_ACCESS_TOKEN.
 writeShellApplication {
   name = "secrets-build";
-  runtimeInputs = [age bws-project jq mkpasswd openssh sops ssh-to-age];
+  runtimeInputs = [bws-project jq mkpasswd openssh sops ssh-to-age];
   text = ''
     # also fail inside $(...), so a failing step in a function aborts the script
     shopt -s inherit_errexit
@@ -85,21 +84,6 @@ writeShellApplication {
       fi
     }
 
-    # [host json] the Flux key must be the identity behind the &dijkstra_cluster anchor in
-    # .sops.yaml, a wrong or rotated key is caught here instead of on the host
-    check_flux_key() {
-      local have want
-      if [ "$(printf '%s' "$2" | jq 'has("flux_sops_age_key")')" = false ]; then
-        return
-      fi
-      have=$(secret "$2" flux_sops_age_key | age-keygen -y)
-      want=$(sops_recipient dijkstra_cluster)
-      if [ "$have" != "$want" ]; then
-        echo "$1: flux_sops_age_key in bws is $have, but .sops.yaml has ''${want:-nothing}" >&2
-        exit 1
-      fi
-    }
-
     # [json] login passwords (USERS_*_PASSWORD) are stored in plain text, hashedPasswordFile needs a hash
     hash_passwords() {
       local json=$1 key hash
@@ -132,7 +116,6 @@ writeShellApplication {
       json=$(fetch_secrets "$h")
       check_ssh_keys "$h" "$json"
       check_sops_identity "$h"
-      check_flux_key "$h" "$json"
       json=$(hash_passwords "$json")
       encrypt "$h" "$json" > "$outdir/.$h.yaml.tmp"
       mv "$outdir/.$h.yaml.tmp" "$outdir/$h.yaml"

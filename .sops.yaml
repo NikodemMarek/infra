@@ -1,6 +1,4 @@
 keys:
-  - &super age12ud73504ccl26mrrqncsj204cyv0k2y7tepc64qerqts8xywja0qrn8uwq
-
   - &hosts
     - &geralt age14lex0cntf4svu3j5j6fe95sh3dlqgcqzmnv3wxdh4rrgdwxpc47qgs3xej
     - &yenn age1vpq06e5j3w72uyvr6mrchejlga2lam3d5cqpyvf83t8hujs4qphshw2ppc
@@ -8,50 +6,28 @@ keys:
     - &regis age1mn9ytmfazmrzcd9m82q879ypj2l0nlqtrwzzh9wj2s7dwvfrna7qddqm70
     - &triss age10qfndr7560y5s6de3adt2wujprsgu6p3pcnmw7egq672xp3kpvtsdsp7h8
 
-  - &users
-    - &yenn_nikodem age1scg6e6lvajg70gqr5ua7uqxhk43826zs5mpkknqemzuxuqkdv9vqcvvce7
-
-  - &clusters
-    - &dijkstra_cluster age1l58pzs8ex5e72lgpgcavaxvx7g80937cjtqkr743hdnjvy5jramsycjtp4
-
 creation_rules:
   - path_regex: host/yenn/.+$
     key_groups:
     - age:
-      - *super
       - *yenn
-      - *yenn_nikodem
 
   - path_regex: host/geralt/.+$
     key_groups:
     - age:
-      - *super
       - *geralt
-      - *yenn_nikodem
 
   - path_regex: host/roach/.+$
     key_groups:
     - age:
-      - *super
       - *roach
-      - *yenn_nikodem
 
   - path_regex: host/regis/.+$
     key_groups:
     - age:
-      - *super
       - *regis
-      - *yenn_nikodem
 
   - path_regex: host/triss/.+$
     key_groups:
     - age:
-      - *super
       - *triss
-      - *yenn_nikodem
-
-  - path_regex: clusters/dijkstra/.+\.enc.+$
-    encrypted_regex: ^(data|stringData)$
-    key_groups:
-    - age:
-      - *dijkstra_cluster
