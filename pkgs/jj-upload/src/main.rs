@@ -383,7 +383,9 @@ fn upload(remote: &str, prefix: &str, revset: &str, draft: bool, dry_run: bool) 
             }
         }
         let names: Vec<&str> = stale.iter().map(String::as_str).collect();
-        push(remote, &names)?;
+        if !push(remote, &names)?.ok {
+            return Err("deleting the branches of dropped changes failed".into());
+        }
     }
     Ok(())
 }
