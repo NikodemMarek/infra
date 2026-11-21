@@ -47,14 +47,17 @@
     isCrypted = false;
   };
 
-  services.flux-sops-age.enable = true;
+  services = {
+    flux-sops-age.enable = true;
+    eso-bws-token.enable = true;
 
-  services.k3s = {
-    role = "server";
-    images = [pkgs.shani-image pkgs.matrix-gateway-image];
-    extraFlags = [
-      "--disable=traefik"
-      "--disable-cloud-controller"
-    ];
+    k3s = {
+      role = "server";
+      images = [pkgs.shani-image pkgs.matrix-gateway-image];
+      extraFlags = [
+        "--disable=traefik"
+        "--disable-cloud-controller"
+      ];
+    };
   };
 }
