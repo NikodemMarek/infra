@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, DirBuilder, OpenOptions, TryLockError};
 use std::io::{self, Read, Write};
@@ -15,6 +16,15 @@ use crate::procs::home;
 const RECORD_MAX: u64 = 65536;
 const RECORD_DAYS: u64 = 7;
 const LOCK_WAIT: Duration = Duration::from_secs(5);
+
+/// What the poller knows of one MR: the commit whose failed pipeline it reported, and the keys of the comments it has
+/// seen (empty: baselined).
+#[derive(Default, Serialize, Clone, Debug, PartialEq)]
+pub struct MrMark {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_sha: Option<String>,
+    pub seen: Vec<String>,
+}
 
 /// The record of an agent session, ADR-056/063. Records written by older versions are read field by field: a field of
 /// the wrong type is ignored, not the record.
@@ -38,6 +48,9 @@ pub struct Record {
     /// Workspaces the session created (`jw session worktree`); `jw reap` drops them once it is done.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub worktrees: Vec<String>,
+    /// The poller's mark per MR url.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub mr_marks: BTreeMap<String, MrMark>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -73,6 +86,32 @@ impl Record {
             let value = map.get(key)?;
             value.as_i64().or_else(|| value.as_f64().map(|f| f as i64))
         };
+        let mr_marks: BTreeMap<String, MrMark> = map
+            .get("mr_marks")
+            .and_then(Value::as_object)
+            .map(|marks| {
+                marks
+                    .iter()
+                    .filter_map(|(url, mark)| {
+                        let mark = mark.as_object()?;
+                        let seen: Vec<String> = mark
+                            .get("seen")
+                            .and_then(Value::as_array)
+                            .map(|v| {
+                                v.iter()
+                                    .filter_map(|k| k.as_str().map(str::to_string))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let failed_sha = mark
+                            .get("failed_sha")
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                        Some((url.clone(), MrMark { failed_sha, seen }))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         Some(Record {
             kind: text("kind"),
             workspace: text("workspace"),
@@ -82,6 +121,7 @@ impl Record {
             mrs: texts("mrs"),
             merged_mrs: texts("merged_mrs"),
             worktrees: texts("worktrees"),
+            mr_marks,
             status: text("status"),
             status_at: number("status_at"),
             waiting_for: text("waiting_for"),

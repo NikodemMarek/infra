@@ -311,6 +311,72 @@ fn s1_session_set_ignores_wrong_typed_field() {
 }
 
 #[test]
+fn s1_mr_marks_round_trip() {
+    let e = Env::new();
+    e.write_record(
+        "mk",
+        r#"{"title": "T", "mrs": ["https://example.com/mr/1"], "mr_marks": {"https://example.com/mr/1": {"failed_sha": "abc123", "seen": ["comment:1", "inline:2"]}, "https://example.com/mr/2": {"seen": []}}}"#,
+    );
+    let want = json!({
+        "https://example.com/mr/1": {"failed_sha": "abc123", "seen": ["comment:1", "inline:2"]},
+        "https://example.com/mr/2": {"seen": []}
+    });
+    let got = e.jw(&e.home, &["session", "get", "-s", "mk"]).ok().json();
+    assert_eq!(got["mr_marks"], want);
+
+    e.jw(
+        &e.home,
+        &["session", "set", "-s", "mk", "--description", "d"],
+    )
+    .ok();
+    let got = e.record("mk");
+    assert_eq!(got["mr_marks"], want);
+    assert_eq!(got["description"], "d");
+}
+
+#[test]
+fn s1_mr_marks_omitted_when_empty() {
+    let e = Env::new();
+    e.write_record("nm", r#"{"title": "T"}"#);
+    let got = e.jw(&e.home, &["session", "get", "-s", "nm"]).ok().json();
+    assert!(got.get("mr_marks").is_none(), "{got}");
+}
+
+#[test]
+fn s1_mr_marks_tolerant_parsing() {
+    let e = Env::new();
+    e.write_record(
+        "t1",
+        r#"{"title": "Keep", "mr_marks": ["not", "an", "object"]}"#,
+    );
+    let got = e.jw(&e.home, &["session", "get", "-s", "t1"]).ok().json();
+    assert_eq!(got["title"], "Keep");
+    assert!(got.get("mr_marks").is_none(), "{got}");
+
+    e.write_record(
+        "t2",
+        r#"{"title": "Keep", "mr_marks": {
+            "https://e/1": "garbage",
+            "https://e/2": {"failed_sha": 5, "seen": ["a", 3, null, "b"]},
+            "https://e/3": {"failed_sha": "s"},
+            "https://e/4": {"seen": "nope"},
+            "https://e/5": {"failed_sha": "x", "seen": {"a": 1}}
+        }}"#,
+    );
+    let got = e.jw(&e.home, &["session", "get", "-s", "t2"]).ok().json();
+    assert_eq!(got["title"], "Keep");
+    assert_eq!(
+        got["mr_marks"],
+        json!({
+            "https://e/2": {"seen": ["a", "b"]},
+            "https://e/3": {"failed_sha": "s", "seen": []},
+            "https://e/4": {"seen": []},
+            "https://e/5": {"failed_sha": "x", "seen": []}
+        })
+    );
+}
+
+#[test]
 fn s2_status_and_done() {
     let e = Env::new();
     let s1 = [("AGENT_SESSION", "s1")];

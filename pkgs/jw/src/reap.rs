@@ -6,12 +6,9 @@ use std::process::{self, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
-
 use crate::agent::runtime_dir;
 use crate::cmd::{output_timeout, which};
 use crate::jj::Jj;
-use crate::msg::deliver;
 use crate::procs::{claude_dir, claude_sessions, in_use, live_claudes, session_procs, Claude};
 use crate::record::{now, write_error, Record, Records};
 use crate::shpool::Shpool;
@@ -29,7 +26,6 @@ const FINISHED_IDLE: u64 = 600;
 const REAP_DEADLINE: Duration = Duration::from_secs(600);
 /// The time `claude-jj-workspace drop` gets for one worktree.
 const DROP_TIMEOUT: Duration = Duration::from_secs(300);
-const WRAP_UP: &str = "The merge requests of this session are merged. Finish what is left of this work (e.g. record the outcome), then run `jw done`. The session is stopped once it is idle and nobody is attached.";
 
 /// (shpool session, Claude session id) of a stopped session.
 type Stopped = (String, String);
@@ -417,40 +413,6 @@ fn reap_record(
         return;
     }
     if r.notified.is_none() && !claude_sessions(&path).is_empty() {
-        let Some(states) = r
-            .mrs
-            .iter()
-            .map(|u| mr_state(u))
-            .collect::<Option<Vec<_>>>()
-        else {
-            eprintln!("jw: {name}: couldn't check its MRs");
-            return;
-        };
-        let newly = newly_merged(&r.mrs, &states, &r.merged_mrs);
-        let finished = mrs_merged(&states) && {
-            let stack = Jj::in_dir(&path).stack_merged();
-            if stack.is_none() {
-                eprintln!("jw: {name}: couldn't check the stack");
-            }
-            stack == Some(true)
-        };
-        let text = if finished {
-            WRAP_UP.to_string()
-        } else if newly.is_empty() {
-            return;
-        } else {
-            merged_message(&newly)
-        };
-        if let Err(e) = deliver(name, &text, "jw-reap", Duration::ZERO) {
-            eprintln!("jw: {name}: {e}");
-        }
-        mark_record(name, |r| {
-            r.merged_mrs.extend(newly);
-            if finished {
-                r.notified = Some(now);
-            }
-        });
-        println!("notified {name}");
         return;
     }
     match retire(&home, &ws_name, true, FINISHED_IDLE) {
@@ -467,39 +429,6 @@ fn reap_record(
             }
         }
     }
-}
-
-/// The state of the MR or PR at url (open, closed or merged); None if it couldn't be read.
-fn mr_state(url: &str) -> Option<String> {
-    let mut cmd = Command::new("forge");
-    cmd.args(["pr", "view", url]);
-    let out = output_timeout(&mut cmd, None, Duration::from_secs(60)).ok()??;
-    if !out.status.success() {
-        return None;
-    }
-    let pr: Value = serde_json::from_slice(&out.stdout).ok()?;
-    pr["state"].as_str().map(str::to_string)
-}
-
-/// Whether a session's MRs are finished: none is open and at least one is merged.
-fn mrs_merged(states: &[String]) -> bool {
-    states.iter().all(|s| s == "merged" || s == "closed") && states.iter().any(|s| s == "merged")
-}
-
-/// The merged MRs among mrs (with their states) that the session hasn't been told about.
-fn newly_merged(mrs: &[String], states: &[String], told: &[String]) -> Vec<String> {
-    mrs.iter()
-        .zip(states)
-        .filter(|(u, s)| *s == "merged" && !told.contains(u))
-        .map(|(u, _)| u.clone())
-        .collect()
-}
-
-fn merged_message(urls: &[String]) -> String {
-    format!(
-        "Merged: {}. Run `jj upload` so what is still open is rebased onto trunk.",
-        urls.join(", ")
-    )
 }
 
 fn stuck(c: &Claude) -> bool {
@@ -547,7 +476,8 @@ fn idle_sessions(
 /// Stops the sessions whose work is finished (`jw done`, or their MRs are merged) once they are idle for
 /// FINISHED_IDLE and detached, and removes their merged workspaces; a session that ran `jw done` also loses the worktrees
 /// it created (`jw session worktree`) that `claude-jj-workspace drop` finds empty. A session whose MRs got merged is
-/// first asked to wrap up. Then stops the detached Claude shpool sessions idle for IDLE_LIMIT, whose workspaces stay.
+/// first asked to wrap up by `jw poll`. Then stops the detached Claude shpool sessions idle for IDLE_LIMIT, whose
+/// workspaces stay.
 pub fn cmd_reap() -> Result<(), String> {
     let lock_path = format!("{}/jw-reap.lock", runtime_dir());
     let lock = OpenOptions::new()
@@ -563,7 +493,7 @@ pub fn cmd_reap() -> Result<(), String> {
         }
         Err(TryLockError::Error(e)) => return Err(format!("{lock_path}: {e}")),
     }
-    let missing: Vec<&str> = ["jj", "git", "forge", "claude-jj-workspace"]
+    let missing: Vec<&str> = ["jj", "git", "claude-jj-workspace"]
         .into_iter()
         .filter(|t| !which(t))
         .collect();
@@ -611,35 +541,6 @@ pub fn cmd_reap() -> Result<(), String> {
         return Err(String::new());
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{mrs_merged, newly_merged};
-
-    fn states(s: &[&str]) -> Vec<String> {
-        s.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn mrs_merged_needs_none_open_and_one_merged() {
-        let mut mixed = states(&["open"; 4]);
-        mixed.extend(states(&["closed"; 5]));
-        mixed.push("merged".into());
-        assert!(!mrs_merged(&mixed));
-        assert!(!mrs_merged(&states(&["open", "merged"])));
-        assert!(mrs_merged(&states(&["closed", "closed", "merged"])));
-        assert!(!mrs_merged(&states(&["closed"])));
-        assert!(!mrs_merged(&[]));
-    }
-
-    #[test]
-    fn newly_merged_skips_told_and_unmerged() {
-        let mrs = states(&["a", "b", "c", "d"]);
-        let st = states(&["merged", "open", "merged", "closed"]);
-        assert_eq!(newly_merged(&mrs, &st, &states(&["a"])), states(&["c"]));
-        assert!(newly_merged(&mrs, &st, &states(&["a", "c"])).is_empty());
-    }
 }
 
 #[cfg(test)]

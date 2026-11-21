@@ -123,6 +123,7 @@
       done &
 
       while sleep 600; do
+        timeout 5m jw poll || true
         timeout 15m jw reap || true
         timeout 15m jw prune --yes || true
       done &
