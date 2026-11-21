@@ -29,7 +29,7 @@
   ...
 }: let
   inherit (lib) mkOption literalExpression;
-  inherit (lib.types) attrsOf submodule str bool;
+  inherit (lib.types) attrsOf listOf submodule str bool;
 
   secret = submodule ({
     name,
@@ -53,6 +53,11 @@
         description = "Secret must exist before users are created";
         type = bool;
         default = false;
+      };
+      restartUnits = mkOption {
+        description = "systemd units to restart when the secret changes";
+        type = listOf str;
+        default = [];
       };
       profile = mkOption {
         description = "secretspec profile that holds the secret, the host's own unless set";

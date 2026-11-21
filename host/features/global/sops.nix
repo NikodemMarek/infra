@@ -21,7 +21,7 @@
 
     secrets = lib.mapAttrs (_: s:
       {
-        inherit (s) owner group mode neededForUsers;
+        inherit (s) owner group mode neededForUsers restartUnits;
       }
       // lib.optionalAttrs (!s.neededForUsers) {
         inherit (s) path;
