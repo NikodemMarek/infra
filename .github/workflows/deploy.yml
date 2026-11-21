@@ -62,11 +62,14 @@ jobs:
       - name: reachability
         id: reachable
         run: |
-          if tailscale ping -c 1 --timeout 10s "$HOST" >/dev/null 2>&1; then
-            echo "online=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::$HOST is offline, not deployed"
-          fi
+          for _ in $(seq 12); do
+            if tailscale ping -c 1 --timeout 5s "$HOST" >/dev/null 2>&1; then
+              echo "online=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::warning::$HOST is offline, not deployed"
       - name: deploy
         if: steps.reachable.outputs.online == 'true'
         run: |
