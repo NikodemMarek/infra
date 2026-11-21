@@ -5,6 +5,8 @@ use std::process::{self, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use serde_json::Value;
+
 use crate::agent::runtime_dir;
 use crate::cmd::{output_timeout, which};
 use crate::jj::Jj;
@@ -406,23 +408,16 @@ fn reap_record(name: &str, r: &Record, now: f64, seen: &mut HashSet<String>) {
     }
 }
 
-/// The state of the MR or PR at url, lowercased (open, opened, merged, closed); None if it couldn't be read.
+/// The state of the MR or PR at url (open, closed or merged); None if it couldn't be read.
 fn mr_state(url: &str) -> Option<String> {
-    let mut cmd = if url.contains("://github.com/") {
-        let mut c = Command::new("gh");
-        c.args(["pr", "view", url, "--json", "state", "--jq", ".state"]);
-        c
-    } else {
-        let (repo, iid) = url.split_once("/-/merge_requests/")?;
-        let mut c = Command::new("glab");
-        c.args([
-            "mr", "view", iid, "-R", repo, "-F", "json", "--jq", ".state",
-        ]);
-        c
-    };
+    let mut cmd = Command::new("forge");
+    cmd.args(["pr", "view", url]);
     let out = output_timeout(&mut cmd, None, Duration::from_secs(60)).ok()??;
-    let state = String::from_utf8_lossy(&out.stdout).trim().to_lowercase();
-    (out.status.success() && !state.is_empty()).then_some(state)
+    if !out.status.success() {
+        return None;
+    }
+    let pr: Value = serde_json::from_slice(&out.stdout).ok()?;
+    pr["state"].as_str().map(str::to_string)
 }
 
 /// Whether a session's MRs are finished: none is open and at least one is merged.
@@ -506,7 +501,7 @@ pub fn cmd_reap() -> Result<(), String> {
         }
         Err(TryLockError::Error(e)) => return Err(format!("{lock_path}: {e}")),
     }
-    let missing: Vec<&str> = ["jj", "git", "glab", "gh"]
+    let missing: Vec<&str> = ["jj", "git", "forge"]
         .into_iter()
         .filter(|t| !which(t))
         .collect();
@@ -560,7 +555,7 @@ mod tests {
         mixed.extend(states(&["closed"; 5]));
         mixed.push("merged".into());
         assert!(!mrs_merged(&mixed));
-        assert!(!mrs_merged(&states(&["opened", "merged"])));
+        assert!(!mrs_merged(&states(&["open", "merged"])));
         assert!(mrs_merged(&states(&["closed", "closed", "merged"])));
         assert!(!mrs_merged(&states(&["closed"])));
         assert!(!mrs_merged(&[]));
