@@ -2,6 +2,7 @@ mod agent;
 mod cmd;
 mod jj;
 mod msg;
+mod poll;
 mod procs;
 mod reap;
 mod record;
@@ -44,6 +45,8 @@ enum Command {
     Prune(PruneArgs),
     /// stop the finished sessions (jw done, or merged MRs) once idle and detached, and remove their merged workspaces (after jw done also the worktrees the session created, unless they hold work); stop the detached Claude shpool sessions idle or stuck on a permission prompt for 4 hours (their workspaces stay; resume with jw resume --session NAME)
     Reap,
+    /// tell running or stopped agent sessions about failed pipelines and new comments and reviews of their MRs, and running ones about merges
+    Poll,
     /// print the jj workspace and stack of the current directory as JSON
     Info,
     /// pick a repo (the current one first) and print its name
@@ -213,6 +216,7 @@ fn main() {
         Command::Clone(a) => workspace::cmd_clone(a),
         Command::Prune(a) => reap::cmd_prune(a),
         Command::Reap => reap::cmd_reap(),
+        Command::Poll => poll::cmd_poll(),
         Command::Info => workspace::cmd_info(),
         Command::Pick => workspace::cmd_pick(),
         Command::Agent(a) => agent::cmd_agent(a),

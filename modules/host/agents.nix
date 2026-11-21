@@ -12,6 +12,16 @@
   shpoolConfig = pkgs.writeText "shpool.toml" ''
     prompt_prefix = ""
   '';
+
+  jwReapPath = lib.makeBinPath [
+    cfg.jwPackage
+    cfg.ghPackage
+    cfg.glabPackage
+    pkgs.jujutsu
+    pkgs.git
+    pkgs.openssh
+    pkgs.claude-hooks
+  ];
 in {
   options.services.agents = {
     enable = lib.mkEnableOption "the local NATS server, the event handlers, the knowledge curator timer and the idle Claude session reaper";
@@ -69,20 +79,18 @@ in {
           };
 
           jw-reap = {
-            description = "Stop finished or long-idle Claude agent sessions and remove their merged workspaces";
-            path = [
-              pkgs.jujutsu
-              pkgs.git
-              pkgs.openssh
-              pkgs.claude-hooks
-              cfg.glabPackage
-              cfg.ghPackage
-            ];
-            environment.SSH_AUTH_SOCK = "%t/ssh-agent";
+            description = "Tell Claude agent sessions about MR activity, stop finished or long-idle ones and remove their merged workspaces";
+            environment = {
+              PATH = lib.mkForce "${jwReapPath}:/run/wrappers/bin:/etc/profiles/per-user/%u/bin:/run/current-system/sw/bin";
+              SSH_AUTH_SOCK = "%t/ssh-agent";
+            };
             serviceConfig = {
               Type = "oneshot";
-              ExecStart = "${cfg.jwPackage}/bin/jw reap";
-              TimeoutStartSec = "15min";
+              ExecStart = [
+                "-${cfg.jwPackage}/bin/jw poll"
+                "${cfg.jwPackage}/bin/jw reap"
+              ];
+              TimeoutStartSec = "20min";
             };
             startAt = "*:0/10";
           };
