@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, OpenOptions, TryLockError};
+use std::path::Path;
 use std::process::{self, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -8,7 +9,7 @@ use crate::agent::runtime_dir;
 use crate::cmd::{output_timeout, which};
 use crate::jj::Jj;
 use crate::msg::deliver;
-use crate::procs::{claude_sessions, descendants, in_use, live_claudes, Claude};
+use crate::procs::{claude_sessions, in_use, live_claudes, session_procs, Claude};
 use crate::record::{now, write_error, Record, Records};
 use crate::shpool::Shpool;
 use crate::workspace::{
@@ -51,10 +52,9 @@ fn kept(error: &str) -> Kept {
 }
 
 /// The shpool sessions of the Claude sessions in d if all are agent sessions idle for idle seconds in detached shpool
-/// sessions and nothing else is using d. The error says why not.
+/// sessions and nothing outside their sessions' processes uses d. The error says why not.
 fn check_claudes(d: &str, sessions: &[Claude], idle: u64) -> Result<Vec<String>, String> {
-    let pids: Vec<u32> = sessions.iter().map(|c| c.pid).collect();
-    let mine = descendants(&pids);
+    let mine = session_procs(sessions, Path::new("/proc"));
     if mine.contains(&process::id()) {
         return Err("this session runs jw".to_string());
     }
