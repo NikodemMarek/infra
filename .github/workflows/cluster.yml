@@ -1,0 +1,33 @@
+name: cluster
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    paths:
+      - clusters/**
+      - .github/workflows/cluster.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cluster-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - name: Build
+        run: >
+          nix shell --inputs-from . nixpkgs#fluxcd -c
+          flux build kustomization flux-system
+          --path ./clusters/dijkstra
+          --kustomization-file ./clusters/dijkstra/flux-system/gotk-sync.yaml
+          --dry-run > /dev/null
