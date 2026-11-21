@@ -1,0 +1,24 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: bitwarden-selfsigned
+  namespace: external-secrets
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: bitwarden-sdk-server
+  namespace: external-secrets
+spec:
+  secretName: bitwarden-tls-certs
+  duration: 87600h
+  issuerRef:
+    name: bitwarden-selfsigned
+    kind: Issuer
+  dnsNames:
+    - bitwarden-sdk-server
+    - bitwarden-sdk-server.external-secrets
+    - bitwarden-sdk-server.external-secrets.svc
+    - bitwarden-sdk-server.external-secrets.svc.cluster.local
