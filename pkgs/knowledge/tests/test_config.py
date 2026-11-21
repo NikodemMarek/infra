@@ -2,7 +2,6 @@ from pathlib import Path
 
 import pytest
 from knowledge import config
-from knowledge.config import Tunables, UsageError
 
 
 def test_memory_dir_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -74,26 +73,3 @@ def test_in_claude_code(monkeypatch: pytest.MonkeyPatch):
     assert not config.in_claude_code()
     monkeypatch.setenv("CLAUDECODE", "1")
     assert config.in_claude_code()
-
-
-def test_tunable_defaults():
-    t = config.tunables()
-    assert t == Tunables()
-    assert (t.timeout, t.model, t.effort) == (900, "sonnet", "medium")
-
-
-def test_tunable_overrides(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("KNOWLEDGE_MODEL", "opus")
-    monkeypatch.setenv("KNOWLEDGE_EFFORT", "high")
-    monkeypatch.setenv("KNOWLEDGE_TIMEOUT", "60")
-    t = config.tunables()
-    assert (t.model, t.effort, t.timeout) == ("opus", "high", 60)
-
-
-@pytest.mark.parametrize("value", ["abc", "1.5", "0", "-3"])
-def test_an_invalid_timeout_is_a_usage_error(
-    monkeypatch: pytest.MonkeyPatch, value: str
-):
-    monkeypatch.setenv("KNOWLEDGE_TIMEOUT", value)
-    with pytest.raises(UsageError, match="KNOWLEDGE_TIMEOUT"):
-        config.tunables()

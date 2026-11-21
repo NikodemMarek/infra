@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from . import data
-from .config import claude_bin, memory_dir, tunables
+from .config import claude_bin, memory_dir
 from .data import Obj, ParseError
 
 log = logging.getLogger("knowledge")
@@ -20,6 +20,9 @@ DISALLOWED_TOOLS = ",".join(PRIVATE_DENY)
 # Read/Grep/Glob rule, so the reads outside the cwd are denied in `-p`
 EDIT_TOOLS = "Read,Grep,Glob,Edit,Write"
 MAX_DETAIL = 500  # chars of claude's output an error message carries
+DEFAULT_MODEL = "sonnet"
+DEFAULT_EFFORT = "medium"
+DEFAULT_TIMEOUT = 900.0  # seconds, per claude call
 
 
 class LlmError(Exception):
@@ -104,17 +107,16 @@ class ClaudeCli:
     def __init__(
         self,
         binary: str | None = None,
-        model: str | None = None,
-        effort: str | None = None,
-        timeout: float | None = None,
+        model: str = DEFAULT_MODEL,
+        effort: str = DEFAULT_EFFORT,
+        timeout: float = DEFAULT_TIMEOUT,
         tools: str = ALLOWED_TOOLS,
         edits: Sequence[str] = (),
     ) -> None:
-        t = tunables()
         self.binary = binary or claude_bin()
-        self.model = model or t.model
-        self.effort = effort or t.effort
-        self.timeout = float(t.timeout) if timeout is None else timeout
+        self.model = model
+        self.effort = effort
+        self.timeout = timeout
         self.tools = tools
         self.edits = tuple(edits)
 

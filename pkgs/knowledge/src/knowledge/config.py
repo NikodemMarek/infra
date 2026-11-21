@@ -1,7 +1,6 @@
-"""Paths, environment flags and tunables: the one place that reads the environment."""
+"""Paths and environment flags: the one place that reads the environment."""
 
 import os
-from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -71,35 +70,3 @@ def in_claude_code() -> bool:
 def curator_active() -> bool:
     """Inside a curator run: hooks do nothing."""
     return os.environ.get("KNOWLEDGE_CURATOR") == "1"
-
-
-# tunables
-
-
-def _int(name: str, default: int) -> int:
-    raw = _env(name)
-    if raw is None:
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        raise UsageError(f"{name}: expected an integer, got {raw!r}") from None
-    if value <= 0:
-        raise UsageError(f"{name}: must be greater than zero, got {raw!r}")
-    return value
-
-
-@dataclass(frozen=True)
-class Tunables:
-    timeout: int = 900  # seconds, per claude call
-    model: str = "sonnet"
-    effort: str = "medium"
-
-
-def tunables() -> Tunables:
-    d = Tunables()
-    return Tunables(
-        timeout=_int("KNOWLEDGE_TIMEOUT", d.timeout),
-        model=_env("KNOWLEDGE_MODEL") or d.model,
-        effort=_env("KNOWLEDGE_EFFORT") or d.effort,
-    )

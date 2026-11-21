@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 from fakes import FakeLlm, LlmCall
-from knowledge.config import UsageError
 from knowledge.llm import (
     ALLOWED_TOOLS,
     DISALLOWED_TOOLS,
@@ -246,12 +245,15 @@ def test_the_child_does_not_see_claudecode(
     assert call(fake_claude)["curator"] == "1"
 
 
-def test_model_and_effort_come_from_the_environment(
-    fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch
+def test_model_and_effort_default_and_can_be_passed(
+    fake_claude: Path, memory_repo: Path
 ):
-    monkeypatch.setenv("KNOWLEDGE_MODEL", "opus-test")
-    monkeypatch.setenv("KNOWLEDGE_EFFORT", "high")
     ClaudeCli().run("s", "m")
+    args = call(fake_claude)["argv"]
+    assert isinstance(args, list)
+    assert args[args.index("--model") + 1] == "sonnet"
+    assert args[args.index("--effort") + 1] == "medium"
+    ClaudeCli(model="opus-test", effort="high").run("s", "m")
     args = call(fake_claude)["argv"]
     assert isinstance(args, list)
     assert args[args.index("--model") + 1] == "opus-test"
@@ -294,9 +296,8 @@ def test_a_timeout_is_an_error(
     fake_claude: Path, memory_repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "sleep")
-    monkeypatch.setenv("KNOWLEDGE_TIMEOUT", "1")
     with pytest.raises(LlmError, match="timed out after 1s"):
-        ClaudeCli().run("s", "m")
+        ClaudeCli(timeout=1).run("s", "m")
 
 
 def test_a_missing_binary_is_an_error(
@@ -305,12 +306,6 @@ def test_a_missing_binary_is_an_error(
     monkeypatch.setenv("KNOWLEDGE_CLAUDE", str(tmp_path / "no-such-claude"))
     with pytest.raises(LlmError, match="cannot run claude"):
         ClaudeCli().run("s", "m")
-
-
-def test_a_bad_timeout_is_a_usage_error(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("KNOWLEDGE_TIMEOUT", "soon")
-    with pytest.raises(UsageError):
-        ClaudeCli()
 
 
 # FakeLlm is an Llm
