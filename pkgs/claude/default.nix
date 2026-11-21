@@ -11,6 +11,7 @@
   jq,
   claude-hooks,
   claude-statusline,
+  forge,
   jj-upload,
   knowledge,
   agent-skills,
@@ -332,6 +333,7 @@
               [
                 claude-hooks
                 claude-statusline
+                forge
                 jj-upload
                 knowledge
               ]
