@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Stand-in for gh and glab (installed under both names).
+set -u
+tool=${FAKE_TOOL:-$(basename "$0")}
+d=${FAKE_DIR:?}
+
+if [ "${1:-}" = auth ]; then
+  sub=${2:-}
+  host=
+  [ "${3:-}" = --hostname ] && host=${4:-}
+  jq -nc --arg t "$tool" --arg s "$sub" --arg h "$host" '{tool:$t,sub:$s,host:$h}' >>"$d/auth.log"
+  case "$tool:$sub" in
+    gh:token | glab:status) ;;
+    *)
+      echo "fake $tool: unexpected auth call: $*" >&2
+      exit 99
+      ;;
+  esac
+  for h in ${FAKE_CRED:-}; do
+    if [ "$h" = "$host" ]; then
+      if [ "$sub" = token ] && [ -z "${FAKE_EMPTY_TOKEN:-}" ]; then
+        echo fake-token
+      fi
+      exit 0
+    fi
+  done
+  echo "fake $tool: no credential for $host" >&2
+  exit 1
+fi
+
+if [ "${1:-}" != api ]; then
+  echo "fake $tool: unexpected call: $*" >&2
+  exit 99
+fi
+shift
+
+host=
+method=GET
+path=
+input=
+headers=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --hostname) host=${2:-}; shift 2 ;;
+    -X) method=${2:-}; shift 2 ;;
+    --input) input=${2:-}; shift 2 ;;
+    -H) headers+=("${2:-}"); shift 2 ;;
+    -*)
+      echo "fake $tool: unexpected api flag: $1" >&2
+      exit 99
+      ;;
+    *) path=$1; shift ;;
+  esac
+done
+
+body=
+[ "$input" = - ] && body=$(cat)
+npath=${path//%3A/:}
+jq -nc --arg t "$tool" --arg h "$host" --arg m "$method" --arg p "$npath" --arg b "$body" \
+  '{tool:$t,host:$h,method:$m,path:$p,body:$b,headers:$ARGS.positional}' \
+  --args ${headers[@]+"${headers[@]}"} >>"$d/calls.log"
+
+key="$method $npath"
+if jq -e --arg k "$key" 'has($k)' "$d/routes.json" >/dev/null 2>&1; then
+  err=$(jq -r --arg k "$key" '.[$k].__error // empty' "$d/routes.json")
+  if [ -n "$err" ]; then
+    echo "$err" >&2
+    exit 1
+  fi
+  jq -c --arg k "$key" '.[$k]' "$d/routes.json"
+  exit 0
+fi
+echo "fake $tool: unexpected api call: $key" >&2
+exit 99
