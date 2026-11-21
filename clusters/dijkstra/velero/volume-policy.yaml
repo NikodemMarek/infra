@@ -4,8 +4,6 @@ metadata:
   name: volume-policy
   namespace: velero
 data:
-  # local-storage = media on tank; nfs = shared projects
-  # PVCs labelled backup=skip hold throwaway/cache data (in-flight downloads, caches, model caches)
   policy.yaml: |
     version: v1
     volumePolicies:

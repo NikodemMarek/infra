@@ -6,7 +6,6 @@ metadata:
 spec:
   schedule: "0 18 * * 1"
   timeZone: Europe/Warsaw
-  # runs missed during downtime are not caught up; the boot-time job covers reboots
   startingDeadlineSeconds: 3600
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
@@ -14,7 +13,6 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 1
-      # also cleans up manually created jobs (kubectl create job --from=cronjob/gutenberg)
       ttlSecondsAfterFinished: 259200
       template:
         spec:

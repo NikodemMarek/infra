@@ -64,7 +64,6 @@ spec:
             limits:
               cpu: "1000m"
               memory: "1Gi"
-        # YouTube PO-token provider for Tubifarry (trustedSessionGeneratorUrl = http://localhost:4416).
         # Unauthenticated, so it stays pod-local with no Service.
         - name: bgutil-pot-provider
           image: brainicism/bgutil-ytdlp-pot-provider:2.0.2

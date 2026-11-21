@@ -1,4 +1,3 @@
-# Backend service the KEDA interceptor forwards to.
 apiVersion: v1
 kind: Service
 metadata:
@@ -13,7 +12,6 @@ spec:
       port: 8191
       targetPort: 8191
 ---
-# Keeps the in-cluster name working; traffic goes through the interceptor so it can wake the app.
 apiVersion: v1
 kind: Service
 metadata:
