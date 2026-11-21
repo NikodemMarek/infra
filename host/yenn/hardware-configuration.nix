@@ -48,5 +48,4 @@
       kernelModules = ["kvm-amd"];
     };
   };
-  security.rtkit.enable = true;
 }

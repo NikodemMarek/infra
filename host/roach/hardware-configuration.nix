@@ -63,5 +63,4 @@
       ];
     };
   };
-  security.rtkit.enable = true;
 }
