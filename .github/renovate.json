@@ -1,7 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "helpers:pinGitHubActionDigestsToSemver"],
-  "enabledManagers": ["flux", "github-actions", "kubernetes", "nix", "terraform"],
+  "enabledManagers": ["custom.regex", "flux", "github-actions", "kubernetes", "nix", "terraform"],
   "schedule": ["* * * * 6"],
   "minimumReleaseAge": "5 days",
   "ignorePaths": ["clusters/dijkstra/flux-system/**"],
@@ -9,6 +9,16 @@
   "flux": { "managerFilePatterns": ["/^clusters/.+\\.yaml$/"] },
   "kubernetes": { "managerFilePatterns": ["/^clusters/.+\\.yaml$/"] },
   "nix": { "enabled": true },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^clusters/.+/postgres\\.yaml$/"],
+      "matchStrings": [
+        "imageName:\\s*(?<depName>[^:\\s]+):(?<currentValue>[^@\\s]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ],
   "lockFileMaintenance": { "enabled": true, "schedule": ["* * * * 6"] },
   "packageRules": [
     { "matchUpdateTypes": ["major"], "minimumReleaseAge": "14 days" },
@@ -26,6 +36,19 @@
     {
       "matchPackageNames": ["linuxserver/lidarr"],
       "versioning": "regex:^nightly-(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)\\.(?<build>\\d+)-ls(?<revision>\\d+)$"
+    },
+    {
+      "matchManagers": ["custom.regex"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "matchPackageNames": ["ghcr.io/tensorchord/cloudnative-vectorchord"],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)-(?<patch>\\d+)\\.(?<build>\\d+)\\.(?<revision>\\d+)$"
+    },
+    {
+      "matchPackageNames": ["ghcr.io/ggml-org/llama.cpp"],
+      "versioning": "regex:^server-b(?<patch>\\d+)$"
     },
     { "matchPackageNames": ["jellyfin/jellyfin"], "allowedVersions": "/^\\d{10}$/" },
     {
