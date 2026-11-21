@@ -73,13 +73,14 @@ jj new <extract-change> -m "feat(x): expose Foo via /api/foo"   # needs only the
 A green top of the stack proves nothing about the commits below it. Run the full build + test + lint at **each** commit, using a separate workspace so the main working copy and its `@` are untouched:
 
 ```bash
-# run from the main repo; the check workspace is created once, next to it
-CHECK="$(jj root)-check"
-[ -d "$CHECK" ] || jj workspace add --name check "$CHECK"
-cd "$CHECK"
-jj workspace update-stale 2>/dev/null   # goes stale whenever you rewrite commits; else the loop silently checks nothing
+# run from your own workspace; each tip gets its own check workspace, reused when you re-run after a failure
+TIP=$(jj log --no-graph -r @ -T 'change_id.short(12)')   # or the change ID from your brief
+CHECK="$(jj root)-check-$TIP"
+[ -d "$CHECK" ] || jj workspace add --name "$(basename "$CHECK")" "$CHECK" || exit 1
+cd "$CHECK" || exit 1
+jj workspace update-stale >/dev/null
 
-CHANGES=$(jj log --no-graph --reversed -r 'trunk()..default@ ~ empty()' -T 'change_id.short(12) ++ "\n"') \
+CHANGES=$(jj log --no-graph --reversed -r "trunk()..$TIP ~ empty()" -T 'change_id.short(12) ++ "\n"') \
   && [ -n "$CHANGES" ] || { echo "FAILED: could not list the stack"; exit 1; }
 for c in $CHANGES; do
   jj new "$c" >/dev/null
@@ -87,9 +88,12 @@ for c in $CHANGES; do
   <BUILD && TEST && LINT> || { echo "FAILED at $c"; exit 1; }
   jj abandon @ >/dev/null   # drop any build artefacts that got snapshotted
 done
+
+cd - >/dev/null
+jj workspace forget "$(basename "$CHECK")" && rm -rf "$CHECK"
 ```
 
-- `default@` is the main workspace's working copy, so the loop checks your stack from inside the `check` workspace. It lists only the line under that `@`: run it once per stack (with `@` at that stack's tip), or replace `default@` with the tip.
+- The loop lists only the line below `TIP`: run it once per stack, with `TIP` at that stack's tip.
 - Use the project's real commands (see its README / CLAUDE.md / CI config). Run the **full** suite, not only tests near the change.
 - A failure at commit N means N is broken, even if N+1 "fixes" it. Fix it in N: move the missing piece down with `jj squash --from <N+1> --into <N> <paths> -u`, or reorder. Then re-run the loop from N. If `--from` ends up empty, jj abandons that change; that's intended if it was only a fix-up.
 - In coordinator mode, the verifier runs this loop and the coder does not commit "fixes" on top.
