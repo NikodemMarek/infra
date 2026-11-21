@@ -20,7 +20,7 @@ resource "cloudflare_dns_record" "vpn_a" {
   zone_id = cloudflare_zone.nkmrk.id
   name    = "vpn.nkmrk.com"
   type    = "A"
-  content = "141.147.2.187"
+  content = oci_core_instance.triss.public_ip
   ttl     = 1
   proxied = false
 
