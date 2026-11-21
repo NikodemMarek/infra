@@ -25,6 +25,50 @@ pub struct Pr {
     landed: Vec<String>,
 }
 
+#[derive(Serialize)]
+pub struct Checks {
+    sha: Option<String>,
+    state: String,
+    url: Option<String>,
+    failed: Vec<FailedJob>,
+}
+
+#[derive(Serialize)]
+pub struct FailedJob {
+    name: String,
+    url: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct Comment {
+    id: u64,
+    kind: String,
+    author: String,
+    association: Option<String>,
+    created_at: String,
+    body: String,
+    url: Option<String>,
+    path: Option<String>,
+    line: Option<u64>,
+    review_state: Option<String>,
+}
+
+pub fn checks(target: &Target, number: u64) -> Result<Checks> {
+    let api = Api::connect(target)?;
+    match target.kind {
+        Kind::GitLab => gitlab::checks(&api, &target.project, number),
+        Kind::GitHub => github::checks(&api, &target.project, number),
+    }
+}
+
+pub fn comments(target: &Target, number: u64) -> Result<Vec<Comment>> {
+    let api = Api::connect(target)?;
+    match target.kind {
+        Kind::GitLab => gitlab::comments(&api, target, number),
+        Kind::GitHub => github::comments(&api, &target.project, number),
+    }
+}
+
 pub fn list(target: &Target, head: Option<&str>, limit: u8) -> Result<Vec<Pr>> {
     let api = Api::connect(target)?;
     let project = &target.project;
