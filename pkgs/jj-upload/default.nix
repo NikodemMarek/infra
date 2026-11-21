@@ -6,10 +6,10 @@
   git,
   jq,
   jw,
+  forge,
 }:
 # Used through the jj aliases `upload` (`jj util exec -- jj-upload`), `sync`
 # (`jj util exec -- jj-upload sync`) and `stack` (`jj util exec -- jj-upload stack`).
-# glab / gh are not bundled; they are the user's own and are looked up on PATH.
 rustPlatform.buildRustPackage {
   pname = "jj-upload";
   version = "0.1.0";
@@ -35,7 +35,7 @@ rustPlatform.buildRustPackage {
 
   postInstall = ''
     wrapProgram $out/bin/jj-upload \
-      --suffix PATH : ${lib.makeBinPath [jujutsu jw]}
+      --suffix PATH : ${lib.makeBinPath [jujutsu jw forge]}
   '';
 
   meta = {

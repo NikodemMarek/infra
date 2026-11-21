@@ -10,7 +10,7 @@ mod record;
 mod sync;
 
 use cmd::{Output, Result};
-use forge::{make_forge, stack_section, strip_stack, upload_media, Mr};
+use forge::{stack_section, strip_stack, upload_media, Forge, Mr};
 use jj::{choose_bookmark, default_prefix, repr, Commit, Jj, DEFAULT_REVSET, REMOTE_TITLE};
 use record::{record_mr, record_session};
 use sync::{pull_descriptions, stack_status, sync};
@@ -20,10 +20,8 @@ Config (all optional, set with `jj config set --user <key> <value>`):
   upload.remote          git remote to push to             (default: origin)
   upload.bookmark-prefix prefix of managed bookmarks       (default: <email user>/)
   upload.target-branch   branch the bottom MR targets      (default: trunk() bookmark)
-  upload.forge           gitlab | github                   (default: from host, else gitlab)
-  upload.host            forge host for API calls          (default: from remote URL)
-  upload.project         group/project (owner/repo) path   (default: from remote URL)
-  upload.draft           open new MRs as drafts            (default: false)";
+  upload.draft           open new MRs as drafts            (default: false)
+  forge.host / forge.project / forge.kind  forge target overrides, read by forge";
 
 const LONG_ABOUT: &str = "\
 Push a stack of jj changes as stacked merge/pull requests.
@@ -132,7 +130,7 @@ fn run_cli(cli: Cli) -> Result<i32> {
             }
             pull_descriptions(
                 &Jj::commits(DEFAULT_REVSET)?,
-                &*make_forge(&remote)?,
+                &Forge::new(&remote),
                 &prefix,
                 &Jj::remote_branches(&remote)?,
                 false,
@@ -204,10 +202,10 @@ fn upload(remote: &str, prefix: &str, revset: &str, draft: bool, dry_run: bool) 
         }
     }
 
-    let fg = make_forge(remote)?;
-    let term = fg.term();
+    let fg = Forge::new(remote);
+    let term = fg.term()?;
     let pushed = Jj::remote_branches(remote)?;
-    if pull_descriptions(&commits, &*fg, prefix, &pushed, dry_run)? {
+    if pull_descriptions(&commits, &fg, prefix, &pushed, dry_run)? {
         commits = Jj::commits(revset)?;
     }
 
@@ -328,12 +326,12 @@ fn upload(remote: &str, prefix: &str, revset: &str, draft: bool, dry_run: bool) 
                 continue;
             }
             if m.state == "closed" {
-                found = fg.set_state(m, true)?;
+                found = fg.reopen(m)?;
             }
         }
         let mr = match found {
             None => {
-                let body = upload_media(&e.body, &*fg)?;
+                let body = upload_media(&e.body, &fg)?;
                 let mr = fg.create(&e.branch, &e.target, &e.title, &body, draft)?;
                 eprintln!("  created {}  {}", mr.reference, mr.url);
                 record_session(&e.branch);
@@ -344,7 +342,7 @@ fn upload(remote: &str, prefix: &str, revset: &str, draft: bool, dry_run: bool) 
                 let mr = fg.update(
                     &m,
                     (m.title != e.title).then_some(e.title.as_str()),
-                    (m.target != e.target).then_some(e.target.as_str()),
+                    (m.base != e.target).then_some(e.target.as_str()),
                     None,
                 )?;
                 eprintln!("  updated {}  {}", mr.reference, mr.url);
@@ -368,9 +366,9 @@ fn upload(remote: &str, prefix: &str, revset: &str, draft: bool, dry_run: bool) 
         } else {
             String::new()
         };
-        let desc = format!("{}\n\n{section}", strip_stack(&mr.description));
+        let desc = format!("{}\n\n{section}", strip_stack(&mr.body));
         let desc = desc.trim();
-        if mr.description.trim() != desc {
+        if mr.body.trim() != desc {
             fg.update(mr, None, None, Some(desc))?;
         }
     }
@@ -379,7 +377,7 @@ fn upload(remote: &str, prefix: &str, revset: &str, draft: bool, dry_run: bool) 
         for b in &stale {
             if let Some(mr) = fg.find(b)? {
                 if mr.state == "open" {
-                    fg.set_state(&mr, false)?;
+                    fg.close(&mr)?;
                     eprintln!("  closed {} ({b})", mr.reference);
                 }
             }

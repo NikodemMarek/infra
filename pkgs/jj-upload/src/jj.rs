@@ -108,17 +108,6 @@ impl Jj {
         Ok(())
     }
 
-    pub fn remote_url(remote: &str) -> Result<Option<String>> {
-        let mut url = None;
-        for line in jj(&["git", "remote", "list"])?.lines() {
-            let (name, u) = line.split_once(' ').unwrap_or((line, ""));
-            if name == remote {
-                url = Some(u.trim().to_string());
-            }
-        }
-        Ok(url.filter(|u| !u.is_empty()))
-    }
-
     pub fn push(remote: &str, branches: &[&str]) -> Result<Output> {
         let exact: Vec<String> = branches.iter().map(|b| format!("exact:{b}")).collect();
         let mut args = vec!["git", "push", "--remote", remote];
@@ -361,31 +350,6 @@ impl Jj {
             e.to_string()
         }
     }
-}
-
-pub fn parse_remote_url(url: &str) -> Result<(String, String)> {
-    let caps = re(r"^(?:ssh|https?|git)://(?:[^@/]+@)?([^/:]+)(?::\d+)?/(.+?)(?:\.git)?/?$")
-        .captures(url)
-        .or_else(|| re(r"^(?:[^@/]+@)?([^/:]+):(.+?)(?:\.git)?/?$").captures(url))
-        .ok_or_else(|| {
-            format!(
-                "cannot parse remote URL {}; set upload.host and upload.project",
-                repr(url)
-            )
-        })?;
-    Ok((caps[1].to_string(), caps[2].to_string()))
-}
-
-pub fn forge_target(remote: &str) -> Result<(String, String)> {
-    let host = Jj::config("upload.host")?;
-    let project = Jj::config("upload.project")?;
-    if let (Some(host), Some(project)) = (&host, &project) {
-        return Ok((host.clone(), project.clone()));
-    }
-    let url =
-        Jj::remote_url(remote)?.ok_or_else(|| format!("remote {} not found", repr(remote)))?;
-    let (h, p) = parse_remote_url(&url)?;
-    Ok((host.unwrap_or(h), project.unwrap_or(p)))
 }
 
 pub fn slugify(text: &str, limit: usize) -> String {
