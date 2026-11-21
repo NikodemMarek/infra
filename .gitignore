@@ -24,4 +24,5 @@ kubeconfig.yaml
 tofu/.terraform/
 tofu/.terraform.lock.hcl
 tofu/generated.tf
-tofu/*.tfplan
+tofu/*tfplan*
+tofu/*.tfstate*
