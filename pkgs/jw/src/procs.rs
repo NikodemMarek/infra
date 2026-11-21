@@ -46,10 +46,6 @@ fn stat_fields(proc: &Path, pid: u32) -> Option<Vec<String>> {
     )
 }
 
-fn parent_of(pid: u32) -> Option<u32> {
-    stat_fields(Path::new("/proc"), pid)?.get(1)?.parse().ok()
-}
-
 fn parse_claude(path: &Path, proc: &Path) -> Option<Claude> {
     let entry: Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
     let pid = match entry.get("pid")? {
@@ -65,11 +61,7 @@ fn parse_claude(path: &Path, proc: &Path) -> Option<Claude> {
     let dir = proc.join(pid.to_string());
     let cwd = fs::read_link(dir.join("cwd")).ok()?;
     let environ = fs::read(dir.join("environ")).ok()?;
-    let agent = environ
-        .split(|b| *b == 0)
-        .find_map(|var| var.strip_prefix(b"AGENT_SESSION="))
-        .map(|name| String::from_utf8_lossy(name).into_owned())
-        .filter(|name| valid_name(name));
+    let agent = agent_var(&environ);
     let text = |key: &str| entry.get(key).and_then(Value::as_str).map(str::to_string);
     Some(Claude {
         pid,
@@ -110,10 +102,21 @@ pub fn claude_sessions(d: &str) -> Vec<Claude> {
         .collect()
 }
 
-/// pids and all their descendant processes.
-pub fn descendants(pids: &[u32]) -> HashSet<u32> {
+/// The value of the first AGENT_SESSION entry of a process environment, if it is a valid session name.
+fn agent_var(environ: &[u8]) -> Option<String> {
+    environ
+        .split(|b| *b == 0)
+        .find_map(|var| var.strip_prefix(b"AGENT_SESSION="))
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+        .filter(|name| valid_name(name))
+}
+
+/// The processes of the Claudes: each one, its descendants and, for an agent session, its ancestors that carry the
+/// same AGENT_SESSION (the launcher wrappers of the session, not the shpool daemon).
+pub fn session_procs(claudes: &[Claude], proc: &Path) -> HashSet<u32> {
+    let mut parents: HashMap<u32, u32> = HashMap::new();
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
-    for entry in fs::read_dir("/proc").into_iter().flatten().flatten() {
+    for entry in fs::read_dir(proc).into_iter().flatten().flatten() {
         let Some(pid) = entry
             .file_name()
             .to_str()
@@ -121,15 +124,37 @@ pub fn descendants(pids: &[u32]) -> HashSet<u32> {
         else {
             continue;
         };
-        if let Some(ppid) = parent_of(pid) {
+        let ppid = stat_fields(proc, pid).and_then(|f| f.get(1)?.parse::<u32>().ok());
+        if let Some(ppid) = ppid {
+            parents.insert(pid, ppid);
             children.entry(ppid).or_default().push(pid);
         }
     }
     let mut found = HashSet::new();
-    let mut todo = pids.to_vec();
-    while let Some(pid) = todo.pop() {
-        if found.insert(pid) {
-            todo.extend(children.get(&pid).into_iter().flatten());
+    for c in claudes {
+        let mut tree = HashSet::new();
+        let mut todo = vec![c.pid];
+        while let Some(pid) = todo.pop() {
+            if tree.insert(pid) {
+                todo.extend(children.get(&pid).into_iter().flatten());
+            }
+        }
+        found.extend(tree);
+        let Some(agent) = &c.agent else {
+            continue;
+        };
+        let mut walked = HashSet::from([c.pid]);
+        let mut next = parents.get(&c.pid).copied();
+        while let Some(pid) = next {
+            if pid == 0 || !walked.insert(pid) {
+                break;
+            }
+            let environ = fs::read(proc.join(pid.to_string()).join("environ")).ok();
+            if environ.as_deref().and_then(agent_var).as_ref() != Some(agent) {
+                break;
+            }
+            found.insert(pid);
+            next = parents.get(&pid).copied();
         }
     }
     found
