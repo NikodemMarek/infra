@@ -289,13 +289,19 @@ For shared volumes, or when a Velero restore fails:
    On `regis`, `sudo umount /mnt/restore` afterwards.
 6. `flux resume kustomization flux-system -n flux-system`, check the app, then delete `<aside>`.
 
-#### Immich database
+#### Postgres databases
 
-The Immich database is the CloudNativePG cluster `immich-postgres` (`clusters/dijkstra/immich/postgres.yaml`). Live PGDATA is not a consistent backup: a pre-hook writes `immich.dump` (`pg_dump -Fc`) to the PVC root before Velero copies it. Restore only from that dump, never with `velero restore` of the `immich` namespace (it would recreate operator-owned objects).
+Three CloudNativePG clusters hold app databases; live PGDATA is not a consistent backup, so a pre-hook writes a `pg_dump -Fc` to the PVC root before Velero copies it. Restore only from that dump, never with `velero restore` of the namespace (it would recreate operator-owned objects).
 
-##### Restore the database
+| Cluster | Namespace | Database / owner | Dump | App |
+|---|---|---|---|---|
+| `immich-postgres` | `immich` | `immich` | `immich.dump` | `deploy/immich` |
+| `audiomuse-postgres` | `navidrome` | `audiomuse` | `audiomuse.dump` | AudioMuse-AI (Helm release) |
+| `matrix-postgres` | `matrix` | `synapse` | `synapse.dump` | Synapse |
 
-Run from the workstation. `<pod>` is the primary: `kubectl -n immich get cluster immich-postgres -o jsonpath='{.status.currentPrimary}'` (usually `immich-postgres-1`).
+##### Restore a database
+
+Shown for Immich; substitute the row above for another database. Run from the workstation. `<pod>` is the primary: `kubectl -n immich get cluster immich-postgres -o jsonpath='{.status.currentPrimary}'` (usually `immich-postgres-1`).
 
 1. Make sure the Cluster from git is healthy (`kubectl -n immich get cluster immich-postgres`); if missing, let Flux recreate it (a hand-written bootstrap must set `database: immich` and `owner: immich`, else CNPG creates an empty `app` database).
 2. Suspend Flux and stop Immich:
@@ -321,9 +327,8 @@ Run from the workstation. `<pod>` is the primary: `kubectl -n immich get cluster
    Without `--create`, `pg_restore` drops database-level settings such as `vchordrq.probes`; the second `pg_restore` replays them.
 6. `flux resume kustomization flux-system -n flux-system`, check Immich, then delete `./immich-pgdata`.
 
-`audiomuse-postgres` (namespace `navidrome`, database and owner `audiomuse`, dump `audiomuse.dump`) and `matrix-postgres` (namespace `matrix`, database and owner `synapse`, dump `synapse.dump`) are backed up and restored the same way: substitute cluster, namespace, database, owner, dump name, and the app's deployments (for AudioMuse-AI see its Helm release) for `deploy/immich`.
 
 ##### Break-glass
 
 - Operator down: the CNPG webhooks use `failurePolicy: Fail` and everything is one `flux-system` Kustomization, so every apply fails. Suspend it (`flux suspend kustomization flux-system -n flux-system`), roll the operator back with `helm -n cnpg-system rollback cloudnative-pg` (or fix the release), then resume.
-- PVC full: raise `spec.storage.size` in `immich/postgres.yaml` (openebs-zfs allows expansion).
+- PVC full: raise `spec.storage.size` in the cluster's `postgres.yaml` (openebs-zfs allows expansion).
