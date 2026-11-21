@@ -61,11 +61,13 @@ spec:
               git config --global user.email "git-sync@omniverse.local"
               git config --global user.name "Git Sync"
               git config --global core.excludesFile /etc/omniverse/gitignore
+              git config --global credential.helper '!f() { echo "username=${GIT_USER}"; echo "password=${GIT_TOKEN}"; }; f'
 
               if [ ! -d ".git" ]; then
                 echo "Cloning the repository..."
-                git clone https://${GIT_USER}:${GIT_TOKEN}@github.com/${GIT_USER}/omniverse.git .
+                git clone https://github.com/${GIT_USER}/omniverse.git .
               fi
+              git remote set-url origin https://github.com/${GIT_USER}/omniverse.git
 
               # Files >= 90 MiB are skipped; find -size rounds up to whole units, so compare in bytes.
               export SIZE_LIMIT="94371840c"
@@ -82,7 +84,7 @@ spec:
                 if ! git diff --cached --quiet; then
                   echo "Eligible changes detected. Committing and pushing..."
                   git commit -m "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-                  git push https://${GIT_USER}:${GIT_TOKEN}@github.com/${GIT_USER}/omniverse.git main
+                  git push origin main
                 else
                   echo "No eligible changes under ${SIZE_LIMIT} to push."
                 fi
