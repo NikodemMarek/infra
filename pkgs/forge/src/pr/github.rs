@@ -65,6 +65,10 @@ pub fn list_path(project: &str, head: Option<&str>, limit: u8) -> String {
     }
 }
 
+pub fn create_path(project: &str) -> String {
+    format!("repos/{project}/pulls")
+}
+
 pub fn view_path(project: &str, number: u64) -> String {
     format!("repos/{project}/pulls/{number}")
 }
