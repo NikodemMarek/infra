@@ -15,7 +15,6 @@ spec:
       - kube-system
       - velero
       - flux-system
-    # secrets come from Bitwarden via cluster-secrets-build
     excludedResources:
       - secrets
     resourcePolicy:
