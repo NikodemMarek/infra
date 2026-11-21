@@ -3,12 +3,123 @@
   lib,
   pkgs,
   ...
-}: {
-  secrets.garage_rpc_secret = {
+}: let
+  owned = {
     owner = "garage";
     group = "garage";
   };
-  secrets.garage_env.profile = "dijkstra-velero";
+
+  buckets = {
+    velero.keys.velero = ["read" "write"];
+    nix-cache = {
+      website = true;
+      quota = "200GiB";
+      keys.ci-nix-cache = ["read" "write"];
+    };
+  };
+
+  used = lib.unique (lib.concatMap (b: lib.attrNames (b.keys or {})) (lib.attrValues buckets));
+
+  invalid = lib.concatMap (b:
+    lib.subtractLists ["website" "quota" "keys"] (lib.attrNames b)
+    ++ lib.subtractLists ["read" "write" "owner"] (lib.concatLists (lib.attrValues (b.keys or {}))))
+  (lib.attrValues buckets);
+
+  grants = lib.concatLists (lib.mapAttrsToList (bucket: b:
+    lib.mapAttrsToList (key: perms: "[${lib.escapeShellArg "${bucket}/${key}"}]=${lib.escapeShellArg (lib.concatStringsSep " " perms)}") (b.keys or {}))
+  buckets);
+
+  bucketCall = name: b: let
+    bucket = lib.escapeShellArg name;
+    website =
+      if b.website or false
+      then "allow"
+      else "deny";
+  in ''
+    garage bucket info ${bucket} > /dev/null 2>&1 || garage bucket create ${bucket} > /dev/null
+    garage bucket website --${website} ${bucket} > /dev/null
+    garage bucket set-quotas --max-size ${lib.escapeShellArg (b.quota or "none")} ${bucket} > /dev/null
+  '';
+
+  garage-provision = pkgs.writeShellApplication {
+    name = "garage-provision";
+    runtimeInputs = [config.services.garage.package];
+    text = ''
+      keyfile=${config.secrets.garage_keys.path}
+      buckets=(${lib.escapeShellArgs (lib.attrNames buckets)})
+      declare -A used=(${lib.concatMapStringsSep " " (key: "[${lib.escapeShellArg key}]=1") used})
+      declare -A perms=(${lib.concatStringsSep " " grants})
+      declare -A ids secrets seen
+      line=0
+
+      while read -r name id secret || [ -n "$name" ]; do
+        line=$((line + 1))
+        if [ -z "$name" ]; then continue; fi
+        if [[ ! $id =~ ^GK[0-9a-f]{24}$ || ! $secret =~ ^[0-9a-f]{64}$ ]]; then
+          echo "line $line of $keyfile is invalid" >&2
+          exit 1
+        fi
+        if [ -n "''${ids[$name]:-}" ] || [ -n "''${seen[$id]:-}" ]; then
+          echo "line $line of $keyfile is a duplicate" >&2
+          exit 1
+        fi
+        ids[$name]=$id
+        secrets[$name]=$secret
+        seen[$id]=1
+      done < "$keyfile"
+
+      for name in "''${!used[@]}"; do
+        if [ -z "''${ids[$name]:-}" ]; then
+          echo "key $name is not in $keyfile" >&2
+          exit 1
+        fi
+      done
+
+      tries=0
+      until garage bucket list > /dev/null 2>&1 || [ $((tries += 1)) -ge 60 ]; do sleep 1; done
+      garage bucket list > /dev/null
+
+      ${lib.concatStrings (lib.mapAttrsToList bucketCall buckets)}
+      for name in "''${!used[@]}"; do
+        id=''${ids[$name]}
+        if ! garage key info "$id" > /dev/null 2>&1; then
+          garage key import --yes -n "$name" "$id" "''${secrets[$name]}" > /dev/null
+          echo "imported key $name"
+        fi
+        for bucket in "''${buckets[@]}"; do
+          allow=()
+          deny=()
+          for perm in read write owner; do
+            case " ''${perms[$bucket/$name]:-} " in
+              *" $perm "*) allow+=("--$perm") ;;
+              *) deny+=("--$perm") ;;
+            esac
+          done
+          if [ "''${#allow[@]}" -gt 0 ]; then garage bucket allow "''${allow[@]}" "$bucket" --key "$id" > /dev/null; fi
+          if [ "''${#deny[@]}" -gt 0 ]; then garage bucket deny "''${deny[@]}" "$bucket" --key "$id" > /dev/null; fi
+        done
+      done
+
+      for name in "''${!ids[@]}"; do
+        if [ -n "''${used[$name]:-}" ]; then continue; fi
+        id=''${ids[$name]}
+        if garage key info "$id" > /dev/null 2>&1; then
+          garage key delete --yes "$id" > /dev/null
+          echo "deleted key $name"
+        fi
+      done
+    '';
+  };
+in {
+  assertions = [
+    {
+      assertion = invalid == [];
+      message = "garage buckets: unknown attributes or permissions: ${toString invalid}";
+    }
+  ];
+
+  secrets.garage_rpc_secret = owned;
+  secrets.garage_keys = owned // {restartUnits = ["garage-provision.service"];};
 
   users.users.garage = {
     isSystemUser = true;
@@ -21,8 +132,6 @@
   services.garage = {
     enable = true;
     package = pkgs.garage_2;
-    environmentFile = config.secrets.garage_env.path;
-    extraEnvironment.GARAGE_DEFAULT_BUCKET = "velero";
     settings = {
       metadata_dir = "/mnt/garage/meta";
       data_dir = "/mnt/garage/data";
@@ -57,9 +166,21 @@
       DynamicUser = false;
       User = "garage";
       Group = "garage";
-      # Creates the single-node layout, the bucket velero and Velero's key
-      # (from garage_env) on first start
-      ExecStart = lib.mkForce "${config.services.garage.package}/bin/garage server --single-node --default-bucket";
+      ExecStart = lib.mkForce "${config.services.garage.package}/bin/garage server --single-node";
+    };
+  };
+
+  systemd.services.garage-provision = {
+    wantedBy = ["multi-user.target"];
+    requires = ["garage.service"];
+    after = ["garage.service"];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      TimeoutStartSec = "2min";
+      User = "garage";
+      Group = "garage";
+      ExecStart = lib.getExe garage-provision;
     };
   };
 

@@ -7,7 +7,7 @@ Nix flake monorepo: NixOS hosts, their packages, and the manifests of the k3s cl
 ```
 flake.nix              inputs, nixosConfigurations, deploy-rs nodes, packages
 devenv.nix             dev shell: tools and scripts
-secretspec.toml        inventory of secrets: a profile per host, plus dijkstra, dijkstra-velero, tailscale, ci, tofu
+secretspec.toml        inventory of secrets: a profile per host, plus dijkstra, tailscale, ci, tofu
 .sops.yaml             age recipients, one per host
 host/<name>/           per-host config, hardware, ssh_host_ed25519_key.pub
 host/features/         default.nix, global/ (always on), optional/ (k3s, tailscale, docker, wolf, ...), disko/
@@ -25,13 +25,15 @@ tofu/                  OpenTofu: Cloudflare, Tailscale, Oracle Cloud
 | `yenn` | x86_64 | laptop (Hyprland), LUKS + btrfs; `host-switch`, not a deploy node |
 | `geralt` | x86_64 | headless game streaming (Wolf + Moonlight), docker, libvirt; usually off |
 | `roach` | x86_64 | k3s agent |
-| `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool`, data pool `tank`), Garage (S3 for Velero) |
+| `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool`, data pool `tank`), Garage (S3: Velero, nix cache) |
 | `triss` | aarch64 | k3s server, Oracle Cloud instance (qemu guest) |
 | `alp` | x86_64 | installer ISO (`mkiso`), not in `nixosConfigurations` |
 
 `geralt`, `regis`, `roach` and `triss` are deploy-rs nodes: ssh as `maintenance`, passwordless sudo only for deploy-rs activation. Break-glass for `triss`: `ssh maintenance@141.147.2.187`; there `k3s.yaml` is root-only (`sudo kubectl`).
 
 `geralt` runs [Wolf](https://github.com/games-on-whales/wolf) (`host/features/optional/wolf.nix`, state `/etc/wolf`; the pairing PIN URL is in `docker logs -f wolf`). Wake it with `wake-geralt` on `yenn` (`.link` changes apply only when the NIC appears: reboot once after deploying them). It suspends after 30 min without a stream or SSH login (`host/geralt/idle-suspend.nix`, `journalctl -u idle-suspend`); pause: `sudo systemd-run --unit=stay-awake systemd-inhibit --what=sleep sleep 4h` (cancel: `sudo systemctl stop stay-awake`).
+
+`regis` runs Garage (`host/regis/garage.nix`). Buckets are declared in `buckets` there (website, quota, and for each key exactly which of `read`, `write`, `owner` it gets); keys are the lines `<name> <id> <secret>` of `regis/GARAGE_KEYS` in the project `hosts`. `garage-provision` (`journalctl -u garage-provision`) applies both at boot and on each deploy that changes `buckets` or `GARAGE_KEYS`; if it failed (e.g. Garage came up late), `sudo systemctl restart garage-provision`. It rejects a key file with a malformed or duplicate line before changing anything, creates missing buckets, imports missing keys, sets exact grants between declared buckets and keys, and deletes keys of `GARAGE_KEYS` that no bucket uses (a deleted id can't be imported again). Buckets and keys made by hand (`artifacts`) are left alone, and buckets are never deleted: to remove one, drop it from `buckets`, deploy, empty it and `garage bucket delete --yes <bucket>`. To add a bucket, add a line to `regis/GARAGE_KEYS` (id `printf 'GK%s\n' "$(openssl rand -hex 12)"`, secret `openssl rand -hex 32`), add the bucket and deploy `regis`. To remove a key, drop it from `buckets` and deploy, then remove its line. To rotate a key, add a new line under a new name, point the bucket at it, deploy, switch the consumer, then drop the old name from `buckets` (the next deploy deletes the old key) and later its line. Consumers keep their own copy: Velero in the `cluster` items `velero/access_key_id` and `velero/secret_access_key`, CI in the GitHub environment `nix-cache`.
 
 ### geralt hardware
 
@@ -111,7 +113,7 @@ Modules never talk to sops directly:
 - `secretspec.toml` is the inventory: the profile named after the host lists its secrets as uppercased names; evaluation fails if modules and profile diverge (names match `^[a-z0-9_]+$`). `ci` and `tofu` are used by no host.
 - Values live in the project `hosts`, named `<profile>/<KEY>` (case-insensitive). `tofu` has its own project with plain key names.
 
-`secrets-build <outdir> <host...>` keeps exactly the declared secrets, checks the ssh private keys against the `.pub` files and the host's age key against `.sops.yaml`, hashes `USERS_*_PASSWORD`, and writes `<outdir>/<host>.yaml` encrypted for the host. Keys marked `composed` in `secretspec.toml` (e.g. `GARAGE_ENV`) are assembled from other keys. The `secrets` flake input is `path:./secrets-stub`; the scripts pass `--override-input secrets path:<outdir>`. By hand:
+`secrets-build <outdir> <host...>` keeps exactly the declared secrets, checks the ssh private keys against the `.pub` files and the host's age key against `.sops.yaml`, hashes `USERS_*_PASSWORD`, and writes `<outdir>/<host>.yaml` encrypted for the host. Keys marked `composed` in `secretspec.toml` are assembled from other keys. The `secrets` flake input is `path:./secrets-stub`; the scripts pass `--override-input secrets path:<outdir>`. By hand:
 
 ```sh
 secrets-build /tmp/s geralt
@@ -240,18 +242,10 @@ CI shares a binary cache in the Garage bucket `nix-cache` on `regis`: `http://ni
   nix run nixpkgs#awscli2 -- s3 rm --recursive s3://nix-cache --endpoint-url http://100.100.215.91:3900 --region garage
   garage key delete --yes wipe
   ```
-  To recreate it, on `regis` (a new `ci-nix-cache` key goes into the `nix-cache` environment and Bitwarden):
-  ```sh
-  garage bucket create nix-cache
-  garage bucket website --allow nix-cache
-  garage bucket set-quotas nix-cache --max-size 200GiB
-  garage key create ci-nix-cache
-  garage bucket allow --read --write nix-cache --key ci-nix-cache
-  ```
 
 ### Backups
 
-Velero backs up the cluster daily at 18:00 Europe/Warsaw (schedule `daily-openebs`), keeping each backup 30 days, to Garage on `regis` (`host/regis/garage.nix`): a single-node S3 store on `tank/garage`, bucket `velero` at `http://100.100.215.91:3900`, reachable only over `tailscale0` and `cni0`. Velero and Garage share one key pair: `dijkstra-velero/ACCESS_KEY_ID` and `SECRET_ACCESS_KEY` in the project `hosts` (Garage), copied as `velero/access_key_id` and `velero/secret_access_key` in the project `cluster` (rotate both: create the new Garage key first, then `garage key delete` the old one).
+Velero backs up the cluster daily at 18:00 Europe/Warsaw (schedule `daily-openebs`), keeping each backup 30 days, to Garage on `regis` (`host/regis/garage.nix`): a single-node S3 store on `tank/garage`, bucket `velero` at `http://100.100.215.91:3900`, reachable only over `tailscale0` and `cni0`. Velero's key is the line `velero` of `regis/GARAGE_KEYS` in the project `hosts`, copied as `velero/access_key_id` and `velero/secret_access_key` in the project `cluster` (rotate both).
 
 - Backed up: every namespace except `kube-system`, `velero` and `flux-system`, without Secrets (they come from Bitwarden), and pod volumes through kopia, except `local-storage` (media on tank), emptyDir and PVCs labelled `backup: skip` (`velero/volume-policy.yaml`).
 - The beets library (`library.db`) is on its own PVC `beets-data`: `velero restore` that PVC, after deleting a leftover `library.db-journal` next to it (sqlite would roll it back onto the restored file).
