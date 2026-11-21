@@ -1,0 +1,8 @@
+#!/bin/sh
+echo "$* CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR" >> "$FAKE_LOG_DIR/claude-jj-workspace.log"
+[ "$1" = drop ] || exit 0
+if [ -e "$2/KEEP" ]; then
+	cat "$2/KEEP"
+else
+	rm -rf "$2"
+fi
