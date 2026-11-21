@@ -56,6 +56,10 @@
     "Bash(glab label list:*)"
     "Bash(glab label get:*)"
 
+    "Bash(forge repo:*)"
+    "Bash(forge pr list:*)"
+    "Bash(forge pr view:*)"
+
     # Queueing notes for the knowledge curator.
     "Bash(knowledge submit:*)"
 
