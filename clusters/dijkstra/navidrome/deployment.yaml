@@ -28,7 +28,7 @@ spec:
             claimName: navidrome-music-pvc
       initContainers:
         - name: get-plugins
-          image: busybox:latest
+          image: busybox:1.38.0
           command:
             - /bin/sh
             - -c
@@ -47,7 +47,7 @@ spec:
               cpu: "200m"
       containers:
         - name: navidrome
-          image: deluan/navidrome:latest
+          image: deluan/navidrome:0.64.2
           ports:
             - containerPort: 4533
           env:

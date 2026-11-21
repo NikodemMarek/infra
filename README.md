@@ -24,6 +24,7 @@ pkgs/                  wrapped packages (package + bundled config) and own tools
 overlays/              exposes pkgs/ (the wrapped packages, shadowing the nixpkgs ones, and the tools), flake inputs as packages, deploy-rs
 clusters/dijkstra/     Kubernetes manifests, reconciled by Flux
 tofu/                  OpenTofu config of the external infrastructure: Cloudflare, Tailscale, Oracle Cloud
+.github/               CI workflows; renovate.json: update PRs every Saturday for images, charts, Actions, tofu providers and flake.lock, merged by hand
 ```
 
 ## Hosts

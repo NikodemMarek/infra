@@ -23,7 +23,7 @@ spec:
             claimName: omniverse-pvc
       containers:
         - name: webdav
-          image: rclone/rclone:latest
+          image: rclone/rclone:1.76.0
           args:
             - serve
             - webdav

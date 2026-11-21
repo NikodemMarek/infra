@@ -33,7 +33,7 @@ spec:
             claimName: beets-data
       containers:
         - name: beets
-          image: lscr.io/linuxserver/beets:latest
+          image: lscr.io/linuxserver/beets:2.14.1-ls358
           command: ["python3", "/config/server.py"]
           securityContext:
             runAsUser: 1000
