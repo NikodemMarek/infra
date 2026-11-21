@@ -85,7 +85,7 @@
 
       rm -f "$stamp"
       echo "idle for 30 min, suspending"
-      systemctl suspend-then-hibernate || systemctl suspend
+      systemctl suspend
     '';
   };
 in {
