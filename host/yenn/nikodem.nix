@@ -38,6 +38,7 @@ in {
       pkgs.jj-upload
       (pkgs.gh.override {dataDir = "${generated}/gh";})
       (pkgs.glab.override {dataDir = "${generated}/glab";})
+      pkgs.gcli
       (pkgs.jw.override {projectsRoot = projects;})
       (pkgs.bitwarden-cli.override {dataDir = bitwarden;})
       pkgs.git
