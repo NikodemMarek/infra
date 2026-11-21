@@ -1,5 +1,6 @@
 {
   imports = [
+    ../features/optional/iwd.nix
     ../features/optional/tailscale.nix
     ../features/optional/zerotier.nix
     ./wireguard.nix
@@ -39,23 +40,8 @@
   };
   boot.initrd.systemd.network.wait-online.enable = false;
 
-  networking.wireless.iwd = {
-    enable = true;
-    settings = {
-      General = {
-        AddressRandomization = "network";
-        AddressRandomizationRange = "full";
-      };
-      Network.EnableIPv6 = true;
-      Settings.AutoConnect = true;
-    };
+  networking.wireless.iwd.settings.General = {
+    AddressRandomization = "network";
+    AddressRandomizationRange = "full";
   };
-
-  persist.generated.directories = [
-    {
-      directory = "/var/lib/iwd";
-      user = "root";
-      group = "root";
-    }
-  ];
 }

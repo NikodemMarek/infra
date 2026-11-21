@@ -5,6 +5,7 @@
 
     ../features
     ../features/optional/docker.nix
+    ../features/optional/iwd.nix
     ../features/optional/systemd-boot.nix
     ../features/optional/tailscale-server.nix
     ../features/optional/libvirt.nix
@@ -76,19 +77,4 @@
     deviceService = "dev-nvme0n1p2.device";
     rootPath = "/dev/nvme0n1p2";
   };
-
-  networking.wireless.iwd = {
-    enable = true;
-    settings = {
-      Network.EnableIPv6 = true;
-      Settings.AutoConnect = true;
-    };
-  };
-  persist.generated.directories = [
-    {
-      directory = "/var/lib/iwd";
-      user = "root";
-      group = "root";
-    }
-  ];
 }
