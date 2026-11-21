@@ -6,8 +6,7 @@
 #   Consumers read only `config.secrets.<name>.path`. Modules that need the
 #   same secret must agree on its options, the module system reports clashes.
 # - secretspec.toml (repo root) is the inventory: the profile named after the
-#   host lists every secret it has, as uppercased names. Keys that only feed a
-#   `composed` secret are inputs and are not part of it. A secret that lives in
+#   host lists every secret it has, as uppercased names. A secret that lives in
 #   another profile (e.g. a cluster-wide one) names it with `profile`; it must
 #   be in that profile, which in turn is not required to be fully used.
 #
@@ -76,16 +75,10 @@
     };
   });
 
-  # The inventory of a profile: its keys in secretspec.toml, minus the ones that
-  # only feed a `composed` secret (they are never written to the sops file).
+  # The inventory of a profile: its keys in secretspec.toml
   host = config.networking.hostName;
   inherit ((builtins.fromTOML (builtins.readFile ../../secretspec.toml))) profiles;
-  keysOf = name: let
-    profile = profiles.${name} or {};
-    composed = lib.mapAttrsToList (_: spec: spec.composed or "") profile;
-    isInput = key: lib.any (lib.hasInfix "\${${key}}") composed;
-  in
-    lib.filter (key: !isInput key) (lib.attrNames profile);
+  keysOf = name: lib.attrNames (profiles.${name} or {});
   keys = keysOf host;
   inventory = map lib.toLower keys;
 

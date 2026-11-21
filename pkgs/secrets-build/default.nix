@@ -39,7 +39,7 @@ writeShellApplication {
       profiles=$(printf '%s' "$profile_of" | jq -r '[.[]] | unique[]')
       for p in $profiles; do
         names=$(printf '%s' "$profile_of" | jq -c --arg p "$p" '[to_entries[] | select(.value == $p) | .key]')
-        part=$(printf '%s' "$hosts" | jq --arg p "$p" --argjson names "$names" --argjson composed "$composed" -f ${./profile-secrets.jq} | jq --argjson names "$names" -f ${./select-secrets.jq}) || {
+        part=$(printf '%s' "$hosts" | jq --arg p "$p" --argjson names "$names" -f ${./select-secrets.jq}) || {
           echo "$1: profile $p" >&2
           exit 1
         }
@@ -107,9 +107,6 @@ writeShellApplication {
 
     # fetched once for all hosts
     hosts=$(bws-project hosts)
-    # {"<profile>": {"<KEY>": "<template>"}} of the composed secrets
-    composed=$(nix eval --impure --json --expr '(builtins.fromTOML (builtins.readFile ./secretspec.toml)).profiles' \
-      | jq 'map_values(with_entries(select(.value.composed) | .value |= .composed))')
 
     # plaintext only ever lives in memory and pipes, never touches the disk
     for h in "$@"; do
