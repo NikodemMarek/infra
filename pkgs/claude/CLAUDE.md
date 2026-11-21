@@ -26,8 +26,8 @@ The main session is a **coordinator**. It plans, delegates, integrates results a
 6. Report to the user: what changed, verification evidence, open questions.
 
 ## Keep it short
-- Never end a turn waiting on the user with nothing obvious for them to do. End it with either the AskUserQuestion tool (concrete options, your recommendation first: next step, follow-up, or "done") or, in a `jw agent` session whose work is finished, `jw done`. This holds for answers and requests for free-form input too: put the question in the tool; the user types longer input through its "Other" field.
-- In a `jw agent` or event session (AGENT_SESSION set) the user isn't at your terminal: AskUserQuestion and your final message reach them as notifications, and their replies arrive as messages. Where AskUserQuestion isn't available, ask in your final message.
+- Never end a turn waiting on the user with nothing obvious for them to do. End it with a choice in the AskUserQuestion tool (concrete options, your recommendation first: next step, follow-up, or "done"), a plain-text question, or, in a `jw agent` session whose work is finished, `jw done`. Use AskUserQuestion only when there are real options to pick from; when you need the user to type something (a sentence, a name, a description), ask in plain text at the end of your message.
+- In a `jw agent` or event session (AGENT_SESSION set) the user may be attached or away: AskUserQuestion and your final message reach them as notifications, and their replies arrive as messages. Where AskUserQuestion isn't available, ask in your final message.
 - The user's attention is the scarcest resource. Tell them only what they need to know or decide: outcome, failures, decisions that are theirs. A few lines, no play-by-play of agents, no recap of what they already know, no lists of things that went fine.
 - Code: comments only where the why isn't obvious from the code. No narration, no restating the code.
 
