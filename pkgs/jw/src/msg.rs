@@ -4,7 +4,7 @@ use std::os::unix::net::UnixStream;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::procs::live_claudes;
+use crate::procs::{live_claudes, Claude};
 use crate::session::in_event_session;
 use crate::workspace::{basename, dirname, has_agents_suffix};
 use crate::MsgArgs;
@@ -12,9 +12,9 @@ use crate::MsgArgs;
 const MSG_WAIT: Duration = Duration::from_secs(10);
 const MSG_MAX: usize = 8000;
 
-/// Who a message is from: the shpool session, else the workspace, else the user at a terminal.
+/// Who a message is from: the agent session, else the workspace, else the user at a terminal.
 fn sender() -> String {
-    if let Some(name) = env::var("SHPOOL_SESSION_NAME")
+    if let Some(name) = env::var("AGENT_SESSION")
         .ok()
         .filter(|name| !name.is_empty())
     {
@@ -31,25 +31,25 @@ fn sender() -> String {
     }
 }
 
-/// (pid, session name, socket path) of the live Claude sessions called name, working in a directory of that name or in
-/// that shpool session, that listen for messages.
-fn message_sessions(name: &str) -> Vec<(u32, String, String)> {
-    live_claudes()
+/// (pid, session label, socket path) of the Claude sessions called name, working in a directory of that name or being
+/// that agent session, that listen for messages.
+fn message_sessions(claudes: Vec<Claude>, name: &str) -> Vec<(u32, String, String)> {
+    claudes
         .into_iter()
         .filter_map(|c| {
             let socket = c.messaging_socket?;
-            let matches = [
-                c.name.as_deref(),
-                Some(basename(&c.cwd)),
-                c.shpool.as_deref(),
-            ]
-            .contains(&Some(name));
+            let matches = c.name.as_deref() == Some(name)
+                || basename(&c.cwd) == name
+                || c.agent.as_deref() == Some(name);
+            if !matches {
+                return None;
+            }
             let label = c
                 .name
                 .filter(|n| !n.is_empty())
-                .or(c.shpool)
+                .or(c.agent)
                 .unwrap_or_else(|| "?".to_string());
-            matches.then_some((c.pid, label, socket))
+            Some((c.pid, label, socket))
         })
         .collect()
 }
@@ -101,7 +101,7 @@ pub fn deliver(name: &str, text: &str, origin: &str, wait: Duration) -> Result<S
     let deadline = Instant::now() + wait;
     // a session just started may not have registered or opened its socket yet
     loop {
-        let matches = message_sessions(name);
+        let matches = message_sessions(live_claudes(), name);
         if matches.len() > 1 {
             let several: Vec<String> = matches
                 .iter()
@@ -151,3 +151,7 @@ pub fn cmd_msg(a: MsgArgs) -> Result<(), String> {
     eprintln!("jw: sent to {session}");
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/msg.rs"]
+mod unit_tests;

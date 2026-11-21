@@ -213,7 +213,8 @@ fn pick_for(task: &str) -> Result<String, String> {
 /// Runs argv in a new shpool session of the repo at home, with a record titled after text, and attaches to it unless
 /// detach. The session is called preferred if no shpool session has that name, else s-<time>. make_dir(name) returns the
 /// directory to run in; it is called under the lock, once the name is chosen. With resume an existing record of the
-/// name only gets its workspace updated.
+/// name only gets its workspace updated. The name is the session's identity: AGENT_SESSION, the record name and the
+/// shpool session name are equal, and jw finds a live Claude's shpool session by its AGENT_SESSION.
 fn launch(
     home: &str,
     detach: bool,
@@ -647,7 +648,7 @@ fn session_rows(
 pub fn cmd_attach(a: AttachArgs) -> Result<(), String> {
     let found: BTreeMap<String, String> = live_claudes()
         .into_iter()
-        .filter_map(|c| Some((c.shpool?, c.cwd)))
+        .filter_map(|c| Some((c.agent?, c.cwd)))
         .collect();
     let state = Shpool.list()?;
     let name = a.name.filter(|n| !n.is_empty());

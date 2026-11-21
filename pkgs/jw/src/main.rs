@@ -42,7 +42,7 @@ enum Command {
     Clone(CloneArgs),
     /// remove the workspaces whose stack is merged and broken ones in all repos, and the idle detached Claude shpool sessions in merged ones (killing a session kills its background jobs)
     Prune(PruneArgs),
-    /// stop the finished sessions (jw done, or merged MRs) once idle and detached, and remove their merged workspaces; stop the detached Claude shpool sessions idle or stuck on a permission prompt for 4 hours (their workspaces stay; resume with claude --resume)
+    /// stop the finished sessions (jw done, or merged MRs) once idle and detached, and remove their merged workspaces; stop the detached Claude shpool sessions idle or stuck on a permission prompt for 4 hours (their workspaces stay; resume with jw resume --session NAME)
     Reap,
     /// print the jj workspace and stack of the current directory as JSON
     Info,

@@ -352,6 +352,7 @@ in
       while taken "$name"; do name="$base-$i"; i=$((i + 1)); done
       # exported before the job script is written, so the session gets it. No KNOWLEDGE_ORIGIN
       # in this environment (the launcher sets it): `jw session set` refuses event sessions
+      # jw finds the shpool session by this name: keep it equal to the shpool session name
       export AGENT_SESSION=$name
       # --opt=value: a value starting with `-` must not be taken for an option
       record=(--kind=${lib.escapeShellArg name} "--workspace=$workdir")
