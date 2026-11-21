@@ -19,7 +19,7 @@ host/
     global/            always on: networking, nix, openssh, sops
     optional/          opt-in features: k3s, tailscale, docker, libvirt, maintenance, ...
     disko/             disk layouts, parametrised by device (and swap size)
-modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-notifier.nix, flux-sops-age.nix, agents.nix (the NATS event handler user services, the knowledge curator timer, the `jw-reap` timer that stops idle and finished agent sessions and removes the merged workspaces of finished ones, and the shpool user service)
+modules/host/          own NixOS modules: persist.nix, secrets.nix, battery-notifier.nix, flux-sops-age.nix, eso-bws-token.nix, agents.nix (the NATS event handler user services, the knowledge curator timer, the `jw-reap` timer that stops idle and finished agent sessions and removes the merged workspaces of finished ones, and the shpool user service)
 pkgs/                  wrapped packages (package + bundled config) and own tools (pkgs/agent-skills/skills: Agent Skills, shared by claude and agent-skills)
 overlays/              exposes pkgs/ (the wrapped packages, shadowing the nixpkgs ones, and the tools), flake inputs as packages, deploy-rs
 clusters/dijkstra/     Kubernetes manifests, reconciled by Flux
@@ -471,7 +471,7 @@ The same pre-hook and restore procedure applies to `audiomuse-postgres` (databas
 
 Encrypted with SOPS using the cluster's age key (`.sops.yaml`); Flux decrypts them when applying (`sops-age` secret). Files must match `*.enc.*`. Only `data` and `stringData` are encrypted.
 
-They are generated from Bitwarden by `cluster-secrets-build`, one namespace at a time. The secretspec profile `dijkstra-<ns>` is the Secret `secrets` of namespace `<ns>`, written to `clusters/dijkstra/secrets/<ns>.enc.yaml`. The profile `dijkstra` itself is cluster-level (the age key) and is never rendered.
+They are generated from Bitwarden by `cluster-secrets-build`, one namespace at a time. The secretspec profile `dijkstra-<ns>` is the Secret `secrets` of namespace `<ns>`, written to `clusters/dijkstra/secrets/<ns>.enc.yaml`. The profile `dijkstra` itself is cluster-level (the age key, the External Secrets Bitwarden token that `triss` applies as `external-secrets/bitwarden-access-token`) and is never rendered.
 
 1. Add the key to `[profiles."dijkstra-<ns>"]` in `secretspec.toml`, e.g. `API_KEY`. Only `[a-z0-9_]` keys are allowed (case aside), and two keys must not differ only by case.
 2. Create the Bitwarden item titled `infra/dijkstra-<ns>/API_KEY` (secretspec escapes a `/` in a profile name, so namespace profiles use `-`).
