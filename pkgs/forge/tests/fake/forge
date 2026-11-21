@@ -38,12 +38,14 @@ host=
 method=GET
 path=
 input=
+form=
 headers=()
 while [ $# -gt 0 ]; do
   case $1 in
     --hostname) host=${2:-}; shift 2 ;;
     -X) method=${2:-}; shift 2 ;;
     --input) input=${2:-}; shift 2 ;;
+    --form) form=${2:-}; shift 2 ;;
     -H) headers+=("${2:-}"); shift 2 ;;
     -*)
       echo "fake $tool: unexpected api flag: $1" >&2
@@ -53,18 +55,20 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-body=
-[ "$input" = - ] && body=$(cat)
+bodyfile=$d/body.tmp
+: >"$bodyfile"
+[ "$input" = - ] && cat >"$bodyfile"
 npath=${path//%3A/:}
-jq -nc --arg t "$tool" --arg h "$host" --arg m "$method" --arg p "$npath" --arg b "$body" \
-  '{tool:$t,host:$h,method:$m,path:$p,body:$b,headers:$ARGS.positional}' \
+jq -nc --arg t "$tool" --arg h "$host" --arg m "$method" --arg p "$npath" --rawfile b "$bodyfile" --arg f "$form" \
+  '{tool:$t,host:$h,method:$m,path:$p,body:$b,form:$f,headers:$ARGS.positional}' \
   --args ${headers[@]+"${headers[@]}"} >>"$d/calls.log"
 
 key="$method $npath"
 if jq -e --arg k "$key" 'has($k)' "$d/routes.json" >/dev/null 2>&1; then
   err=$(jq -r --arg k "$key" '.[$k].__error // empty' "$d/routes.json")
   if [ -n "$err" ]; then
-    echo "$err" >&2
+    jq -nc --arg m "$err" '{message:$m}'
+    echo "$tool: HTTP 422 (api call failed)" >&2
     exit 1
   fi
   jq -c --arg k "$key" '.[$k]' "$d/routes.json"
