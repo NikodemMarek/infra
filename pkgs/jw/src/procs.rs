@@ -5,13 +5,14 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use crate::record::valid_name;
 use crate::workspace::realpath;
 
 /// A live Claude session, from its registry file in $CLAUDE_CONFIG_DIR/sessions and /proc.
 pub struct Claude {
     pub pid: u32,
     pub cwd: String,
-    pub shpool: Option<String>,
+    pub agent: Option<String>,
     pub status: Option<String>,
     pub waiting_for: Option<String>,
     pub status_updated_at: Option<f64>,
@@ -33,8 +34,8 @@ pub fn claude_dir() -> String {
 
 /// Fields 3.. of /proc/<pid>/stat (the command name, field 2, may contain spaces and parentheses): the parent is
 /// [1], the start time (field 22) [19].
-fn stat_fields(pid: u32) -> Option<Vec<String>> {
-    let stat = fs::read(format!("/proc/{pid}/stat")).ok()?;
+fn stat_fields(proc: &Path, pid: u32) -> Option<Vec<String>> {
+    let stat = fs::read(proc.join(pid.to_string()).join("stat")).ok()?;
     let stat = String::from_utf8_lossy(&stat);
     Some(
         stat.rsplit_once(')')?
@@ -46,15 +47,10 @@ fn stat_fields(pid: u32) -> Option<Vec<String>> {
 }
 
 fn parent_of(pid: u32) -> Option<u32> {
-    stat_fields(pid)?.get(1)?.parse().ok()
+    stat_fields(Path::new("/proc"), pid)?.get(1)?.parse().ok()
 }
 
-fn comm(pid: u32) -> Option<String> {
-    let comm = fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
-    Some(comm.trim().to_string())
-}
-
-fn parse_claude(path: &Path) -> Option<Claude> {
+fn parse_claude(path: &Path, proc: &Path) -> Option<Claude> {
     let entry: Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
     let pid = match entry.get("pid")? {
         Value::Number(n) => n.as_u64()?,
@@ -63,20 +59,22 @@ fn parse_claude(path: &Path) -> Option<Claude> {
     };
     let pid = u32::try_from(pid).ok()?;
     let start = entry.get("procStart")?.as_str()?;
-    if stat_fields(pid)?.get(19).map(String::as_str) != Some(start) {
+    if stat_fields(proc, pid)?.get(19).map(String::as_str) != Some(start) {
         return None;
     }
-    let cwd = fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
-    let environ = fs::read(format!("/proc/{pid}/environ")).ok()?;
-    let shpool = environ.split(|b| *b == 0).find_map(|var| {
-        var.strip_prefix(b"SHPOOL_SESSION_NAME=")
-            .map(|name| String::from_utf8_lossy(name).into_owned())
-    });
+    let dir = proc.join(pid.to_string());
+    let cwd = fs::read_link(dir.join("cwd")).ok()?;
+    let environ = fs::read(dir.join("environ")).ok()?;
+    let agent = environ
+        .split(|b| *b == 0)
+        .find_map(|var| var.strip_prefix(b"AGENT_SESSION="))
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+        .filter(|name| valid_name(name));
     let text = |key: &str| entry.get(key).and_then(Value::as_str).map(str::to_string);
     Some(Claude {
         pid,
         cwd: cwd.to_string_lossy().into_owned(),
-        shpool,
+        agent,
         status: text("status"),
         waiting_for: text("waitingFor"),
         status_updated_at: entry.get("statusUpdatedAt").and_then(Value::as_f64),
@@ -87,12 +85,20 @@ fn parse_claude(path: &Path) -> Option<Claude> {
 }
 
 pub fn live_claudes() -> Vec<Claude> {
-    let Ok(entries) = fs::read_dir(format!("{}/sessions", claude_dir())) else {
+    load_claudes(
+        &Path::new(&claude_dir()).join("sessions"),
+        Path::new("/proc"),
+    )
+}
+
+/// The Claudes of the registry files in sessions whose process in proc is still the one that registered.
+pub fn load_claudes(sessions: &Path, proc: &Path) -> Vec<Claude> {
+    let Ok(entries) = fs::read_dir(sessions) else {
         return vec![];
     };
     let mut files: Vec<_> = entries.flatten().map(|e| e.path()).collect();
     files.sort();
-    files.iter().filter_map(|f| parse_claude(f)).collect()
+    files.iter().filter_map(|f| parse_claude(f, proc)).collect()
 }
 
 /// The live Claude sessions with their working directory in d.
@@ -150,17 +156,6 @@ pub fn in_use(d: &str, ignore: &HashSet<u32>) -> bool {
     false
 }
 
-/// Whether Claude process pid is the first process of its shpool session (parent comm shpool, or parent comm
-/// event-claude-la whose parent is shpool).
-pub fn session_top(pid: u32) -> bool {
-    let top = || -> Option<bool> {
-        let mut parent = parent_of(pid)?;
-        let mut name = comm(parent)?;
-        if name == "event-claude-la" {
-            parent = parent_of(parent)?;
-            name = comm(parent)?;
-        }
-        Some(name == "shpool")
-    };
-    top().unwrap_or(false)
-}
+#[cfg(test)]
+#[path = "../tests/unit/procs.rs"]
+mod unit_tests;

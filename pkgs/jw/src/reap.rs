@@ -8,7 +8,7 @@ use crate::agent::runtime_dir;
 use crate::cmd::{output_timeout, which};
 use crate::jj::Jj;
 use crate::msg::deliver;
-use crate::procs::{claude_sessions, descendants, in_use, live_claudes, session_top, Claude};
+use crate::procs::{claude_sessions, descendants, in_use, live_claudes, Claude};
 use crate::record::{now, write_error, Record, Records};
 use crate::shpool::Shpool;
 use crate::workspace::{
@@ -50,7 +50,7 @@ fn kept(error: &str) -> Kept {
     Kept::from(error.to_string())
 }
 
-/// The shpool sessions of the Claude sessions in d if all are idle for idle seconds, alone in detached shpool
+/// The shpool sessions of the Claude sessions in d if all are agent sessions idle for idle seconds in detached shpool
 /// sessions and nothing else is using d. The error says why not.
 fn check_claudes(d: &str, sessions: &[Claude], idle: u64) -> Result<Vec<String>, String> {
     let pids: Vec<u32> = sessions.iter().map(|c| c.pid).collect();
@@ -66,8 +66,8 @@ fn check_claudes(d: &str, sessions: &[Claude], idle: u64) -> Result<Vec<String>,
         if status != Some("idle") {
             return Err(format!("Claude {} is {}", c.pid, status.unwrap_or("None")));
         }
-        if c.shpool.is_none() {
-            return Err(format!("Claude {} is not in a shpool session", c.pid));
+        if c.agent.is_none() {
+            return Err(format!("Claude {} is not an agent session", c.pid));
         }
         if !c
             .status_updated_at
@@ -76,10 +76,7 @@ fn check_claudes(d: &str, sessions: &[Claude], idle: u64) -> Result<Vec<String>,
             return Err(format!("Claude {} idle for less than {idle}s", c.pid));
         }
     }
-    let names: BTreeSet<&str> = sessions
-        .iter()
-        .filter_map(|c| c.shpool.as_deref())
-        .collect();
+    let names: BTreeSet<&str> = sessions.iter().filter_map(|c| c.agent.as_deref()).collect();
     let state = Shpool.list()?;
     for name in &names {
         let current = state.get(*name).map(String::as_str);
@@ -87,14 +84,6 @@ fn check_claudes(d: &str, sessions: &[Claude], idle: u64) -> Result<Vec<String>,
             return Err(format!(
                 "shpool session {name} is {}",
                 current.unwrap_or("unknown")
-            ));
-        }
-    }
-    for c in sessions {
-        if !session_top(c.pid) {
-            return Err(format!(
-                "shpool session {} also runs other processes",
-                c.shpool.as_deref().unwrap_or("")
             ));
         }
     }
@@ -134,7 +123,7 @@ fn stop_sessions(d: &str, idle: u64) -> Result<Vec<Stopped>, String> {
         .into_iter()
         .map(|c| {
             (
-                c.shpool.unwrap_or_default(),
+                c.agent.unwrap_or_default(),
                 c.session_id.unwrap_or_else(|| "?".to_string()),
             )
         })
@@ -309,9 +298,9 @@ pub fn cmd_prune(a: PruneArgs) -> Result<(), String> {
 }
 
 fn report_stopped(killed: &[Stopped], path: &str, seen: &mut HashSet<String>) {
-    for (name, id) in killed {
+    for (name, _) in killed {
         seen.insert(name.clone());
-        println!("stopped {name} in {path}: AGENT_SESSION={name} claude --resume {id}");
+        println!("stopped {name} in {path}: jw resume --session {name}");
     }
 }
 
@@ -465,7 +454,7 @@ fn stuck(c: &Claude) -> bool {
 }
 
 /// (shpool session, working directory, Claude session id) of the detached shpool sessions whose Claudes are all idle
-/// (or stuck on a permission prompt) for IDLE_LIMIT and the first process of the session, sorted by name.
+/// (or stuck on a permission prompt) for IDLE_LIMIT, sorted by name.
 fn idle_sessions(
     claudes: &[Claude],
     state: &HashMap<String, String>,
@@ -473,7 +462,7 @@ fn idle_sessions(
 ) -> Vec<(String, String, String)> {
     let mut groups: BTreeMap<&str, Vec<&Claude>> = BTreeMap::new();
     for c in claudes {
-        if let Some(name) = c.shpool.as_deref() {
+        if let Some(name) = c.agent.as_deref() {
             groups.entry(name).or_default().push(c);
         }
     }
@@ -486,7 +475,6 @@ fn idle_sessions(
             stuck(c)
                 && c.status_updated_at
                     .is_some_and(|at| now - at / 1000.0 >= IDLE_LIMIT)
-                && session_top(c.pid)
         });
         if all_idle {
             let first = members[0];
@@ -586,3 +574,7 @@ mod tests {
         assert!(newly_merged(&mrs, &st, &states(&["a", "c"])).is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/reap.rs"]
+mod idle_tests;
