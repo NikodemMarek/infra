@@ -22,9 +22,15 @@ pub struct Mr {
     squash_commit_sha: Option<String>,
 }
 
+impl Mr {
+    pub fn is_draft(&self) -> bool {
+        self.draft || self.work_in_progress
+    }
+}
+
 impl From<Mr> for Pr {
     fn from(m: Mr) -> Pr {
-        let draft = m.draft || m.work_in_progress;
+        let draft = m.is_draft();
         Pr {
             forge: Kind::GitLab,
             number: m.iid,
@@ -54,7 +60,7 @@ impl From<Mr> for Pr {
     }
 }
 
-fn strip_draft(title: &str) -> &str {
+pub(super) fn strip_draft(title: &str) -> &str {
     let trimmed = title.trim_start();
     for prefix in ["[draft]", "(draft)", "draft:"] {
         let matches = trimmed
@@ -78,6 +84,10 @@ pub fn list_path(project: &str, head: Option<&str>, limit: u8) -> String {
             "projects/{project}/merge_requests?state=all&order_by=updated_at&sort=desc&per_page={limit}"
         ),
     }
+}
+
+pub fn create_path(project: &str) -> String {
+    format!("projects/{}/merge_requests", quote(project))
 }
 
 pub fn view_path(project: &str, number: u64) -> String {
