@@ -25,7 +25,7 @@ tofu/                  OpenTofu: Cloudflare, Tailscale, Oracle Cloud
 | `yenn` | x86_64 | laptop (Hyprland), LUKS + btrfs; `host-switch`, not a deploy node |
 | `geralt` | x86_64 | headless game streaming (Wolf + Moonlight), docker, libvirt; usually off |
 | `roach` | x86_64 | k3s agent |
-| `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool`, data pool `tank`), NFS server, Garage (S3 for Velero) |
+| `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool`, data pool `tank`), NFS server, Garage (S3 for Velero, nix cache, artifacts) |
 | `triss` | aarch64 | k3s server, Oracle Cloud instance (qemu guest) |
 | `alp` | x86_64 | installer ISO (`mkiso`), not in `nixosConfigurations` |
 
@@ -249,6 +249,23 @@ CI shares a binary cache in the Garage bucket `nix-cache` on `regis`: `http://ni
   garage key create ci-nix-cache
   garage bucket allow --read --write nix-cache --key ci-nix-cache
   ```
+
+### Artifacts
+
+The Garage bucket `artifacts` on `regis` holds random files (Rust binaries, ISOs, LLM weights, `docker save` tarballs). S3 endpoint `http://100.100.215.91:3900`, region `garage`, reachable only over the tailnet. Access is the personal key `nikodem-artifacts` (in Bitwarden). Objects under `tmp/` expire after 30 days, everything else stays.
+
+```sh
+aws s3 cp --endpoint-url http://100.100.215.91:3900 --region garage <file> s3://artifacts/tmp/
+```
+
+To recreate it, on `regis`:
+```sh
+garage bucket create artifacts
+garage key create nikodem-artifacts
+garage bucket allow --read --write --owner artifacts --key nikodem-artifacts
+aws s3api put-bucket-lifecycle-configuration --endpoint-url http://100.100.215.91:3900 --region garage --bucket artifacts \
+  --lifecycle-configuration '{"Rules":[{"ID":"tmp-30d","Status":"Enabled","Filter":{"Prefix":"tmp/"},"Expiration":{"Days":30}}]}'
+```
 
 ### Backups
 
