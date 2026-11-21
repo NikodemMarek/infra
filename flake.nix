@@ -109,23 +109,18 @@
     };
 
     deploy.nodes = let
-      mkNode = host: extra: let
+      mkNode = host: let
         cfg = self.nixosConfigurations.${host};
-      in
-        {
-          hostname = host;
-          profiles.system = {
-            user = "root";
-            sshUser = "maintenance";
-            path = cfg.pkgs.deploy-rs.lib.activate.nixos cfg;
-          };
-        }
-        // extra;
-    in {
-      geralt = mkNode "geralt" {};
-      regis = mkNode "regis" {};
-      triss = mkNode "triss" {};
-    };
+      in {
+        hostname = host;
+        profiles.system = {
+          user = "root";
+          sshUser = "maintenance";
+          path = cfg.pkgs.deploy-rs.lib.activate.nixos cfg;
+        };
+      };
+    in
+      lib.genAttrs ["geralt" "regis" "roach" "triss"] mkNode;
 
     knownHosts = lib.concatStrings (lib.mapAttrsToList (name: node: "${node.hostname} ${builtins.readFile ./host/${name}/ssh_host_ed25519_key.pub}") self.deploy.nodes);
 
