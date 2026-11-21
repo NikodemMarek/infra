@@ -178,7 +178,8 @@ in {
       glabPackage = glab;
       jwPackage = jw;
     };
-    hypridle.enable = true;
+    # programs.hyprlock enables this unit, which fails next to the hypridle Hyprland starts
+    hypridle.enable = lib.mkForce false;
     syncthing.user = "nikodem";
   };
 }
