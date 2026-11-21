@@ -84,8 +84,21 @@ impl Store {
         })
     }
 
+    /// Replaces the file by renaming a temporary copy over it, so a failed
+    /// write never leaves it truncated.
     pub fn save(&self) -> Result<()> {
-        fs::write(&self.path, self.file.lines.concat()).map_err(|e| io_error(&self.path, e))
+        let write = || {
+            let path = fs::canonicalize(&self.path)?;
+            let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
+            let result = fs::write(&tmp, self.file.lines.concat())
+                .and_then(|()| fs::set_permissions(&tmp, fs::metadata(&path)?.permissions()))
+                .and_then(|()| fs::rename(&tmp, &path));
+            if result.is_err() {
+                let _ = fs::remove_file(&tmp);
+            }
+            result
+        };
+        write().map_err(|e| io_error(&self.path, e))
     }
 
     /// The tasks with their line indexes. An invalid line is skipped, with a
