@@ -12,7 +12,6 @@
 
         ".config/LM-Studio"
         ".config/LM Studio"
-        ".config/gcli"
         ".lmstudio"
 
         ".local/share/zoxide"
