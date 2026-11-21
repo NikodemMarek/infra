@@ -20,7 +20,7 @@ spec:
         kubernetes.io/hostname: regis
       containers:
         - name: bazarr
-          image: linuxserver/bazarr:latest
+          image: linuxserver/bazarr:v1.6.2-ls370
           env:
             - name: PUID
               value: "1000"

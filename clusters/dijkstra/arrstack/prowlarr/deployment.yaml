@@ -20,7 +20,7 @@ spec:
         kubernetes.io/hostname: regis
       containers:
         - name: prowlarr
-          image: linuxserver/prowlarr:latest
+          image: linuxserver/prowlarr:3.0.2.5780-ls169
           env:
             - name: PUID
               value: "1000"

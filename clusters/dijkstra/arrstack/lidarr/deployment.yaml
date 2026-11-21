@@ -37,7 +37,7 @@ spec:
                 path: cookies.txt
       containers:
         - name: lidarr
-          image: linuxserver/lidarr:nightly
+          image: linuxserver/lidarr:nightly-4.0.0.5222-ls226
           env:
             - name: PUID
               value: "1000"
@@ -67,7 +67,7 @@ spec:
         # YouTube PO-token provider for Tubifarry (trustedSessionGeneratorUrl = http://localhost:4416).
         # Unauthenticated, so it stays pod-local with no Service.
         - name: bgutil-pot-provider
-          image: brainicism/bgutil-ytdlp-pot-provider:latest
+          image: brainicism/bgutil-ytdlp-pot-provider:2.0.2
           ports:
             - name: pot
               containerPort: 4416

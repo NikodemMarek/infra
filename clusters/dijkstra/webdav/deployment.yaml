@@ -23,7 +23,7 @@ spec:
             claimName: webdav-books-pvc
       containers:
         - name: rclone
-          image: rclone/rclone:latest
+          image: rclone/rclone:1.76.0
           env:
             - name: DAV_USER
               valueFrom:

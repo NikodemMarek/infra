@@ -1,0 +1,49 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigestsToSemver"],
+  "enabledManagers": ["flux", "github-actions", "kubernetes", "nix", "terraform"],
+  "schedule": ["* * * * 6"],
+  "minimumReleaseAge": "5 days",
+  "ignorePaths": ["clusters/dijkstra/flux-system/**"],
+  "ignoreDeps": ["shani", "matrix-gateway"],
+  "flux": { "managerFilePatterns": ["/^clusters/.+\\.yaml$/"] },
+  "kubernetes": { "managerFilePatterns": ["/^clusters/.+\\.yaml$/"] },
+  "nix": { "enabled": true },
+  "lockFileMaintenance": { "enabled": true, "schedule": ["* * * * 6"] },
+  "packageRules": [
+    { "matchUpdateTypes": ["major"], "minimumReleaseAge": "14 days" },
+    { "matchManagers": ["github-actions"], "groupName": "GitHub Actions" },
+    { "matchManagers": ["nix"], "matchUpdateTypes": ["digest"], "enabled": false },
+    { "matchPackageNames": ["ghcr.io/immich-app/**"], "groupName": "immich" },
+    {
+      "matchPackageNames": ["linuxserver/**", "lscr.io/linuxserver/**"],
+      "versioning": "regex:^v?(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)(?:\\.(?<build>\\d+))?-ls(?<revision>\\d+)$"
+    },
+    {
+      "matchPackageNames": ["linuxserver/qbittorrent"],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)_v2\\.\\d+\\.\\d+-ls(?<revision>\\d+)$"
+    },
+    {
+      "matchPackageNames": ["linuxserver/lidarr"],
+      "versioning": "regex:^nightly-(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)\\.(?<build>\\d+)-ls(?<revision>\\d+)$"
+    },
+    { "matchPackageNames": ["jellyfin/jellyfin"], "allowedVersions": "/^\\d{10}$/" },
+    {
+      "matchManagers": ["kubernetes"],
+      "matchPackageNames": ["velero/velero-plugin-for-aws"],
+      "enabled": false
+    },
+    {
+      "matchDatasources": ["docker"],
+      "matchPackageNames": [
+        "linuxserver/**",
+        "lscr.io/linuxserver/**",
+        "ghcr.io/**",
+        "dock.mau.dev/**",
+        "docker.redpanda.com/**",
+        "docker.io/valkey/valkey"
+      ],
+      "minimumReleaseAge": null
+    }
+  ]
+}
