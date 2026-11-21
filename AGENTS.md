@@ -1,6 +1,6 @@
 # infra
 
-README.md is the reference (sections Dev shell, Updating hosts, Secrets, Cluster, Kubernetes secrets, Backups): read the section you need instead of guessing. This file holds the rules for working in the repo.
+README.md is the reference (sections Layout, Hosts, Dev shell, Installing a new host, Updating hosts, Secrets, Persistence, Packages, External infrastructure, Cluster, Backups; Kubernetes secrets and Nix cache are under Cluster): read the section you need instead of guessing. This file holds the rules for working in the repo.
 
 ## Repo
 
