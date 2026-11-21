@@ -228,6 +228,28 @@ After rotating the ESO token, deploy `triss` and restart `eso-bws-token.service`
 
 A fresh cluster: k3s and `triss` (applies the ESO token), `flux bootstrap`, then `kubectl apply -f` `clusters/dijkstra/cert-manager/` and `clusters/dijkstra/external-secrets/{namespace,helm,sdk-server}.yaml` by hand (Flux fails on the whole tree until the ExternalSecret, ClusterSecretStore and Certificate CRDs exist), wait until their HelmReleases are Ready, then reconcile.
 
+### Nix cache
+
+CI shares a binary cache in the Garage bucket `nix-cache` on `regis`: `http://nix-cache:3902`, read anonymously over Garage's web endpoint, reachable only over the tailnet and the cluster (the workflows map `nix-cache` to `100.100.215.91` in `/etc/hosts`). Paths are signed with `nix-cache-1`; hosts trust it through `host/features/global/nix.nix` (all but `triss`), the workflows through `extra_nix_config` in `hosts.yml` and `deploy.yml`.
+
+- Only `hosts.yml` uploads, from the builds with placeholder secrets on push to `main`, over the S3 API on port 3900. The GitHub environment `nix-cache` (`main` only) holds exactly `NIX_CACHE_SIGNING_KEY`, `NIX_CACHE_ACCESS_KEY_ID` and `NIX_CACHE_SECRET_ACCESS_KEY`, nothing else. The repo secrets `TS_CACHE_OAUTH_CLIENT_ID` and `TS_CACHE_OAUTH_SECRET` are a Tailscale OAuth client (scope `auth_keys`, tag `tag:ci-cache` only). `deploy.yml` only reads.
+- Accepted risk: a push to `main` can sign paths that every host trusts, including `yenn` and `roach`. Recovery: generate `nix-cache-2`, replace the public key in all three places and the `NIX_CACHE_SIGNING_KEY` secret (and Bitwarden), empty the bucket, then redeploy every host: `deploy.yml` covers `geralt`, `regis` and `triss`; run `host-switch` on `yenn` and `host-deploy roach`.
+- The bucket has a 200 GiB quota. If it is full or broken, empty it with a temporary key; the next push to `main` uploads everything again:
+  ```sh
+  garage key create wipe
+  garage bucket allow --read --write nix-cache --key wipe
+  aws s3 rm --recursive s3://nix-cache --endpoint-url http://100.100.215.91:3900 --region garage
+  garage key delete --yes wipe
+  ```
+  To recreate it, on `regis` (a new `ci-nix-cache` key goes into the `nix-cache` environment and Bitwarden):
+  ```sh
+  garage bucket create nix-cache
+  garage bucket website --allow nix-cache
+  garage bucket set-quotas nix-cache --max-size 200GiB
+  garage key create ci-nix-cache
+  garage bucket allow --read --write nix-cache --key ci-nix-cache
+  ```
+
 ### Backups
 
 Velero backs up the cluster daily at 18:00 Europe/Warsaw (schedule `daily-openebs`), keeping each backup 30 days, to Garage on `regis` (`host/regis/garage.nix`): a single-node S3 store on `tank/garage`, bucket `velero` at `http://100.100.215.91:3900`, reachable only over `tailscale0` and `cni0`. Velero and Garage share one key pair: `dijkstra-velero/ACCESS_KEY_ID` and `SECRET_ACCESS_KEY` in the project `hosts` (Garage), copied as `velero/access_key_id` and `velero/secret_access_key` in the project `cluster` (rotate both).
