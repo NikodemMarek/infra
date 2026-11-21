@@ -59,6 +59,8 @@
     "Bash(forge repo:*)"
     "Bash(forge pr list:*)"
     "Bash(forge pr view:*)"
+    "Bash(forge pr checks:*)"
+    "Bash(forge pr comments:*)"
 
     # Queueing notes for the knowledge curator.
     "Bash(knowledge submit:*)"

@@ -39,6 +39,8 @@ method=GET
 path=
 input=
 form=
+paginate=false
+slurp=false
 headers=()
 while [ $# -gt 0 ]; do
   case $1 in
@@ -46,6 +48,8 @@ while [ $# -gt 0 ]; do
     -X) method=${2:-}; shift 2 ;;
     --input) input=${2:-}; shift 2 ;;
     --form) form=${2:-}; shift 2 ;;
+    --paginate) paginate=true; shift ;;
+    --slurp) slurp=true; shift ;;
     -H) headers+=("${2:-}"); shift 2 ;;
     -*)
       echo "fake $tool: unexpected api flag: $1" >&2
@@ -59,8 +63,8 @@ bodyfile=$d/body.tmp
 : >"$bodyfile"
 [ "$input" = - ] && cat >"$bodyfile"
 npath=${path//%3A/:}
-jq -nc --arg t "$tool" --arg h "$host" --arg m "$method" --arg p "$npath" --rawfile b "$bodyfile" --arg f "$form" \
-  '{tool:$t,host:$h,method:$m,path:$p,body:$b,form:$f,headers:$ARGS.positional}' \
+jq -nc --arg t "$tool" --arg h "$host" --arg m "$method" --arg p "$npath" --rawfile b "$bodyfile" --arg f "$form" --argjson pg "$paginate" --argjson sl "$slurp" \
+  '{tool:$t,host:$h,method:$m,path:$p,body:$b,form:$f,paginate:$pg,slurp:$sl,headers:$ARGS.positional}' \
   --args ${headers[@]+"${headers[@]}"} >>"$d/calls.log"
 
 key="$method $npath"
@@ -71,7 +75,11 @@ if jq -e --arg k "$key" 'has($k)' "$d/routes.json" >/dev/null 2>&1; then
     echo "$tool: HTTP 422 (api call failed)" >&2
     exit 1
   fi
-  jq -c --arg k "$key" '.[$k]' "$d/routes.json"
+  if [ "$paginate" = true ]; then
+    jq -c --arg k "$key" '.[$k] | if type == "object" and has("__pages") then .__pages else [.] end' "$d/routes.json"
+  else
+    jq -c --arg k "$key" '.[$k]' "$d/routes.json"
+  fi
   exit 0
 fi
 echo "fake $tool: unexpected api call: $key" >&2

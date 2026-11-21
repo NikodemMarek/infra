@@ -79,6 +79,10 @@ enum PrCommand {
     Close { pr: String },
     /// Reopen a merge/pull request (number or URL)
     Reopen { pr: String },
+    /// Show the latest pipeline / check state of a merge/pull request (number or URL)
+    Checks { pr: String },
+    /// List the comments and reviews of a merge/pull request (number or URL)
+    Comments { pr: String },
 }
 
 fn main() -> ExitCode {
@@ -157,6 +161,18 @@ fn run(cli: Cli) -> Result<String> {
         } => {
             let (target, number) = target::resolve_pr(remote, &pr)?;
             json(&pr::reopen(&target, number)?)
+        }
+        Command::Pr {
+            command: PrCommand::Checks { pr },
+        } => {
+            let (target, number) = target::resolve_pr(remote, &pr)?;
+            json(&pr::checks(&target, number)?)
+        }
+        Command::Pr {
+            command: PrCommand::Comments { pr },
+        } => {
+            let (target, number) = target::resolve_pr(remote, &pr)?;
+            json(&pr::comments(&target, number)?)
         }
         Command::Upload { file } => json(&upload::upload(&target::resolve(remote)?, &file)?),
     }

@@ -36,6 +36,23 @@ impl Api {
         self.decode(&out.stdout)
     }
 
+    pub fn get_pages<T: DeserializeOwned>(&self, path: &str) -> Result<Vec<T>> {
+        let out = run(
+            &[
+                self.bin,
+                "api",
+                "--hostname",
+                &self.host,
+                "--paginate",
+                "--slurp",
+                path,
+            ],
+            true,
+        )?;
+        let pages: Vec<Vec<T>> = self.decode(&out.stdout)?;
+        Ok(pages.into_iter().flatten().collect())
+    }
+
     pub fn send<T: DeserializeOwned>(&self, method: &str, path: &str, body: &Value) -> Result<T> {
         let out = run_with_input(
             &[
