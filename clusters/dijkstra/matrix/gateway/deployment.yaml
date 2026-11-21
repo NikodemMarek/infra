@@ -39,7 +39,7 @@ spec:
             defaultMode: 0440
       containers:
         - name: matrix-gateway
-          image: matrix-gateway:yhg8b3ha02d82dpglip692zyv24xpnbd
+          image: matrix-gateway:k51dxcwkcqz52dwz58kkzjy2aw6sy25q
           imagePullPolicy: Never
           env:
             - name: MATRIX_HOMESERVER
