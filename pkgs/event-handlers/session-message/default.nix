@@ -1,26 +1,31 @@
 {
+  lib,
   writeShellApplication,
   coreutils,
   util-linux,
   jq,
   jw,
-  forward-notify,
+  notify,
 }:
 # event handler: a session.message {to, text} event becomes `jw msg` to that session, started with
 # `jw resume` if it is not running. The sender is fixed; a `from` in the event is ignored.
-# Event data is untrusted: `to` must be a plain session name. A failure is forwarded as a notification.
+# Event data is untrusted: `to` must be a plain session name. A failure is sent to `notify`.
 writeShellApplication {
   name = "event-handler-session-message";
-  runtimeInputs = [coreutils util-linux jq jw forward-notify];
+  runtimeInputs = [coreutils util-linux jq];
   text = ''
     event=$(cat)
+    # after the PATH: a jw already there (e.g. with another projectsRoot) wins
+    export PATH="$PATH:${jw}/bin"
     session=""
 
     fail() {
       echo "session-message: not delivered: $1" >&2
-      jq -cn --arg session "$session" --arg reason "$1" '
-        (if $session != "" then {session: $session} else {} end) + {title: "not delivered: \($reason)"}
-      ' | ER_TYPE=session.message event-handler-forward-notify || true
+      jq -cn --arg type "''${ER_TYPE:-session.message}" --arg session "$session" --arg reason "$1" '
+        {type: $type, project: "jw"}
+        + (if $session != "" then {session: $session} else {} end)
+        + {title: "not delivered: \($reason)"}
+      ' | ER_TYPE=''${ER_TYPE:-session.message} ${lib.getExe notify} || true
       exit 1
     }
 
