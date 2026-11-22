@@ -475,3 +475,162 @@ fn status_finds_mr_through_recent_list_without_local_bookmark() {
         &calls[before..]
     );
 }
+
+// Commit on the remote branch behind jj's back (a forge "apply suggestion"):
+// `file` is set to `content` in the tree of `parent`. Returns the new id.
+fn remote_commit(e: &Env, branch: &str, parent: &str, file: &str, content: &str) -> String {
+    let git = |args: &[&str], stdin: Option<&str>, index: &std::path::Path| {
+        use std::io::Write;
+        use std::process::Stdio;
+        let mut c = std::process::Command::new("git");
+        c.arg("-C")
+            .arg(&e.remote)
+            .args(args)
+            .env("GIT_INDEX_FILE", index)
+            .env("GIT_AUTHOR_NAME", "Other")
+            .env("GIT_AUTHOR_EMAIL", "other@example.com")
+            .env("GIT_COMMITTER_NAME", "Other")
+            .env("GIT_COMMITTER_EMAIL", "other@example.com")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = c.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.unwrap_or("").as_bytes())
+            .unwrap();
+        let o = child.wait_with_output().unwrap();
+        assert!(
+            o.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    let index = e.dir.join("remote-index");
+    git(&["read-tree", parent], None, &index);
+    let blob = git(&["hash-object", "-w", "--stdin"], Some(content), &index);
+    git(
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("100644,{blob},{file}"),
+        ],
+        None,
+        &index,
+    );
+    let tree = git(&["write-tree"], None, &index);
+    let sha = git(
+        &["commit-tree", &tree, "-p", parent, "-m", "remote edit"],
+        None,
+        &index,
+    );
+    git(
+        &["update-ref", &format!("refs/heads/{branch}"), &sha],
+        None,
+        &index,
+    );
+    sha
+}
+
+fn file_at(e: &Env, rev: &str, file: &str) -> String {
+    e.jj(&["file", "show", "-r", rev, file])
+}
+
+fn stack_changes(e: &Env) -> String {
+    e.jj(&[
+        "log",
+        "--no-graph",
+        "-r",
+        "trunk()..@",
+        "-T",
+        "change_id.short(8) ++ \"\\n\"",
+    ])
+}
+
+#[test]
+fn sync_squashes_remote_only_commit_into_unchanged_change() {
+    let (e, a, b) = stack(Forge::GitLab);
+    e.upload(&[]).ok();
+    let pushed = e.remote_branch(&a.branch).unwrap();
+    let changes = stack_changes(&e);
+    remote_commit(&e, &a.branch, &pushed, "a.txt", "remote edit\n");
+
+    let out = e.upload(&["sync"]);
+
+    out.ok();
+    assert!(
+        out.stderr
+            .contains(&format!("pulled remote commits of {}", a.branch)),
+        "stderr: {}",
+        out.stderr
+    );
+    assert_eq!(file_at(&e, &a.change, "a.txt"), "remote edit\n");
+    assert_eq!(file_at(&e, &b.change, "a.txt"), "remote edit\n");
+    assert_eq!(stack_changes(&e), changes);
+    assert_eq!(
+        e.jj(&[
+            "log",
+            "--no-graph",
+            "-r",
+            r#"description(substring:"remote changes on")"#,
+            "-T",
+            "change_id"
+        ]),
+        ""
+    );
+}
+
+#[test]
+fn sync_puts_remote_commit_after_locally_amended_change() {
+    let (e, a, b) = stack(Forge::GitLab);
+    e.upload(&[]).ok();
+    let pushed = e.remote_branch(&a.branch).unwrap();
+    remote_commit(&e, &a.branch, &pushed, "a.txt", "remote edit\n");
+    e.jj(&["edit", &a.change]);
+    e.write("local.txt", "local\n");
+    e.jj(&["new", &b.change]);
+
+    let out = e.upload(&["sync"]);
+
+    assert_eq!(out.code, 1, "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains(&a.branch) && out.stderr.contains("the remote has commits not in"),
+        "stderr: {}",
+        out.stderr
+    );
+    let marker = format!(r#"description(substring:"remote changes on {}")"#, a.branch);
+    let remote_change = e.change_of(&marker);
+    assert_eq!(
+        e.parent_commit_of(&remote_change).trim(),
+        e.commit_of(&a.change).trim()
+    );
+    assert_eq!(file_at(&e, &a.change, "local.txt"), "local\n");
+    assert_eq!(file_at(&e, &remote_change, "a.txt"), "remote edit\n");
+    assert_eq!(file_at(&e, &remote_change, "local.txt"), "local\n");
+}
+
+#[test]
+fn sync_fails_when_remote_branch_shares_no_version() {
+    let (e, a, _b) = stack(Forge::GitLab);
+    e.upload(&[]).ok();
+    let base = e.base.clone();
+    let before = e.commit_of(&a.change);
+    remote_commit(&e, &a.branch, &base, "a.txt", "rewritten\n");
+
+    let out = e.upload(&["sync"]);
+
+    assert_eq!(out.code, 1, "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("shares no version"),
+        "stderr: {}",
+        out.stderr
+    );
+    assert_eq!(e.commit_of(&a.change), before);
+    assert_eq!(file_at(&e, &a.change, "a.txt"), "feat: a\n\nBody A\n");
+}
