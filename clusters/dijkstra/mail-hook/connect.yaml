@@ -1,0 +1,49 @@
+http:
+  enabled: false
+
+input:
+  http_server:
+    address: 0.0.0.0:8080
+    path: /mail
+    allowed_verbs: [POST]
+
+pipeline:
+  processors:
+    - mapping: |
+        let auth = @Authorization.or("")
+        root = if $auth != "Bearer " + env("MAIL_HOOK_TOKEN").not_null() {
+          throw("unauthorized")
+        } else if this.type() != "object" {
+          throw("body is not a JSON object")
+        } else if this.kind != "throwaway" && this.kind != "hook" {
+          throw("invalid kind")
+        } else if this.from.type() != "string" || this.to.type() != "string" || this.subject.type() != "string" {
+          throw("from, to and subject must be strings")
+        } else {
+          {
+            "type": "mail.received",
+            "kind": this.kind,
+            "from": this.from,
+            "to": this.to,
+            "subject": this.subject,
+          }
+        }
+
+output:
+  reject_errored:
+    broker:
+      pattern: fan_out
+      outputs:
+        - nats:
+            urls: [nats://nats.nats.svc.cluster.local:4222]
+            subject: mail.received
+        - nats:
+            urls: [nats://nats.nats.svc.cluster.local:4222]
+            subject: matrix.send
+          processors:
+            - mapping: |
+                map one {
+                  root = (this | "").string().re_replace_all("[\r\n\t]", " ").re_replace_all("(?s)^(.{0,300}).*$", "$1")
+                }
+                root.room = "mail"
+                root.body = "Mail (" + this.kind.apply("one") + ") to " + this.to.apply("one") + "\nFrom: " + this.from.apply("one") + "\nSubject: " + this.subject.apply("one")
