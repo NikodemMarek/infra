@@ -47,10 +47,7 @@
     direnv = direnvShim;
   };
 
-  sessionMessage = callPackage ./session-message.nix {
-    jw = shaniJw;
-    forward-notify = forwardNotify;
-  };
+  sessionMessage = event-handlers.session-message.override {notify = forwardNotify;};
 
   shaniHandlers = callPackage ./handlers.nix {
     forward-notify = forwardNotify;
