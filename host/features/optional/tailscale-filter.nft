@@ -1,0 +1,17 @@
+chain input {
+  type filter hook input priority -10; policy accept;
+  iifname "tailscale0" accept comment "Trusted Tailscale interface"
+  ct state vmap { invalid : drop, established : accept, related : accept, new : jump input-allow, untracked : jump input-allow }
+}
+
+chain input-allow {
+  iifname "tailscale0" tcp dport { 22, 80, 443, 2049, 7878, 8989, 8686, 8787, 9696, 6969, 22000 } accept comment "Tailscale allowed TCP ports"
+  udp dport @tailscalePort@ accept comment "Tailscale UDP port"
+}
+
+chain forward {
+  type filter hook forward priority filter; policy accept;
+  iifname "tailscale0" accept comment "Allow Tailscale to WAN"
+  oifname "tailscale0" accept comment "Allow WAN back to Tailscale"
+  ct state established,related accept
+}
