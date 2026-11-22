@@ -7,8 +7,6 @@
     ../features/optional/tailscale-server.nix
     ../features/optional/maintenance.nix
     ../features/optional/k3s.nix
-
-    # ./printing.nix
   ];
 
   networking = {
