@@ -11,9 +11,10 @@
 }: let
   notify = callPackage ./notify {};
   session-message = callPackage ./session-message {inherit notify;};
+  forge = callPackage ./forge {inherit session-message;};
 
   set = {
-    inherit notify session-message;
+    inherit notify session-message forge;
     notify-critical = notify.override {urgency = "critical";};
     # GitLab event -> Claude session in a shpool session. No gitlab.* routes here (no
     # GitLab watcher): a layer that has one sets contextTool and adds the routes.

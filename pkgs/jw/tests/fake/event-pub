@@ -1,0 +1,9 @@
+#!/bin/sh
+{
+	echo "type=$1"
+	echo "stdin=$(cat)"
+} >> "$FAKE_LOG_DIR/event-pub.log"
+if [ -f "$FAKE_LOG_DIR/event-pub.fail" ]; then
+	cat "$FAKE_LOG_DIR/event-pub.fail" >&2
+	exit 1
+fi

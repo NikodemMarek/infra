@@ -1,0 +1,9 @@
+#!/bin/sh
+echo "$*" >> "$FAKE_LOG_DIR/forge.log"
+[ "$1" = pr ] || exit 2
+f="$FAKE_LOG_DIR/forge-$2.json"
+if [ ! -f "$f" ]; then
+	echo "forge: no fixture for pr $2" >&2
+	exit 1
+fi
+cat "$f"

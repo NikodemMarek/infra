@@ -79,7 +79,7 @@ in {
           };
 
           jw-reap = {
-            description = "Tell Claude agent sessions about MR activity, stop finished or long-idle ones and remove their merged workspaces";
+            description = "Publish MR activity of agent sessions, stop finished or long-idle ones and remove their merged workspaces";
             environment = {
               PATH = lib.mkForce "${jwReapPath}:/run/wrappers/bin:/etc/profiles/per-user/%u/bin:/run/current-system/sw/bin";
               SSH_AUTH_SOCK = "%t/ssh-agent";

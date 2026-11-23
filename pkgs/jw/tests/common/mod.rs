@@ -16,6 +16,8 @@ const FAKES: &[(&str, &str)] = &[
     ("direnv", include_str!("../fake/direnv")),
     ("claude", include_str!("../fake/claude")),
     ("jj-stack", include_str!("../fake/jj-stack")),
+    ("forge", include_str!("../fake/forge")),
+    ("event-pub", include_str!("../fake/event-pub")),
     ("gitlab-context", include_str!("../fake/gitlab-context")),
     (
         "claude-jj-workspace",
@@ -109,6 +111,31 @@ impl Env {
         let mut c = self.command(env!("CARGO_BIN_EXE_jw"), cwd);
         c.args(args).envs(envs.iter().copied());
         let o = c.output().unwrap();
+        Out {
+            code: o.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+        }
+    }
+
+    pub fn jw_stdin(&self, cwd: &Path, stdin: &str, args: &[&str]) -> Out {
+        use std::io::Write;
+        use std::process::Stdio;
+        let mut c = self.command(env!("CARGO_BIN_EXE_jw"), cwd);
+        let mut child = c
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        let o = child.wait_with_output().unwrap();
         Out {
             code: o.status.code().unwrap_or(-1),
             stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
