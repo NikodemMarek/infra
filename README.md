@@ -164,7 +164,7 @@ Own programs (`nix build .#<name>`):
 | `event-handlers` | user service, one `event-subscribe` per line of `pkgs/event-handlers/handlers` (subjects stay under `events.`); `remote-notify` takes the untrusted `remote.notify.>` from the cluster |
 | `agent-inbox`, `agent-task`, `claude-hooks`, `claude-statusline`, `agent-skills` | agent tooling: terminal inbox of Claude prompts, sudo requests and tasks; task capture publishing `task.new`; claude's hooks, status line and skills |
 | `matrix-gateway`, `matrix-inbox`, `matrix-gateway-image`, `shani-image` | Matrix bridge of the NATS hub (in the cluster) and its client on `yenn`; the images are built into `triss` |
-| `tm`, `dictate`, `wallpaper` | task list CLI (`$TM_FILE`); microphone to text via the local whisper server; the wallpaper image |
+| `tm`, `dictate`, `dictate-type`, `wallpaper` | task list CLI (`$TM_FILE`); microphone to text via the local whisper server; types the dictation into the focused window (SUPER+D toggles); the wallpaper image |
 | `jail` | a function: `jail <package> {ENV_VAR = "/abs/path";}` runs every binary with those env vars set |
 
 ## External infrastructure

@@ -132,6 +132,7 @@ hl.bind(mainMod .. " + E", hl.dsp.exec_cmd("alacritty --command yazi"), { locked
 hl.bind(mainMod .. " + SPACE", hl.dsp.exec_cmd("rofi -show drun"), { locked = false })
 hl.bind(mainMod .. " + C", hl.dsp.exec_cmd("agent-task"), { locked = false })
 hl.bind(mainMod .. " + SHIFT + C", hl.dsp.exec_cmd("agent-task --shot"), { locked = false })
+hl.bind(mainMod .. " + D", hl.dsp.exec_cmd("dictate-type"), { locked = false })
 
 -- Screenshots & Session
 hl.bind("PRINT", hl.dsp.exec_cmd("grim -g '$(slurp)' - | wl-copy"), { locked = false })
