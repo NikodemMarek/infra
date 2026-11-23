@@ -20,21 +20,26 @@
     name,
     src,
     runtimeInputs,
-    bashOptions ? null,
+    bashOptions ? [
+      "nounset"
+      "pipefail"
+    ],
     # placeholder -> replacement, applied to the script text
     replacements ? {},
   }:
-    writeShellApplication (
-      {
-        inherit name runtimeInputs;
-        text = builtins.replaceStrings (builtins.attrNames replacements) (builtins.attrValues replacements) (
-          builtins.readFile src
-        );
-      }
-      // lib.optionalAttrs (bashOptions != null) {inherit bashOptions;}
-    );
+    writeShellApplication {
+      inherit name runtimeInputs bashOptions;
+      text = builtins.replaceStrings (builtins.attrNames replacements) (builtins.attrValues replacements) (
+        builtins.readFile src
+      );
+    };
 
   guardWrites = shellHook {
+    bashOptions = [
+      "errexit"
+      "nounset"
+      "pipefail"
+    ];
     name = "claude-guard-writes";
     src = ./guard-writes.sh;
     runtimeInputs = [
@@ -44,6 +49,11 @@
   };
 
   verifierGuard = shellHook {
+    bashOptions = [
+      "errexit"
+      "nounset"
+      "pipefail"
+    ];
     name = "claude-verifier-guard";
     src = ./verifier-bash-guard.sh;
     runtimeInputs = [
@@ -55,6 +65,11 @@
   };
 
   sudoGuard = shellHook {
+    bashOptions = [
+      "errexit"
+      "nounset"
+      "pipefail"
+    ];
     name = "claude-sudo-guard";
     src = ./sudo-guard.sh;
     runtimeInputs = [
@@ -74,10 +89,6 @@
       git
       util-linux
       findutils
-    ];
-    bashOptions = [
-      "nounset"
-      "pipefail"
     ];
   };
 
@@ -124,10 +135,6 @@
       coreutils
       routeEvent
     ];
-    bashOptions = [
-      "nounset"
-      "pipefail"
-    ];
   };
 
   # PermissionRequest hook: routes the request and waits for an answer from agent-inbox
@@ -140,10 +147,6 @@
       coreutils
       routeEvent
     ];
-    bashOptions = [
-      "nounset"
-      "pipefail"
-    ];
   };
 
   # Moves queued follow-up prompt files of an event session to read/ and prints their paths.
@@ -151,10 +154,6 @@
     name = "claude-event-queue";
     src = ./event-queue.sh;
     runtimeInputs = [coreutils];
-    bashOptions = [
-      "nounset"
-      "pipefail"
-    ];
   };
 
   # Sets the status of the session record (busy, idle, waiting, ended); never fails.
@@ -165,10 +164,6 @@
       jq
       coreutils
       jw
-    ];
-    bashOptions = [
-      "nounset"
-      "pipefail"
     ];
   };
 
@@ -184,10 +179,6 @@
       eventQueue
       statusHook
     ];
-    bashOptions = [
-      "nounset"
-      "pipefail"
-    ];
   };
 
   # UserPromptSubmit hook: adds the paths of queued follow-up prompts of an event session as context.
@@ -199,10 +190,6 @@
       coreutils
       eventQueue
     ];
-    bashOptions = [
-      "nounset"
-      "pipefail"
-    ];
   };
 
   # Seeds the project MCP servers of a directory as disabled (no blocking approval dialog); never fails.
@@ -212,10 +199,6 @@
     runtimeInputs = [
       jq
       coreutils
-    ];
-    bashOptions = [
-      "nounset"
-      "pipefail"
     ];
   };
 
