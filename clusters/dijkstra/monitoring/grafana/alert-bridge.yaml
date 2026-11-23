@@ -12,7 +12,7 @@ data:
 
     input:
       http_server:
-        address: 127.0.0.1:8080
+        address: 127.0.0.1:8090
         path: /alert
         allowed_verbs: [POST]
 
