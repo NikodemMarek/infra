@@ -251,6 +251,8 @@ Velero backs up the cluster daily at 18:00 Europe/Warsaw (schedule `daily-openeb
 - The beets library (`library.db`) is on its own PVC `beets-data`: `velero restore` that PVC, after deleting a leftover `library.db-journal` next to it (sqlite would roll it back onto the restored file).
 - Grafana alerts post to Matrix `#alerts` (`monitoring/grafana/helm.yaml`), among them a stale (BackupStale) or failed (BackupFailed) Velero backup.
 
+Off-pool copy: whenever the backup SSD is plugged into `yenn` (GPT partition `offsite`, LUKS2, btrfs label `offsite`), `restic-backups-offsite` (`host/yenn/offsite-backup.nix`) mirrors the bucket `velero` with rclone into `/mnt/offsite/staging/velero` and backs that up, together with `/mnt/photos` of `regis` (read-only NFS at `/mnt/regis/photos`), into the restic repository `/mnt/offsite/restic`. It starts when the drive appears and then hourly, but runs at most every 20 hours and not between 17:00 and 20:00 (the Velero run). Keeps 7 daily, 4 weekly and 6 monthly snapshots; each run checks a random 5% of the data. The restic repository is created once by hand (`restic init`) when the drive is prepared; the run aborts if it is missing, so an unmounted drive never fills the root filesystem. It also aborts when the bucket `velero` or the photos are empty, so a rebuilt, empty source never replaces the copy. The LUKS key and the restic password are the same value, `yenn/OFFSITE_KEY` in the project `hosts`; `yenn/OFFSITE_S3_ENV` holds the credentials of the read-only Garage key `offsite`. A notification arrives when there has been no successful run for 7 days. Status: `journalctl -u restic-backups-offsite`, `sudo restic-offsite snapshots`.
+
 #### Restore
 
 App volumes are provisioned dynamically (openebs-zfs on `regis`, openebs-hostpath on `triss`, both Retain), so a plain Velero restore works. To restore one app:
@@ -303,6 +305,56 @@ For shared volumes, or when a Velero restore fails:
    ```
    On `regis`, `sudo umount /mnt/restore` afterwards.
 6. `flux resume kustomization flux-system -n flux-system`, check the app, then delete `<aside>`.
+
+#### Restore from the off-pool drive
+
+Restore on `regis` with the drive plugged into `regis`. Never plug it into `yenn` during a restore: `yenn` would back up the empty fresh bucket and write an empty `latest` snapshot (or run `sudo systemctl mask --runtime restic-backups-offsite.service` there first).
+
+Unlock and mount the drive, typing the value of `yenn/OFFSITE_KEY` at the prompts (it is both the LUKS key and the restic password), and pick a snapshot ID, not `latest`:
+
+```sh
+sudo nix run nixpkgs#cryptsetup -- open /dev/disk/by-partlabel/offsite offsite
+sudo mkdir -p /mnt/offsite && sudo mount -o ro /dev/mapper/offsite /mnt/offsite
+sudo nix run nixpkgs#restic -- -r /mnt/offsite/restic snapshots
+```
+
+Bucket `velero` (the cluster's backups and kopia repositories):
+
+1. Suspend Flux and make the backup location read-only first, otherwise Velero's garbage collection deletes the restored backups older than 30 days:
+   ```sh
+   flux suspend kustomization flux-system -n flux-system
+   kubectl -n velero patch backupstoragelocation default --type merge -p '{"spec":{"accessMode":"ReadOnly"}}'
+   ```
+2. Make sure Garage on `regis` is up; `garage-provision` recreates the bucket and the keys.
+3. Mount the repository (the FUSE mount stays in the foreground; it is readable by root only) and, in another terminal, upload the staging copy with the read-write `velero` key (`<GK...>`, `<secret>` from the `velero` line of `regis/GARAGE_KEYS`):
+   ```sh
+   sudo mkdir -p /mnt/restic && sudo nix run nixpkgs#restic -- -r /mnt/offsite/restic mount /mnt/restic
+   ```
+   ```sh
+   sudo env AWS_ACCESS_KEY_ID=<GK...> AWS_SECRET_ACCESS_KEY=<secret> \
+     nix run nixpkgs#rclone -- copy /mnt/restic/ids/<id>/mnt/offsite/staging/velero \
+     ':s3,provider=Other,endpoint="http://localhost:3900",region=garage,env_auth=true:velero'
+   ```
+   Stop the mount with Ctrl-C afterwards.
+4. `velero backup get` lists the restored backups; continue with "Restore" above.
+5. Set `accessMode` back to `ReadWrite` (same patch), `flux resume kustomization flux-system -n flux-system`.
+
+Photos (`/mnt/photos` on `regis`):
+
+1. Suspend Flux and stop Immich:
+   ```sh
+   flux suspend kustomization flux-system -n flux-system
+   kubectl -n immich scale deploy/immich --replicas=0
+   ```
+2. Restore into the photos directory:
+   ```sh
+   sudo nix run nixpkgs#restic -- -r /mnt/offsite/restic restore <id>:/mnt/regis/photos --target /mnt/photos
+   ```
+3. `kubectl -n immich scale deploy/immich --replicas=1`, then `flux resume kustomization flux-system -n flux-system`. The Immich database comes back with Velero ("Postgres databases").
+
+Afterwards: `sudo umount /mnt/offsite && sudo cryptsetup close offsite`.
+
+Single files while the drive is plugged into `yenn` as usual: `sudo restic-offsite restore <id> --include <path> --target <dir>`.
 
 #### Postgres databases
 

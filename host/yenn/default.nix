@@ -8,6 +8,7 @@
     ./networking.nix
     ./nikodem.nix
     ./matrix-inbox.nix
+    ./offsite-backup.nix
 
     ../features
     ../features/optional/stylix.nix
