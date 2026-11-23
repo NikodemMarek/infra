@@ -2,7 +2,6 @@
   imports = [
     ../features/optional/iwd.nix
     ../features/optional/tailscale.nix
-    ../features/optional/zerotier.nix
     ./wireguard.nix
   ];
 
