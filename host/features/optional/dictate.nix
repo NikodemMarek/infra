@@ -21,5 +21,5 @@ in {
     };
   };
 
-  environment.systemPackages = [pkgs.dictate];
+  environment.systemPackages = [pkgs.dictate pkgs.dictate-type];
 }

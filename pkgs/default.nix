@@ -51,6 +51,7 @@
   infra-tofu = pkgs.callPackage ./infra-tofu {};
   wallpaper = pkgs.callPackage ./wallpaper {};
   dictate = pkgs.callPackage ./dictate {};
+  dictate-type = pkgs.callPackage ./dictate-type {};
   agent-skills = pkgs.callPackage ./agent-skills {};
   claude-hooks = pkgs.callPackage ./claude-hooks {};
   claude-statusline = pkgs.callPackage ./claude-statusline {};
