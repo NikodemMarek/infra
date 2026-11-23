@@ -5,8 +5,8 @@
 }: let
   host = config.networking.hostName;
   hasPods = config.services.k3s.enable;
-  loki = "http://100.97.10.25:3100/loki/api/v1/push";
-  victoriaMetrics = "http://100.97.10.25:8428/api/v1/write";
+  loki = "http://${config.tailnet.ips.triss}:3100/loki/api/v1/push";
+  victoriaMetrics = "http://${config.tailnet.ips.triss}:8428/api/v1/write";
 in {
   services.alloy.enable = true;
 

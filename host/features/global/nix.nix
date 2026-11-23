@@ -1,4 +1,4 @@
-{
+{config, ...}: {
   nix = {
     settings = {
       experimental-features = ["nix-command" "flakes"];
@@ -15,5 +15,5 @@
     optimise.automatic = true;
   };
 
-  networking.hosts."100.100.215.91" = ["nix-cache"];
+  networking.hosts.${config.tailnet.ips.regis} = ["nix-cache"];
 }

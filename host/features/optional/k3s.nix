@@ -4,12 +4,7 @@
   pkgs,
   ...
 }: let
-  ips = {
-    triss = "100.97.10.25";
-    regis = "100.100.215.91";
-    roach = "100.109.230.83";
-  };
-  ip = ips.${config.networking.hostName};
+  ip = config.tailnet.ips.${config.networking.hostName};
   isServer = config.services.k3s.role == "server";
 in {
   secrets.k3s_token.profile = "dijkstra";
@@ -40,7 +35,7 @@ in {
     serverAddr =
       if isServer
       then ""
-      else "https://${ips.triss}:6443";
+      else "https://${config.tailnet.ips.triss}:6443";
     extraFlags =
       [
         "--kube-proxy-arg=proxy-mode=nftables"
