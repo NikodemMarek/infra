@@ -25,7 +25,7 @@ tofu/                  OpenTofu: Cloudflare, Tailscale, Oracle Cloud
 | `yenn` | x86_64 | laptop (Hyprland), LUKS + btrfs; `host-switch`, not a deploy node |
 | `geralt` | x86_64 | headless game streaming (Wolf + Moonlight), docker, libvirt; usually off |
 | `roach` | x86_64 | k3s agent |
-| `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool`, data pool `tank`), Garage (S3: Velero, nix cache) |
+| `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool`, data pool `tank`), NFS server, Garage (S3: Velero, nix cache) |
 | `triss` | aarch64 | k3s server, Oracle Cloud instance (qemu guest) |
 | `alp` | x86_64 | installer ISO (`mkiso`), not in `nixosConfigurations` |
 

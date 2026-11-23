@@ -10,7 +10,10 @@
   };
 
   buckets = {
-    velero.keys.velero = ["read" "write"];
+    velero.keys = {
+      velero = ["read" "write"];
+      offsite = ["read"];
+    };
     nix-cache = {
       website = true;
       quota = "200GiB";
