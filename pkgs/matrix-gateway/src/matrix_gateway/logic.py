@@ -14,7 +14,7 @@ TO_RE = r"[a-z0-9][a-z0-9-]{0,62}"
 COMMAND_HOST_RE = r"![A-Za-z0-9][A-Za-z0-9-]{0,62}"
 BODY_MAX = 20000
 REF_MAX = 1024
-POST_ROOMS = ("mail",)
+POST_ROOMS = ("mail", "alerts")
 
 
 @dataclass(frozen=True)

@@ -7,6 +7,7 @@ USER = "@agents:example.com"
 OWNER = "@nikodem:example.com"
 ROOM = "!room:example.com"
 MAIL_ROOM = "!mail:example.com"
+ALERTS_ROOM = "!alerts:example.com"
 
 
 @dataclass(frozen=True)
