@@ -10,13 +10,16 @@ README.md is the reference (sections Layout, Hosts, Dev shell, Installing a new 
 - One-time data migrations are done by hand (`kubectl exec`/`cp`), not with initContainers, hooks or jobs in the repo.
 - Config files mounted into pods go through `configMapGenerator` in the directory's `kustomization.yaml` (as in `mail-hook`), so a change rolls the pod.
 - The cluster is `clusters/dijkstra` and Flux applies `main`. Never edit `gotk-*.yaml`.
+- The default checkout can lag `trunk()`: read code from a `trunk()` workspace or `jj file show -r 'trunk()' <path>`.
+- Keep the README per-host hardware sections (`geralt`, `yenn`, `regis`: parts, slots, BIOS, MACs) complete when trimming the README.
+- Never run or plan `--privileged` containers or pods, not even to verify something (one damaged a host). Use a device plugin (Intel GPU) or explicit devices plus cgroup rules.
 
 ## Check
 
 Pick the narrowest check that proves the change:
 
 - One package: `nix build .#<pkg>` (runs its tests during the build).
-- A host: `nix build --dry-run .#nixosConfigurations.<host>.config.system.build.toplevel --override-input secrets path:<dir>`, where `<dir>` holds an (empty) `<host>.yaml`. `secrets-stub` has no files, so evaluation fails without the override. CI (`hosts.yml`) builds every host on PRs.
+- A host: `nix build --dry-run .#nixosConfigurations.<host>.config.system.build.toplevel --override-input secrets path:<dir>`, where `<dir>` holds an (empty) `<host>.yaml`. `secrets-stub` has no files, so evaluation fails without the override. A full (non-dry) build or deploy needs `key: x` in `<host>.yaml` for every sops secret the host uses, else the manifest build fails; the empty file is enough for the dry run. CI (`hosts.yml`) builds every host on PRs.
 - The image triss imports (`matrix-gateway`): `nix build .#nixosConfigurations.triss.pkgs.matrix-gateway-image`. aarch64 builds on `yenn` through binfmt.
 - The cluster: `flux build kustomization flux-system --path ./clusters/dijkstra --kustomization-file ./clusters/dijkstra/flux-system/gotk-sync.yaml --dry-run`. `kustomize build clusters/dijkstra` fails: there is no `kustomization.yaml` there, Flux generates one. Against the live API: `kubectl apply --dry-run=server -f <file>`.
 - OpenTofu: `tofu fmt`, `tofu validate` and `tofu init -backend=false` run without a token.
@@ -44,12 +47,47 @@ Agents prepare changes and stacked PRs. Deploying and merging is the user's call
 
 - Merging to `main` deploys `geralt`, `regis` and `triss` (CI); changes under `tofu/` are applied by CI, the cluster by Flux.
 - Hosts: `host-switch` (the current host, `yenn`) or `host-deploy <node>...` (deploy-rs as `maintenance`). A switch does not start or restart user units: `systemctl --user restart <unit>` (e.g. `matrix-inbox`).
+- Sessions have no `BWS_ACCESS_TOKEN`, so `host-deploy` cannot run from them. When asked to deploy servers, merge the PR after the checks and watch the run.
+- Deploying `geralt` while CI cannot reach it: copy the deployed sops file (`manifest.json`, found through `/run/current-system/activate`) into the override dir, then `deploy --skip-checks --hostname <geralt LAN IP> --ssh-opts "<the -J and -o options from the `geralt` gotchas>" .#geralt`.
 - Cluster: Flux applies merged changes (`flux reconcile kustomization flux-system -n flux-system --with-source` to hurry). The Kustomization has no health checks, so check the pods yourself.
-- Images built into triss (`services.k3s.images`, `imagePullPolicy: Never`, tag = the image's `imageTag`): put the new tag in the deployment, `host-deploy triss` from a checkout that contains every image-changing PR, then merge. Merging first leaves the pod in `ErrImageNeverPull`. Changes to `pkgs/matrix-gateway` (its tests included) or nixpkgs change its tag. Remove old images by name; never `crictl rmi --prune`, it drops the imported ones.
+- Images built into triss (`services.k3s.images`, `imagePullPolicy: Never`, tag = the image's `imageTag`): put the new tag in the deployment, `host-deploy triss` from a checkout that contains every image-changing PR, then merge. Merging first leaves the pod in `ErrImageNeverPull`: `k3s ctr -n k8s.io images import <tar>`, then restart the pod (`buildLayeredImage`'s `imageTag` is the hash of the config derivation, not of the tarball). Changes to `pkgs/matrix-gateway` (its tests included) or nixpkgs change its tag. Remove old images by name; never `crictl rmi --prune`, it drops the imported ones.
 - Avoid `rollout restart` on Flux deployments: a second rollout follows about 30 s later.
 - Restart by hand after changing:
   - the NATS hub's leafnodes config: delete pod `nats-0`.
   - the zfs-localpv `zfs.bin` setting: delete the `openebs-zfs-localpv-node` pods in `openebs`.
 - OpenTofu: edit `tofu/`; CI plans and applies on merge and fails a plan that deletes or replaces anything. Never apply a plan with `-/+` or destroys you did not intend.
 - Ad hoc Velero backup: `velero backup create <name> --from-schedule daily-openebs`. A bare `backup create` copies no pod volumes.
-- Some settings live only in app UIs, databases or hand-edited files (Jellyfin, the *arr apps, Lidarr plugins, Immich, AudioMuse-AI, Wolf on `geralt`) and are not in git. Do not change them blind.
+- Some settings live only in app UIs, databases or hand-edited files (Jellyfin, the *arr apps, Lidarr plugins, Immich, AudioMuse-AI, Wolf on `geralt`) and are not in git. Do not change them blind. On PVCs (Velero-backed) the current values are:
+  - Jellyfin `encoding.xml`: QSV, tone mapping on (VPP off), low-power H264/HEVC on, AV1 encode off.
+  - Radarr/Sonarr: 2160p quality definitions max 120 MB/min, preferred 95. Profile "Playable" (id 7): custom formats HDR (-10000), Compact (+100; <= 20 GB movie, <= 7.5 GB episode), AI upscale (-10000); `cutoffFormatScore` 100. The cutoff group "2160p" must hold WEBDL/WEBRip/Bluray-2160p, else Bluray never upgrades.
+  - qBittorrent: `max_active_torrents` 2, `dont_count_slow_torrents` on. Dead torrents and Lidarr import failures are cleared by hand (blocklist and re-search); there is no Cleanuparr or CronJob.
+  - Lidarr: the webhook "Beets" fires only on `onReleaseImport` and `onUpgrade` (else beets answers 400); run one `RescanFolder` at a time (`UNIQUE TrackFiles.Path`).
+
+## Gotchas
+
+NixOS:
+
+- The `services.nats` module sets `settings.jetstream` itself: disable it with `lib.mkForce false`.
+- nats-server 2.14.7 refuses `lame_duck_duration` under 30s. A leafnode remote has no allow list, only deny lists.
+- `networking.nftables.ruleset` makes `flushRuleset` default to true, so every reload drops the tables other services created (docker, libvirt, kube-proxy, tailscale). Only `k3s.nix` sets `flushRuleset = false`; `tailscale.nix` and `libvirt.nix` declare their tables through `ruleset`, so hosts without k3s (`geralt`, `yenn`) still flush on a switch.
+
+`geralt`:
+
+- Never hibernate (S4): a resumed image oopsed on modprobe and hung sshd until a hard reboot. Idle suspend uses S3.
+- Harmless: the iwd segfault on resume and the Wolf xorg crash loop (status 11).
+- LAN IP `192.168.18.95` (DHCP, so confirm it with `ssh maintenance@regis ip neigh | grep b4:2e:99:a4:86:1c`). Tailnet down: `ssh -o HostKeyAlias=geralt -J maintenance@regis maintenance@192.168.18.95`.
+- `/etc/wolf/cfg/config.toml` is owned by Wolf (the original is kept as `.orig`): re-check it after Wolf upgrades. `WOLF_SKIP_WAYLAND_SOCKET_WAIT=TRUE` is required (wolf#462).
+
+Cluster:
+
+- OpenEBS zfs-localpv refuses a second pod mount unless the ZFSVolume has `spec.shared: "yes"`. Set it through the StorageClass parameter `shared: "yes"`; StorageClass parameters are immutable, so recreate the StorageClass and patch the existing ZFSVolumes. `thinprovision: "no"` reserves the full PVC size.
+- k3s `--vpn-auth=name=tailscale` runs `tailscale up --reset` on every start: use `joinKey=none` once logged in. To join: stop k3s, `tailscale up --auth-key=<single-use tagged key>`, start k3s.
+- Velero schedules accept `CRON_TZ=`. fs-backup copies only the volumes of running pods.
+- CNPG: the pre-backup `pg_dump -Fc` hook omits per-database `ALTER DATABASE ... SET` settings (Immich `vchordrq.probes`, `search_path`). Record them from `pg_db_role_setting` and re-apply them after a restore.
+- Traefik rejects an encoded `%23` in paths by default: the Synapse alias lookup needs `allowEncodedHash` on the entrypoint.
+- Helm v4: before disabling a chart's own Gateway/GatewayClass, ship `helm.sh/resource-policy: keep` in a separate change (adding it in the same change deletes the resource).
+- Matrix bridges (mautrix):
+  - Wiping a bridge DB forgets the management room: use `!wa` or a fresh DM.
+  - mautrix-meta login: the messenger.com cookies from "Copy as cURL".
+  - Backfill only covers portals created after it was enabled. WhatsApp history comes only at device link: relink and wipe `/data/whatsapp.db*`.
+  - Bump the images about monthly.
