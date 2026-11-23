@@ -10,6 +10,7 @@
 
     ./garage.nix
     ./memory.nix
+    ./nfs.nix
   ];
 
   networking.hostName = "regis";
