@@ -5,7 +5,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -19,6 +19,8 @@ use crate::workspace::{basename, dirname, has_agents_suffix, is_dir, layout, rea
 
 const LOCK_WAIT: Duration = Duration::from_secs(120);
 const NAME_MAX: usize = 100;
+const GC_AGE: f64 = 24.0 * 3600.0;
+const HOLDS_WORK: &str = "holds work";
 
 /// A workspace the hook created; the file format is shared with the Python hook.
 #[derive(Serialize, Deserialize)]
@@ -36,6 +38,13 @@ struct Entry {
     ws: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     warned: bool,
+}
+
+impl Entry {
+    /// The name of its jj workspace.
+    fn ws_name(&self) -> &str {
+        self.ws.as_deref().unwrap_or(&self.name)
+    }
 }
 
 /// The entries of one repo, claude_dir()/jj-agents/<first 16 hex of the SHA-256 of the store path>/<name>.json: the same
@@ -220,6 +229,17 @@ fn forget(root: &str, ws: &str) {
     let _ = Jj::repo(root).query(&["--ignore-working-copy", "workspace", "forget", ws]);
 }
 
+fn workspace_names(jj: &Jj) -> Result<Vec<String>, String> {
+    let out = jj.query(&[
+        "--ignore-working-copy",
+        "workspace",
+        "list",
+        "-T",
+        r#"name ++ "\n""#,
+    ])?;
+    Ok(out.split_whitespace().map(str::to_string).collect())
+}
+
 /// The id of the change to start a workspace from. A session does not build on the caller's @, which may be another
 /// session's work: it starts on $CLAUDE_WORKSPACE_BASE (the claude wrapper sets it in a w-* workspace) or trunk().
 fn base_change(jj: &Jj, session: bool) -> Result<String, String> {
@@ -275,21 +295,11 @@ fn create_locked(reg: &Registry, root: &str, name: &str) -> Result<(String, bool
             reg.save(&entry).map_err(|e| e.to_string())?;
             return Ok((entry.dir, false));
         }
-        forget(root, entry.ws.as_deref().unwrap_or(name));
+        forget(root, entry.ws_name());
         // jj keeps a git worktree registered for the forgotten workspace, which would make `workspace add` fail
         let _ = git(root, &["worktree", "prune"]);
         reg.remove(name);
-    } else if jj
-        .query(&[
-            "--ignore-working-copy",
-            "workspace",
-            "list",
-            "-T",
-            r#"name ++ "\n""#,
-        ])?
-        .split_whitespace()
-        .any(|n| n == wsname)
-    {
+    } else if workspace_names(&jj)?.contains(&wsname) {
         return Err(format!(
             "a jj workspace named '{wsname}' already exists and isn't managed by this hook"
         ));
@@ -344,10 +354,13 @@ pub fn create(name: &str, cwd: &str) -> Result<String, String> {
         let _lock = reg.lock(LOCK_WAIT)?;
         create_locked(&reg, &root, name)?
     };
-    if created && env::var("AGENT_SESSION").is_ok_and(|s| !s.is_empty()) {
-        if let Err(e) = track_worktree(&dir) {
-            eprintln!("jw: session worktree {dir}: {e}");
+    if created {
+        if env::var("AGENT_SESSION").is_ok_and(|s| !s.is_empty()) {
+            if let Err(e) = track_worktree(&dir) {
+                eprintln!("jw: session worktree {dir}: {e}");
+            }
         }
+        gc(false);
     }
     Ok(dir)
 }
@@ -505,7 +518,7 @@ fn integrate(entry: &Entry) -> Result<Option<String>, Fail> {
     };
     let msg = format!(
         "jj: squashed {files} file(s) from agent workspace {} into {cid} {title}",
-        entry.ws.as_deref().unwrap_or(&entry.name)
+        entry.ws_name()
     );
     let conflicts = caller.query(&[
         "log",
@@ -549,7 +562,11 @@ pub fn stop(agent_id: &str, cwd: &str) -> Result<Vec<String>, String> {
         return Ok(vec![]);
     }
     match stop_locked(&reg, &entry.name) {
-        Ok(msg) => Ok(msg.into_iter().collect()),
+        Ok(msg) => {
+            let mut notes: Vec<String> = msg.into_iter().collect();
+            notes.extend(gc(true));
+            Ok(notes)
+        }
         Err(Fail::Conflict(e)) => Err(format!("{e}.")),
         Err(Fail::Other(e)) => Err(format!(
             "jj integration problem: {e}. The agent's work is kept in {}.",
@@ -580,9 +597,13 @@ fn delete_workspace(reg: &Registry, entry: &Entry) -> Result<(), String> {
             .query(&["--ignore-working-copy", "workspace", "forget"])
             .is_ok();
     if !forgotten {
-        forget(&entry.root, entry.ws.as_deref().unwrap_or(&entry.name));
+        forget(&entry.root, entry.ws_name());
     }
-    let _ = fs::remove_dir_all(&d);
+    if let Err(e) = fs::remove_dir_all(&d) {
+        if e.kind() != io::ErrorKind::NotFound {
+            return Err(format!("couldn't delete {d}: {e}"));
+        }
+    }
     // jj keeps a git worktree registered for the forgotten workspace
     let _ = git(&entry.root, &["worktree", "prune"]);
     reg.remove(&entry.name);
@@ -630,6 +651,148 @@ pub fn remove(path: &str) -> Result<(), String> {
         Some((reg, entry)) => remove_locked(&reg, &entry.name, path),
         None => remove_git(path),
     }
+}
+
+/// Whether the workspace still holds changes that aren't integrated into its base.
+fn has_work(entry: &Entry) -> Result<bool, String> {
+    if !is_dir(&entry.dir) {
+        return Ok(false);
+    }
+    refresh(&entry.dir)?;
+    let jj = Jj::repo(&entry.dir);
+    // jj leaves files over snapshot.max-new-file-size untracked and only warns
+    if jj
+        .query_stderr(&["status"])?
+        .1
+        .contains("Refused to snapshot")
+    {
+        return Ok(true);
+    }
+    let bases = jj.query(&[
+        "log",
+        "--no-graph",
+        "-r",
+        &format!("change_id({})", entry.base),
+        "-T",
+        r#"change_id ++ "\n""#,
+    ])?;
+    if bases.split_whitespace().count() != 1 {
+        // base gone or divergent: the agent's own change is all that can be left
+        let tip = jj.query(&[
+            "log",
+            "--no-graph",
+            "-r",
+            "@",
+            "-T",
+            r#"if(empty, "", "x")"#,
+        ])?;
+        return Ok(!tip.trim().is_empty());
+    }
+    Ok(changed_files(&jj, &entry.base)? > 0)
+}
+
+/// Deletes the workspace unless jj doesn't list it any more (the name may have changed, leaving unsnapshotted edits
+/// untracked) or it holds work. Some(reason) if it was kept. Runs under the registry lock.
+fn try_drop(reg: &Registry, entry: &Entry) -> Result<Option<&'static str>, String> {
+    if is_dir(&format!("{}/.jj", entry.dir))
+        && !workspace_names(&Jj::repo(&entry.dir))?
+            .iter()
+            .any(|n| n == entry.ws_name())
+    {
+        return Ok(Some("workspace name not in jj workspace list"));
+    }
+    if has_work(entry)? {
+        return Ok(Some(HOLDS_WORK));
+    }
+    delete_workspace(reg, entry)?;
+    Ok(None)
+}
+
+fn drop_locked(reg: &Registry, name: &str, dir: &str) -> Result<Option<&'static str>, String> {
+    let _lock = reg.lock(LOCK_WAIT)?;
+    let Some(entry) = reg.load(name) else {
+        return Ok(is_dir(dir).then_some("registry entry vanished"));
+    };
+    try_drop(reg, &entry)
+}
+
+/// Deletes the hook-created workspace at dir unless it holds work. None if it is deleted or gone, else the reason it
+/// was kept.
+pub fn drop(dir: &str) -> Option<String> {
+    let Some((reg, entry)) = Registry::find_dir(dir) else {
+        return Some("not a hook-created workspace".to_string());
+    };
+    match drop_locked(&reg, &entry.name, dir) {
+        Ok(kept) => kept.map(str::to_string),
+        Err(e) => Some(e.split_whitespace().collect::<Vec<_>>().join(" ")),
+    }
+}
+
+/// The last time the workspace was used: its entry's touched, or its transcript's last write if later.
+fn last_activity(entry: &Entry) -> f64 {
+    let transcript = format!("subagents/{}.jsonl", entry.name);
+    fs::read_dir(Path::new(&claude_dir()).join("projects"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .flat_map(|project| fs::read_dir(project.path()).into_iter().flatten().flatten())
+        .filter_map(|session| {
+            let written = fs::metadata(session.path().join(&transcript))
+                .ok()?
+                .modified()
+                .ok()?;
+            Some(written.duration_since(UNIX_EPOCH).ok()?.as_secs_f64())
+        })
+        .fold(entry.touched, f64::max)
+}
+
+/// Returns the warning for an idle agent workspace that holds work, if it is due.
+fn gc_entry(reg: &Registry, entry: &mut Entry, report: bool) -> Result<Option<String>, String> {
+    if !is_dir(&entry.dir) {
+        delete_workspace(reg, entry)?;
+        eprintln!("jw: forgot workspace {}: its directory is gone", entry.name);
+        return Ok(None);
+    }
+    if entry.kind != "agent"
+        || now() - entry.touched < GC_AGE
+        || now() - last_activity(entry) < GC_AGE
+    {
+        return Ok(None);
+    }
+    match try_drop(reg, entry)? {
+        None => eprintln!("jw: cleaned up idle workspace {}", entry.name),
+        Some(HOLDS_WORK) => {
+            if report && !entry.warned {
+                entry.warned = true;
+                reg.save(entry).map_err(|e| e.to_string())?;
+                return Ok(Some(format!(
+                    "jj: idle agent workspace {} holds changes that aren't integrated; integrate them or delete it",
+                    entry.dir
+                )));
+            }
+        }
+        Some(why) => eprintln!("jw: gc {}: {why}", entry.name),
+    }
+    Ok(None)
+}
+
+/// In every repo: forgets the entries whose directory is gone and deletes the agent workspaces idle for a day that hold
+/// nothing. With report, returns a warning, once per workspace, for each idle one kept because it holds work. A busy
+/// registry is skipped: a later run gets it.
+fn gc(report: bool) -> Vec<String> {
+    let mut warnings = vec![];
+    for reg in Registry::all() {
+        let Ok(_lock) = reg.lock(Duration::ZERO) else {
+            continue;
+        };
+        for mut entry in reg.entries() {
+            match gc_entry(&reg, &mut entry, report) {
+                Ok(warning) => warnings.extend(warning),
+                Err(e) => eprintln!("jw: gc {}: {e}", entry.name),
+            }
+        }
+    }
+    warnings
 }
 
 /// The name for a jj workspace after the title of its session: ASCII letters and digits in lower case, separated by
@@ -692,19 +855,12 @@ pub fn title(session_name: &str, dir: &str) {
         return;
     };
     let jj = Jj::repo(&root);
-    let Ok(taken) = jj.query(&[
-        "--ignore-working-copy",
-        "workspace",
-        "list",
-        "-T",
-        r#"name ++ "\n""#,
-    ]) else {
+    let Ok(taken) = workspace_names(&jj) else {
         return;
     };
-    let taken: Vec<&str> = taken.split_whitespace().collect();
     let mut new = format!("s-{t}");
     let mut n = 2;
-    while taken.contains(&new.as_str()) {
+    while taken.contains(&new) {
         new = format!("s-{t}-{n}");
         n += 1;
     }

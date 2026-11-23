@@ -44,6 +44,11 @@ impl Jj {
 
     /// Runs jj with stdout and stderr captured; a failure carries the command and jj's stderr.
     pub fn query(&self, args: &[&str]) -> Result<String, String> {
+        self.query_stderr(args).map(|(stdout, _)| stdout)
+    }
+
+    /// As query, with jj's stderr (its warnings) of a successful run too.
+    pub fn query_stderr(&self, args: &[&str]) -> Result<(String, String), String> {
         let out = self
             .command()
             .args(["--no-pager", "--color=never"])
@@ -59,7 +64,10 @@ impl Jj {
                 String::from_utf8_lossy(&out.stderr).trim()
             ));
         }
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        Ok((
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        ))
     }
 
     /// Runs jj with its messages and errors going straight to the terminal; a failure carries no message.

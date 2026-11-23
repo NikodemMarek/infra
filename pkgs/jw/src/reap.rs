@@ -1,21 +1,21 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, OpenOptions, TryLockError};
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::agent::runtime_dir;
-use crate::cmd::{output_timeout, which};
+use crate::cmd::which;
 use crate::jj::Jj;
-use crate::procs::{claude_dir, claude_sessions, in_use, live_claudes, session_procs, Claude};
+use crate::procs::{claude_sessions, in_use, live_claudes, session_procs, Claude};
 use crate::record::{now, write_error, Record, Records};
 use crate::shpool::Shpool;
 use crate::workspace::{
     agent_workspace, ask_lost, basename, confirm, is_dir, is_gitlab, realpath, recent, remove,
     remove_broken, repos, root,
 };
+use crate::worktree;
 use crate::PruneArgs;
 
 /// Seconds a detached Claude session must have been idle to be reaped.
@@ -24,8 +24,6 @@ const IDLE_LIMIT: f64 = 4.0 * 3600.0;
 const FINISHED_IDLE: u64 = 600;
 /// The time the reaper works through the session records, so the run ends within its timeout.
 const REAP_DEADLINE: Duration = Duration::from_secs(600);
-/// The time `claude-jj-workspace drop` gets for one worktree.
-const DROP_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// (shpool session, Claude session id) of a stopped session.
 type Stopped = (String, String);
@@ -315,34 +313,6 @@ fn mark_record(name: &str, mark: impl FnOnce(&mut Record)) {
     }
 }
 
-/// Asks `claude-jj-workspace drop` to delete the worktree d, waiting at most limit, and describes the outcome; the hook
-/// decides whether d holds work.
-fn drop_worktree(d: &str, limit: Duration) -> String {
-    let mut cmd = Command::new("claude-jj-workspace");
-    cmd.args(["drop", d])
-        .env("CLAUDE_CONFIG_DIR", claude_dir())
-        .stderr(Stdio::inherit());
-    match output_timeout(&mut cmd, None, limit) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            format!("kept {d}: claude-jj-workspace not found")
-        }
-        Err(e) => format!("kept {d}: {e}"),
-        Ok(None) => format!("kept {d}: claude-jj-workspace timed out"),
-        Ok(Some(out)) => {
-            if !Path::new(d).exists() {
-                return format!("removed {d}");
-            }
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            let why = stdout
-                .lines()
-                .map(str::trim)
-                .find(|l| !l.is_empty())
-                .unwrap_or("holds work");
-            format!("kept {d}: {why}")
-        }
-    }
-}
-
 /// Drops the worktrees a done session created, except workspaces of session records (workspaces: realpath to session
 /// name) and those in use; gone ones are skipped. Stops dropping at the deadline.
 fn drop_worktrees(worktrees: &[String], workspaces: &HashMap<PathBuf, String>, deadline: Instant) {
@@ -355,11 +325,15 @@ fn drop_worktrees(worktrees: &[String], workspaces: &HashMap<PathBuf, String>, d
         } else if in_use(d, &HashSet::new()) {
             println!("kept {d}: in use by other processes");
         } else {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
+            if Instant::now() >= deadline {
                 println!("kept {d}: out of time");
+                continue;
+            }
+            let why = worktree::drop(d);
+            if Path::new(d).exists() {
+                println!("kept {d}: {}", why.as_deref().unwrap_or("holds work"));
             } else {
-                println!("{}", drop_worktree(d, left.min(DROP_TIMEOUT)));
+                println!("removed {d}");
             }
         }
     }
@@ -475,7 +449,7 @@ fn idle_sessions(
 
 /// Stops the sessions whose work is finished (`jw done`, or their MRs are merged) once they are idle for
 /// FINISHED_IDLE and detached, and removes their merged workspaces; a session that ran `jw done` also loses the worktrees
-/// it created (`jw session worktree`) that `claude-jj-workspace drop` finds empty. A session whose MRs got merged is
+/// it created (`jw session worktree`) that hold no work. A session whose MRs got merged is
 /// first asked to wrap up by `jw poll`. Then stops the detached Claude shpool sessions idle for IDLE_LIMIT, whose
 /// workspaces stay.
 pub fn cmd_reap() -> Result<(), String> {
@@ -493,10 +467,7 @@ pub fn cmd_reap() -> Result<(), String> {
         }
         Err(TryLockError::Error(e)) => return Err(format!("{lock_path}: {e}")),
     }
-    let missing: Vec<&str> = ["jj", "git", "claude-jj-workspace"]
-        .into_iter()
-        .filter(|t| !which(t))
-        .collect();
+    let missing: Vec<&str> = ["jj", "git"].into_iter().filter(|t| !which(t)).collect();
     if !missing.is_empty() {
         eprintln!("jw: missing on PATH: {}", missing.join(" "));
     }

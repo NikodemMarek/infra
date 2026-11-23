@@ -1493,3 +1493,346 @@ fn x1_unknown_hook_action_is_a_usage_error() {
     let out = e.jw_stdin(&repo, "{}", &["hook", "frobnicate"]);
     assert_eq!(out.code, 2, "stderr: {}", out.stderr);
 }
+
+const OTHER: &str = "agent-00ff00ff";
+const OTHER_WS: &str = "a-00ff00ff";
+
+fn backdate(e: &Env, repo: &Path, name: &str) {
+    let mut v = entry(e, repo, name);
+    v["touched"] = json!(1000.0);
+    write_entry(e, repo, name, &v);
+}
+
+fn idle_agent(e: &Env, repo: &Path, name: &str) -> PathBuf {
+    let d = printed(&create(e, repo, name));
+    backdate(e, repo, name);
+    d
+}
+
+fn stop_other(e: &Env, repo: &Path, d: &Path) -> Out {
+    stop_with(e, repo, "00ff00ff", d, None)
+}
+
+fn warning(d: &Path) -> String {
+    format!(
+        "jj: idle agent workspace {} holds changes that aren't integrated; integrate them or delete it",
+        d.display()
+    )
+}
+
+fn has_entry(e: &Env, repo: &Path, name: &str) -> bool {
+    registry_dir(e, repo).join(format!("{name}.json")).exists()
+}
+
+#[test]
+fn gc1_create_cleans_idle_workspace_without_work() {
+    let e = Env::new();
+    let repo = e.repo();
+    let old = idle_agent(&e, &repo, AGENT);
+
+    let out = create(&e, &repo, OTHER);
+    let d = printed(&out);
+    assert_eq!(out.stdout, format!("{}\n", d.display()));
+    assert!(!old.exists());
+    assert!(!has_entry(&e, &repo, AGENT));
+    let ws = workspaces(&e, &repo);
+    assert!(!ws.contains(&AGENT_WS.to_string()), "{ws:?}");
+    assert!(ws.contains(&OTHER_WS.to_string()), "{ws:?}");
+    assert!(d.exists());
+}
+
+#[test]
+fn gc2_stop_cleans_idle_workspace_without_work() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, OTHER));
+    let old = idle_agent(&e, &repo, AGENT);
+
+    no_output(&stop_other(&e, &repo, &d));
+    assert!(!old.exists());
+    assert!(!has_entry(&e, &repo, AGENT));
+    assert!(!workspaces(&e, &repo).contains(&AGENT_WS.to_string()));
+}
+
+#[test]
+fn gc3_idle_workspace_with_work_is_kept_and_warned_once_by_stop() {
+    let e = Env::new();
+    let repo = e.repo();
+    let idle = printed(&create(&e, &repo, AGENT));
+    fs::write(idle.join("work"), "unsaved\n").unwrap();
+    backdate(&e, &repo, AGENT);
+    let d = printed(&create(&e, &repo, OTHER));
+
+    let out = stop_other(&e, &repo, &d);
+    out.ok();
+    let j = out.json();
+    assert_eq!(j["systemMessage"], warning(&idle));
+    assert!(j.get("hookSpecificOutput").is_none(), "output: {j}");
+    assert!(idle.join("work").exists());
+    assert!(workspaces(&e, &repo).contains(&AGENT_WS.to_string()));
+    assert_eq!(entry(&e, &repo, AGENT)["warned"], json!(true));
+
+    no_output(&stop_other(&e, &repo, &d));
+    assert!(idle.join("work").exists());
+    assert_eq!(entry(&e, &repo, AGENT)["warned"], json!(true));
+}
+
+#[test]
+fn gc4_create_keeps_idle_workspace_with_work_without_warning() {
+    let e = Env::new();
+    let repo = e.repo();
+    let idle = printed(&create(&e, &repo, AGENT));
+    fs::write(idle.join("work"), "unsaved\n").unwrap();
+    backdate(&e, &repo, AGENT);
+
+    let out = create(&e, &repo, OTHER);
+    let d = printed(&out);
+    assert_eq!(out.stdout, format!("{}\n", d.display()));
+    assert!(
+        !out.stderr.contains("holds changes"),
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(idle.join("work").exists());
+    assert_ne!(entry(&e, &repo, AGENT)["warned"], json!(true));
+
+    let out = stop_other(&e, &repo, &d);
+    out.ok();
+    assert_eq!(out.json()["systemMessage"], warning(&idle));
+}
+
+#[test]
+fn gc5_recent_transcript_skips_workspace() {
+    let e = Env::new();
+    let repo = e.repo();
+    let old = idle_agent(&e, &repo, AGENT);
+    let sub = e.dir.join("claude/projects/proj/sess/subagents");
+    fs::create_dir_all(&sub).unwrap();
+    fs::write(sub.join(format!("{AGENT}.jsonl")), "{}\n").unwrap();
+
+    printed(&create(&e, &repo, OTHER));
+    assert!(old.exists());
+    assert!(has_entry(&e, &repo, AGENT));
+    assert!(workspaces(&e, &repo).contains(&AGENT_WS.to_string()));
+}
+
+#[test]
+fn gc6_old_transcript_does_not_protect_workspace() {
+    let e = Env::new();
+    let repo = e.repo();
+    let old = idle_agent(&e, &repo, AGENT);
+    let sub = e.dir.join("claude/projects/proj/sess/subagents");
+    fs::create_dir_all(&sub).unwrap();
+    let t = sub.join(format!("{AGENT}.jsonl"));
+    fs::write(&t, "{}\n").unwrap();
+    let ancient = std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 86400);
+    fs::File::open(&t).unwrap().set_modified(ancient).unwrap();
+
+    printed(&create(&e, &repo, OTHER));
+    assert!(!old.exists());
+}
+
+#[test]
+fn gc7_session_kind_is_skipped() {
+    let e = Env::new();
+    let repo = e.repo();
+    let sess = idle_agent(&e, &repo, "my-session");
+    assert_eq!(entry(&e, &repo, "my-session")["kind"], "session");
+
+    let d = printed(&create(&e, &repo, OTHER));
+    assert!(sess.exists());
+    assert!(has_entry(&e, &repo, "my-session"));
+    assert!(workspaces(&e, &repo).contains(&"my-session".to_string()));
+    no_output(&stop_other(&e, &repo, &d));
+    assert!(sess.exists());
+}
+
+#[test]
+fn gc8_dir_gone_entry_is_forgotten() {
+    let e = Env::new();
+    let repo = e.repo();
+    let gone = printed(&create(&e, &repo, AGENT));
+    fs::remove_dir_all(&gone).unwrap();
+    assert!(entry(&e, &repo, AGENT)["touched"].as_f64().unwrap() > 1e9);
+
+    printed(&create(&e, &repo, OTHER));
+    assert!(!has_entry(&e, &repo, AGENT));
+    assert!(!workspaces(&e, &repo).contains(&AGENT_WS.to_string()));
+}
+
+#[test]
+fn gc9_renamed_workspace_is_kept() {
+    let e = Env::new();
+    let repo = e.repo();
+    let old = idle_agent(&e, &repo, AGENT);
+    e.jj(&old, &["workspace", "rename", "renamed-by-hand"]);
+
+    let out = create(&e, &repo, OTHER);
+    printed(&out);
+    assert!(old.exists());
+    assert!(has_entry(&e, &repo, AGENT));
+    assert!(workspaces(&e, &repo).contains(&"renamed-by-hand".to_string()));
+    assert!(
+        out.stderr.contains(&format!(
+            "gc {AGENT}: workspace name not in jj workspace list"
+        )),
+        "stderr: {}",
+        out.stderr
+    );
+}
+
+fn repo_b(e: &Env) -> PathBuf {
+    let home = e.root.join("repo-b");
+    e.jj(&e.root, &["git", "init", "repo-b"]);
+    fs::write(home.join("file"), "content\n").unwrap();
+    e.jj(&home, &["commit", "-m", "init"]);
+    e.jj(&home, &["bookmark", "create", "main", "-r", "@-"]);
+    e.jj(
+        &home,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"trunk()\"",
+            "main",
+        ],
+    );
+    home
+}
+
+#[test]
+fn gc10_jj_failure_keeps_workspace() {
+    let e = Env::new();
+    let repo = e.repo();
+    let old = idle_agent(&e, &repo, AGENT);
+    fs::write(old.join(".jj/repo"), "/nonexistent/jw-test-store\n").unwrap();
+
+    let out = create(&e, &repo, OTHER);
+    printed(&out);
+    assert!(old.exists());
+    assert!(has_entry(&e, &repo, AGENT));
+    assert!(
+        out.stderr
+            .lines()
+            .any(|l| l.contains(&format!("gc {AGENT}:"))),
+        "stderr: {}",
+        out.stderr
+    );
+}
+
+#[test]
+fn gc11_committed_work_is_kept_and_warned() {
+    let e = Env::new();
+    let repo = e.repo();
+    let idle = printed(&create(&e, &repo, AGENT));
+    fs::write(idle.join("work"), "committed\n").unwrap();
+    e.jj(&idle, &["commit", "-m", "agent work"]);
+    assert!(is_empty(&e, &idle, "@"));
+    backdate(&e, &repo, AGENT);
+    let d = printed(&create(&e, &repo, OTHER));
+    assert!(idle.join("work").exists());
+
+    let out = stop_other(&e, &repo, &d);
+    out.ok();
+    assert_eq!(out.json()["systemMessage"], warning(&idle));
+    assert!(idle.join("work").exists());
+    assert!(workspaces(&e, &repo).contains(&AGENT_WS.to_string()));
+    assert_eq!(entry(&e, &repo, AGENT)["warned"], json!(true));
+}
+
+#[test]
+fn gc12_file_jj_refuses_to_snapshot_counts_as_work() {
+    let e = Env::new();
+    let repo = e.repo();
+    e.jj(
+        &repo,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "snapshot.max-new-file-size",
+            "10",
+        ],
+    );
+    let idle = printed(&create(&e, &repo, AGENT));
+    fs::write(idle.join("big"), "x".repeat(4096)).unwrap();
+    backdate(&e, &repo, AGENT);
+
+    let out = create(&e, &repo, OTHER);
+    printed(&out);
+    assert!(idle.join("big").exists(), "stderr: {}", out.stderr);
+    assert!(has_entry(&e, &repo, AGENT));
+    assert!(workspaces(&e, &repo).contains(&AGENT_WS.to_string()));
+}
+
+#[test]
+fn gc13_create_cleans_idle_workspaces_in_other_repos() {
+    let e = Env::new();
+    let a = e.repo();
+    let b = repo_b(&e);
+    let old = idle_agent(&e, &b, AGENT);
+    assert_ne!(registry_dir(&e, &a), registry_dir(&e, &b));
+
+    printed(&create(&e, &a, OTHER));
+    assert!(!old.exists());
+    assert!(!has_entry(&e, &b, AGENT));
+    assert!(!workspaces(&e, &b).contains(&AGENT_WS.to_string()));
+}
+
+#[test]
+fn gc14_busy_registry_is_skipped() {
+    use std::os::fd::AsRawFd;
+    let e = Env::new();
+    let a = e.repo();
+    let b = repo_b(&e);
+    let old = idle_agent(&e, &b, AGENT);
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(registry_dir(&e, &b).join(".lock"))
+        .unwrap();
+    assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
+
+    let start = std::time::Instant::now();
+    let out = create(&e, &a, OTHER);
+    let elapsed = start.elapsed();
+    printed(&out);
+    assert!(
+        elapsed < std::time::Duration::from_secs(20),
+        "took {elapsed:?}"
+    );
+    assert!(old.exists());
+    assert!(has_entry(&e, &b, AGENT));
+    assert!(workspaces(&e, &b).contains(&AGENT_WS.to_string()));
+    drop(lock);
+}
+
+#[test]
+fn gc15_stop_message_joins_squash_and_idle_warning() {
+    let e = Env::new();
+    let repo = e.repo();
+    let base = change_id(&e, &repo, "@");
+    let idle = printed(&create(&e, &repo, AGENT));
+    fs::write(idle.join("idle-work"), "unsaved\n").unwrap();
+    backdate(&e, &repo, AGENT);
+    let d = printed(&create(&e, &repo, OTHER));
+    fs::write(d.join("work"), "agent work\n").unwrap();
+
+    let out = stop_other(&e, &repo, &d);
+    out.ok();
+    let j = out.json();
+    assert_eq!(
+        j["systemMessage"],
+        format!(
+            "jj: squashed 1 file(s) from agent workspace {OTHER_WS} into {} (no description)\n{}",
+            b8(&base),
+            warning(&idle)
+        )
+    );
+    assert_eq!(
+        file_in(&e, &repo, &base, "work").as_deref(),
+        Some("agent work\n")
+    );
+    assert!(idle.join("idle-work").exists());
+}
