@@ -85,9 +85,6 @@ in {
   ];
 
   networking.firewall = {
-    allowedTCPPorts = [6443];
-    allowedUDPPorts = [53];
-
     checkReversePath = "loose";
 
     trustedInterfaces = ["cni0"];
