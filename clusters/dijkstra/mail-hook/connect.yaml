@@ -31,19 +31,13 @@ pipeline:
 
 output:
   reject_errored:
-    broker:
-      pattern: fan_out
-      outputs:
-        - nats:
-            urls: [nats://nats.nats.svc.cluster.local:4222]
-            subject: mail.received
-        - nats:
-            urls: [nats://nats.nats.svc.cluster.local:4222]
-            subject: matrix.send
-          processors:
-            - mapping: |
-                map one {
-                  root = (this | "").string().re_replace_all("[\r\n\t]", " ").re_replace_all("(?s)^(.{0,300}).*$", "$1")
-                }
-                root.room = "mail"
-                root.body = "Mail (" + this.kind.apply("one") + ") to " + this.to.apply("one") + "\nFrom: " + this.from.apply("one") + "\nSubject: " + this.subject.apply("one")
+    nats:
+      urls: [nats://nats.nats.svc.cluster.local:4222]
+      subject: matrix.send
+    processors:
+      - mapping: |
+          map one {
+            root = (this | "").string().re_replace_all("[\r\n\t]", " ").re_replace_all("(?s)^(.{0,300}).*$", "$1")
+          }
+          root.room = "mail"
+          root.body = "Mail (" + this.kind.apply("one") + ") to " + this.to.apply("one") + "\nFrom: " + this.from.apply("one") + "\nSubject: " + this.subject.apply("one")
