@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources: [cronjob.yaml, deployment.yaml, pv.yaml, pvc.yaml]
+configMapGenerator:
+  - name: gutenberg-scripts
+    namespace: cron
+    files: [run.sh, boot-sync.sh, sync.sh, symlink.sh]
+    options:
+      annotations:
+        kustomize.toolkit.fluxcd.io/substitute: disabled

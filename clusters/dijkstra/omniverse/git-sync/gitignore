@@ -1,0 +1,16 @@
+.trash
+.stfolder*
+.obsidian
+*.sync-conflict-*
+.devenv*
+devenv.local.nix
+devenv.local.yaml
+.direnv
+.devenv
+.pre-commit-config.yaml
+target
+__pycache__
+*.cache
+.Radicale.lock
+.Radicale.tmp-*
+/dav/collection-root/*/sub-*/

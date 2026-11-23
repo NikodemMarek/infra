@@ -1,0 +1,25 @@
+# First matching section wins.
+[root]
+user: .+
+collection:
+permissions: R
+
+[principal]
+user: nikodem
+collection: {user}
+permissions: RW
+
+[subscriptions-read]
+user: nikodem
+collection: nikodem/sub-[^/]+
+permissions: r
+
+[subscriptions-write]
+user: subscriber
+collection: nikodem/sub-[^/]+
+permissions: rw
+
+[calendars]
+user: nikodem
+collection: nikodem/[^/]+
+permissions: rw

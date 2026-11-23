@@ -8,6 +8,7 @@ README.md is the reference (sections Layout, Hosts, Dev shell, Installing a new 
 - Manifests carry no explanatory comments: the why goes in the commit message. Elsewhere comment only a non-obvious why.
 - No test suites for small glue scripts (wrappers, handlers, loops). Libraries and CLIs (Rust, Python) get tests.
 - One-time data migrations are done by hand (`kubectl exec`/`cp`), not with initContainers, hooks or jobs in the repo.
+- Config files mounted into pods go through `configMapGenerator` in the directory's `kustomization.yaml` (as in `mail-hook`), so a change rolls the pod.
 - The cluster is `clusters/dijkstra` and Flux applies `main`. Never edit `gotk-*.yaml`.
 
 ## Check
@@ -45,8 +46,8 @@ Agents prepare changes and stacked PRs. Deploying and merging is the user's call
 - Hosts: `host-switch` (the current host, `yenn`) or `host-deploy <node>...` (deploy-rs as `maintenance`). A switch does not start or restart user units: `systemctl --user restart <unit>` (e.g. `matrix-inbox`).
 - Cluster: Flux applies merged changes (`flux reconcile kustomization flux-system -n flux-system --with-source` to hurry). The Kustomization has no health checks, so check the pods yourself.
 - Images built into triss (`services.k3s.images`, `imagePullPolicy: Never`, tag = the image's `imageTag`): put the new tag in the deployment, `host-deploy triss` from a checkout that contains every image-changing PR, then merge. Merging first leaves the pod in `ErrImageNeverPull`. Changes to anything inside the `shani` image (e.g. `pkgs/claude`, `pkgs/jw`, `pkgs/event-handlers`, `pkgs/shani`) change its tag. Remove old images by name; never `crictl rmi --prune`, it drops the imported ones.
+- Avoid `rollout restart` on Flux deployments: a second rollout follows about 30 s later.
 - Restart by hand after changing:
-  - a ConfigMap mounted with `subPath`: delete the pod. Avoid `rollout restart` on Flux deployments: a second rollout follows about 30 s later.
   - the NATS hub's leafnodes config: delete pod `nats-0`.
   - the zfs-localpv `zfs.bin` setting: delete the `openebs-zfs-localpv-node` pods in `openebs`.
 - OpenTofu: edit `tofu/`; CI plans and applies on merge and fails a plan that deletes or replaces anything. Never apply a plan with `-/+` or destroys you did not intend.

@@ -1,0 +1,19 @@
+[server]
+hosts = 0.0.0.0:5232
+
+[auth]
+type = htpasswd
+htpasswd_filename = /users/users
+htpasswd_encryption = plain
+
+[rights]
+type = from_file
+file = /config/rights
+# the daily subscription job replaces whole collections with PUT
+permit_overwrite_collection = True
+
+[storage]
+filesystem_folder = /data
+
+[web]
+type = none
