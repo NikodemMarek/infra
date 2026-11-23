@@ -677,14 +677,12 @@ fn w6_done_message_mentions_worktrees() {
     );
 }
 
-fn hook_log(e: &Env) -> String {
-    fs::read_to_string(e.logs.join("claude-jj-workspace.log")).unwrap_or_default()
-}
-
-fn worktree(e: &Env, name: &str) -> std::path::PathBuf {
-    let d = e.dir.join("wt").join(name);
-    fs::create_dir_all(&d).unwrap();
-    d
+fn hook_ws(e: &Env, hex: &str) -> std::path::PathBuf {
+    let repo = e.root.join("repo");
+    let input = json!({"cwd": repo, "name": format!("agent-{hex}")}).to_string();
+    let out = e.jw_stdin(&repo, &input, &["hook", "create"]);
+    out.ok();
+    std::path::PathBuf::from(out.stdout.trim_end())
 }
 
 fn stdout_has(out: &Out, line: &str) {
@@ -707,18 +705,11 @@ fn r1_reap_done_record_drops_worktrees() {
         &json!({"workspace": dir_str(&other), "status": "idle"}).to_string(),
     );
 
-    let a1 = worktree(&e, "a-1");
-    let a2 = worktree(&e, "a-2");
-    fs::write(a2.join("KEEP"), "holds work\n").unwrap();
-    let a3 = worktree(&e, "a-3");
-    fs::write(a3.join("KEEP"), "").unwrap();
-    let a4 = worktree(&e, "a-4");
-    fs::write(
-        a4.join("KEEP"),
-        "not a workspace of claude-jj-workspace\nmore\n",
-    )
-    .unwrap();
-    let a5 = worktree(&e, "a-5");
+    let a1 = hook_ws(&e, "000000a1");
+    let a2 = hook_ws(&e, "000000a2");
+    fs::write(a2.join("work"), "holds work\n").unwrap();
+    let a4 = e.workspace("a-4");
+    let a5 = hook_ws(&e, "000000a5");
     let missing = e.dir.join("wt/missing");
     let mut sleeper = e
         .command("sleep", &a5)
@@ -729,7 +720,6 @@ fn r1_reap_done_record_drops_worktrees() {
     let wts = [
         dir_str(&a1),
         dir_str(&a2),
-        dir_str(&a3),
         dir_str(&a4),
         dir_str(&missing),
         "relative/dir",
@@ -755,11 +745,7 @@ fn r1_reap_done_record_drops_worktrees() {
     let want = vec![
         format!("removed {}", a1.display()),
         format!("kept {}: holds work", a2.display()),
-        format!("kept {}: holds work", a3.display()),
-        format!(
-            "kept {}: not a workspace of claude-jj-workspace",
-            a4.display()
-        ),
+        format!("kept {}: not a hook-created workspace", a4.display()),
         format!("kept {}: workspace of session s-other", other.display()),
         format!("kept {}: in use by other processes", a5.display()),
         format!("kept {}: workspace of session s1", own.display()),
@@ -767,8 +753,8 @@ fn r1_reap_done_record_drops_worktrees() {
     ];
     assert_eq!(lines, want, "stderr: {}", out.stderr);
     assert!(!a1.exists());
-    assert!(a2.exists());
-    assert!(a3.exists());
+    assert!(a2.join("work").exists());
+    assert!(a4.join(".jj").is_dir());
     assert!(other.join(".jj").is_dir());
     assert!(a5.exists());
     assert!(
@@ -777,16 +763,12 @@ fn r1_reap_done_record_drops_worktrees() {
         out.stdout
     );
 
-    let log = hook_log(&e);
-    let cfg = format!("CLAUDE_CONFIG_DIR={}", e.dir.join("claude").display());
-    let mut logged: Vec<&str> = log.lines().collect();
-    logged.sort();
-    let mut want: Vec<String> = [&a1, &a2, &a3, &a4]
-        .iter()
-        .map(|d| format!("drop {} {cfg}", d.display()))
-        .collect();
-    want.sort();
-    assert_eq!(logged, want, "{log}");
+    let listed = e.jj(
+        &e.root.join("repo"),
+        &["workspace", "list", "-T", "name ++ \"\\n\""],
+    );
+    assert!(!listed.lines().any(|l| l == "a-000000a1"), "{listed}");
+    assert!(listed.lines().any(|l| l == "a-000000a2"), "{listed}");
 
     assert!(!own.exists(), "own workspace should be removed");
     assert!(e.record("s1")["reaped"].is_number());
@@ -797,7 +779,7 @@ fn r2_reap_leaves_worktrees_of_not_done_record() {
     let e = Env::new();
     e.repo();
     let own = e.workspace("s-own");
-    let a1 = worktree(&e, "a-1");
+    let a1 = hook_ws(&e, "000000a1");
     e.write_record(
         "s1",
         &json!({"workspace": dir_str(&own), "status": "idle", "worktrees": [dir_str(&a1)]})
@@ -807,7 +789,6 @@ fn r2_reap_leaves_worktrees_of_not_done_record() {
     out.ok();
     assert!(a1.exists());
     assert!(own.join(".jj").is_dir());
-    assert_eq!(hook_log(&e), "");
     assert!(e.record("s1").get("reaped").is_none());
     assert_eq!(e.record("s1")["worktrees"], json!([dir_str(&a1)]));
 }
@@ -817,7 +798,7 @@ fn r3_reap_merged_branch_leaves_worktrees() {
     let e = Env::new();
     e.repo();
     let m = e.workspace("s-m");
-    let a9 = worktree(&e, "a-9");
+    let a9 = hook_ws(&e, "000000a9");
     e.write_record(
         "s-m",
         &json!({
@@ -832,39 +813,99 @@ fn r3_reap_merged_branch_leaves_worktrees() {
     out.ok();
     assert!(!m.exists(), "workspace should be removed: {}", out.stdout);
     assert!(a9.exists());
-    assert_eq!(hook_log(&e), "");
 }
 
 #[test]
-fn r4_reap_hook_missing_from_path() {
+fn r4_reap_keeps_hook_workspace_with_work() {
     let e = Env::new();
     e.repo();
     let own = e.workspace("s-own");
-    let a1 = worktree(&e, "a-1");
+    let a1 = hook_ws(&e, "000000a1");
+    fs::write(a1.join("work"), "w\n").unwrap();
     e.write_record(
         "s1",
         &json!({"workspace": dir_str(&own), "status": "done", "worktrees": [dir_str(&a1)]})
             .to_string(),
     );
-    fs::remove_file(e.dir.join("bin/claude-jj-workspace")).unwrap();
+    let out = e.jw(&e.root, &["reap"]);
+    out.ok();
+    stdout_has(&out, &format!("kept {}: holds work", a1.display()));
+    assert_eq!(fs::read_to_string(a1.join("work")).unwrap(), "w\n");
+}
 
-    let path = path_without_hook(&e);
-    let out = e.jw_env(&e.root, &[("PATH", &path)], &["reap"]);
+#[test]
+fn r5_reap_keeps_non_hook_workspace() {
+    let e = Env::new();
+    e.repo();
+    let own = e.workspace("s-own");
+    let a1 = e.workspace("a-1");
+    e.write_record(
+        "s1",
+        &json!({"workspace": dir_str(&own), "status": "done", "worktrees": [dir_str(&a1)]})
+            .to_string(),
+    );
+    let out = e.jw(&e.root, &["reap"]);
     out.ok();
     stdout_has(
         &out,
-        &format!("kept {}: claude-jj-workspace not found", a1.display()),
+        &format!("kept {}: not a hook-created workspace", a1.display()),
     );
-    assert!(a1.exists());
-    let warn = out
-        .stderr
+    assert!(a1.join(".jj").is_dir());
+}
+
+#[test]
+fn r9_reap_keeps_hook_workspace_with_committed_work() {
+    let e = Env::new();
+    e.repo();
+    let own = e.workspace("s-own");
+    let a1 = hook_ws(&e, "000000a1");
+    fs::write(a1.join("work"), "w\n").unwrap();
+    e.jj(&a1, &["commit", "-m", "agent work"]);
+    e.write_record(
+        "s1",
+        &json!({"workspace": dir_str(&own), "status": "done", "worktrees": [dir_str(&a1)]})
+            .to_string(),
+    );
+    let out = e.jw(&e.root, &["reap"]);
+    out.ok();
+    stdout_has(&out, &format!("kept {}: holds work", a1.display()));
+    assert_eq!(fs::read_to_string(a1.join("work")).unwrap(), "w\n");
+}
+
+#[test]
+fn r10_reap_reports_deletion_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    let e = Env::new();
+    e.repo();
+    let own = e.workspace("s-own");
+    let a1 = hook_ws(&e, "000000a1");
+    let ro = a1.join("ro");
+    fs::create_dir(&ro).unwrap();
+    fs::write(ro.join(".gitignore"), "*\n").unwrap();
+    fs::write(ro.join("f"), "x\n").unwrap();
+    fs::set_permissions(&ro, fs::Permissions::from_mode(0o555)).unwrap();
+    e.write_record(
+        "s1",
+        &json!({"workspace": dir_str(&own), "status": "done", "worktrees": [dir_str(&a1)]})
+            .to_string(),
+    );
+    let out = e.jw(&e.root, &["reap"]);
+    fs::set_permissions(&ro, fs::Permissions::from_mode(0o755)).unwrap();
+    out.ok();
+    let prefix = format!("kept {}: ", a1.display());
+    let line = out
+        .stdout
         .lines()
-        .find(|l| l.starts_with("jw: missing on PATH:"))
-        .unwrap_or_else(|| panic!("no missing-on-PATH warning: {}", out.stderr));
-    assert!(
-        warn.split_whitespace().any(|w| w == "claude-jj-workspace"),
-        "{warn}"
-    );
+        .find(|l| l.starts_with(&prefix))
+        .unwrap_or_else(|| {
+            panic!(
+                "no kept line\nstdout: {}\nstderr: {}",
+                out.stdout, out.stderr
+            )
+        });
+    assert!(!line.contains("holds work"), "{line}");
+    assert!(line.len() > prefix.len(), "{line}");
+    assert!(a1.exists());
 }
 
 fn which(tool: &str) -> Option<std::path::PathBuf> {
@@ -873,48 +914,31 @@ fn which(tool: &str) -> Option<std::path::PathBuf> {
         .find(|p| p.is_file())
 }
 
-/// The test bin dir, symlinks to the tools jw needs, and the host PATH entries that hold no
-/// claude-jj-workspace.
-fn path_without_hook(e: &Env) -> String {
-    let tools = e.dir.join("tools");
-    fs::create_dir_all(&tools).unwrap();
-    for t in ["jj", "git", "sleep"] {
-        if let Some(p) = which(t) {
-            let _ = std::os::unix::fs::symlink(p, tools.join(t));
-        }
-    }
-    let mut dirs = vec![e.dir.join("bin"), tools];
-    dirs.extend(
-        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-            .filter(|d| !d.join("claude-jj-workspace").exists()),
-    );
-    std::env::join_paths(dirs)
-        .unwrap()
-        .to_string_lossy()
-        .into_owned()
-}
-
 #[test]
-fn r5_reap_hook_gets_default_claude_dir_when_unset() {
+fn r8_reap_missing_tools_on_path() {
     let e = Env::new();
     e.repo();
-    let own = e.workspace("s-own");
-    let a1 = worktree(&e, "a-1");
-    e.write_record(
-        "s1",
-        &json!({"workspace": dir_str(&own), "status": "done", "worktrees": [dir_str(&a1)]})
-            .to_string(),
-    );
-    e.jw_env(&e.root, &[("CLAUDE_CONFIG_DIR", "")], &["reap"])
-        .ok();
-    assert_eq!(
-        hook_log(&e),
-        format!(
-            "drop {} CLAUDE_CONFIG_DIR={}/.local/share/claude\n",
-            a1.display(),
-            e.home.display()
-        )
-    );
+    let tools = e.dir.join("tools");
+    fs::create_dir_all(&tools).unwrap();
+    fs::remove_file(e.dir.join("bin/claude-jj-workspace")).unwrap();
+    let git = which("git").expect("git on PATH");
+    std::os::unix::fs::symlink(git, tools.join("git")).unwrap();
+    let path = format!("{}:{}", e.dir.join("bin").display(), tools.display());
+
+    let out = e.jw_env(&e.root, &[("PATH", &path)], &["reap"]);
+    out.ok();
+    let warn = out
+        .stderr
+        .lines()
+        .find(|l| l.starts_with("jw: missing on PATH:"))
+        .unwrap_or_else(|| panic!("no missing-on-PATH warning: {}", out.stderr));
+    assert_eq!(warn, "jw: missing on PATH: jj");
+
+    let jj = which("jj").expect("jj on PATH");
+    std::os::unix::fs::symlink(jj, tools.join("jj")).unwrap();
+    let out = e.jw_env(&e.root, &[("PATH", &path)], &["reap"]);
+    out.ok();
+    assert!(!out.stderr.contains("missing on PATH"), "{}", out.stderr);
 }
 
 #[test]
@@ -922,7 +946,7 @@ fn r6_reap_busy_done_record_keeps_everything() {
     let e = Env::new();
     e.repo();
     let own = e.workspace("s-own");
-    let a1 = worktree(&e, "a-1");
+    let a1 = hook_ws(&e, "000000a1");
     e.write_record(
         "s1",
         &json!({"workspace": dir_str(&own), "status": "done", "worktrees": [dir_str(&a1)]})
@@ -937,7 +961,6 @@ fn r6_reap_busy_done_record_keeps_everything() {
     let _ = sleeper.kill();
     let _ = sleeper.wait();
     out.ok();
-    assert_eq!(hook_log(&e), "");
     assert!(a1.exists());
     assert!(own.join(".jj").is_dir());
     assert!(e.record("s1").get("reaped").is_none());
@@ -948,7 +971,7 @@ fn r7_reap_already_reaped_record_not_dropped_again() {
     let e = Env::new();
     e.repo();
     let own = e.workspace("s-own");
-    let a1 = worktree(&e, "a-1");
+    let a1 = hook_ws(&e, "000000a1");
     e.write_record(
         "s1",
         &json!({
@@ -960,7 +983,6 @@ fn r7_reap_already_reaped_record_not_dropped_again() {
         .to_string(),
     );
     e.jw(&e.root, &["reap"]).ok();
-    assert_eq!(hook_log(&e), "");
     assert!(a1.exists());
 }
 

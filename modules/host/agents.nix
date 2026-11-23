@@ -20,7 +20,6 @@
     pkgs.jujutsu
     pkgs.git
     pkgs.openssh
-    pkgs.claude-hooks
   ];
 in {
   options.services.agents = {
