@@ -28,7 +28,7 @@ Answer only these:
 - **Simpler?** Is there a simpler option that meets the stated need? The user wants 20/80 designs: simplest first, no speculative complexity, minimal options and config.
 - **Assumptions** — are the plan's assumptions true? Check each against the code (`path:line`); flag any marked *unverified* that matter.
 - **Trade-offs** — are the rejected options rejected for real reasons? Is a cost of the chosen option missing (reversibility, maintenance, new dependency, migration)? Being more work to build is not a real reason: build effort is cheap for agents; maintenance cost is what counts.
-- **Consistency** — does it conflict with `accepted` ADRs in `@memoryDir@/projects/<slug>/decisions.md` or with user preferences in `@memoryDir@/global.md`? Ignore `proposed`/`rejected` ADRs.
+- **Consistency** — does it conflict with `accepted` ADRs in `@memoryDir@/projects/<slug>/decisions.md` or with user preferences in `@knowledgeFile@`? Ignore `proposed`/`rejected` ADRs.
 - **Scope** — does it go beyond what was asked?
 
 ## Rules (every focus)
@@ -39,6 +39,5 @@ Answer only these:
 
 Report your **Focus**, then **Verdict**: OK / CONCERNS, then each concern, most important first, with its evidence (`path:line`, ADR id) and what you'd do instead in one line.
 
-## Knowledge
-- `global.md` is in your context. Before starting, Read the scope files for your task (`@memoryDir@/{topic,lang,org}/<name>.md`, `@memoryDir@/projects/<slug>/facts.md`) if they exist.
-- If you learned something reusable that passes the bar in the `knowledge` skill, end your report with a ```knowledge block (format in the skill). Most tasks produce none; never submit task status.
+## Learnings
+- If you found something reusable that a future agent would otherwise get wrong (gotcha, convention, tool behaviour), end your report with a **Learnings** section, one bullet each, saying whether it is about this repo or general. Nothing sensitive (security weaknesses, accepted risks, credentials, personal data). Most tasks have none; never task status.

@@ -33,6 +33,7 @@ in {
 
       (pkgs.claude.extend {
         projectsDir = projects;
+        knowledgeFile = "$HOME/omniverse/agents/AGENTS.md";
         settings.env.TM_FILE = "/home/nikodem/omniverse/tasks/ai-tasks.md";
       })
       pkgs.agent-inbox

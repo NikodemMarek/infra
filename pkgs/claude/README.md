@@ -10,12 +10,12 @@ nix build .#claude                                # build it (from the repo root
 ## Layout
 
 - `pkgs/claude/` - the wrapper (`default.nix`), `CLAUDE.md`, `agents/*.md`, `settings.nix` (rendered to `settings.json`), `permissions.nix` (imported by `settings.nix`) and this README
-- `pkgs/agent-skills/skills/` - `*/SKILL.md`, tool-agnostic skills shared by Claude and other tools (`jj`, `atomic-commits`, `commit`, `knowledge`, `drill-me`); `claude` takes them from the `agent-skills` package
+- `pkgs/agent-skills/skills/` - `*/SKILL.md`, tool-agnostic skills shared by Claude and other tools (`jj`, `atomic-commits`, `commit`, `drill-me`); `claude` takes them from the `agent-skills` package
 - `pkgs/knowledge` - the knowledge CLI: `knowledge submit` (queue a note), `curate`, `skills`, `route`, hooks
 - `pkgs/jj-upload`, `pkgs/claude-hooks`, `pkgs/claude-statusline`, `pkgs/agent-skills` - the other tools
 - `pkgs/default.nix` - registers `claude` and the tools; `overlays/default.nix` exposes them as the `additions` overlay and `flake.nix` exports them as `packages`
 
-`@memoryDir@`, `@dataDir@` and `@projectsDir@` in the markdown files and the settings are substituted at build time.
+`@memoryDir@`, `@dataDir@`, `@projectsDir@` and `@knowledgeFile@` in the markdown files and the settings are substituted at build time. `knowledgeFile` (default `$dataDir/knowledge.md`) is the cross-repo knowledge file `CLAUDE.md` imports: edits ask for confirmation and event sessions are denied (`claude-event-guard`).
 
 The wrapper takes `knowledge`, `claude-hooks`, `claude-statusline`, `forge` and `jj-upload` from the package set (`callPackage`) and puts them on its `PATH`, so overriding any of them propagates into `claude`. `jw`, `jj` and `git`, which the workspace hooks (`jw hook`) need, go at the end of `PATH`, so the host's own win. Its default skills come from `agent-skills` the same way. `pkgs/default.nix` passes `null` for `instructions`, `agents`, `skills` and `settings` so that callPackage never injects a same-named package and the bundled defaults are used.
 
@@ -81,8 +81,7 @@ Use the overlay, not `dotfiles.packages.<system>.claude`: the overlay builds the
 xdg.configFile."opencode/skills".source = "${pkgs.agent-skills}";
 ```
 
-Claude-only frontmatter (`allowed-tools`, and `disable-model-invocation` in `commit` and `drill-me`) is ignored by other tools. `pkgs/agent-skills/skills/knowledge` ships with a literal `@memoryDir@` in `agent-skills` (only the `claude` build substitutes it).
-
+Claude-only frontmatter (`allowed-tools`, and `disable-model-invocation` in `commit` and `drill-me`) is ignored by other tools.
 ## Data dir
 
 On launch the wrapper uses `CLAUDE_CONFIG_DIR` (default: the package's `dataDir`, `$HOME/.local/share/claude`) and sets `CLAUDE_MEMORY_DIR=$CLAUDE_CONFIG_DIR/memory` (always; the agents' prose has that path baked in) and `CLAUDE_PROJECTS_DIR` (the package's `projectsDir`, where `claude-guard-writes` lets agents write to other repos). The memory dir is `git init`ed if it is not a repo yet.
@@ -94,10 +93,8 @@ On launch the wrapper uses `CLAUDE_CONFIG_DIR` (default: the package's `dataDir`
   skills/<name>      -> /nix/store/...-claude-config/skills/<name>
   settings.json      -> /nix/store/...-claude-config/settings.json (read-only)
   backups/           unmanaged settings.json files moved aside on launch
-  memory/            project memory (a git repo, not managed by Nix), shared. The architect owns README.md,
-                     INDEX.md, templates/ and projects/<slug>/{overview,decisions,log}.md + notes/; the
-                     knowledge curator owns global.md, topic/, lang/, org/ and projects/*/facts.md
-                     (`knowledge skills` writes skill-ideas/); SCOPES.toml and private/ are the user's
+  memory/            the architect's project memory (a git repo, not managed by Nix): README.md, INDEX.md,
+                     templates/ and projects/<slug>/{overview,decisions,log}.md + notes/; private/ is the user's
   ...                sessions, credentials, etc. (claude's own state)
 ~/.local/state/knowledge/inbox/   the curator's inbox (one file per pending note)
 ```
@@ -145,7 +142,7 @@ final: prev: {
 }
 ```
 
-`extend` accepts `instructions`, `agents`, `skills`, `settings`, `extraPackages`, `dataDir` and `projectsDir` (other names fail with an error). It deep-merges `settings`, `agents` and `skills` (attrsets recurse, lists such as `permissions.allow` are concatenated and deduplicated), concatenates `extraPackages`, and replaces `instructions` / `dataDir` / `projectsDir`. A `null` agent/skill removes it: `claude.extend { skills.atomic-commits = null; }`. The result carries `extend` again, so layers chain, and still supports `.override { ... }`, which replaces `instructions` / `agents` / `skills` / `settings` wholesale instead.
+`extend` accepts `instructions`, `agents`, `skills`, `settings`, `extraPackages`, `dataDir`, `projectsDir` and `knowledgeFile` (other names fail with an error). It deep-merges `settings`, `agents` and `skills` (attrsets recurse, lists such as `permissions.allow` are concatenated and deduplicated), concatenates `extraPackages`, and replaces `instructions` / `dataDir` / `projectsDir` / `knowledgeFile`. A `null` agent/skill removes it: `claude.extend { skills.atomic-commits = null; }`. The result carries `extend` again, so layers chain, and still supports `.override { ... }`, which replaces `instructions` / `agents` / `skills` / `settings` wholesale instead.
 
 ## Local/private extensions
 

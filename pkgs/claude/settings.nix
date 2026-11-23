@@ -10,8 +10,8 @@
     refreshInterval = 30;
   };
 
-  # Built-in auto-memory is replaced by the knowledge notes and curator. Both the
-  # setting and the env var, so a wrong key name cannot leave it on.
+  # Built-in auto-memory stays off (knowledge lives in AGENTS.md and the knowledge file);
+  # both keys, so a wrong key name cannot leave it on.
   autoMemoryEnabled = false;
   env = {
     CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
@@ -20,15 +20,6 @@
 
   hooks = {
     SessionStart = [
-      {
-        hooks = [
-          {
-            type = "command";
-            command = "knowledge hook session-start";
-            timeout = 10;
-          }
-        ];
-      }
       # After a compaction the summary can drop the stack and session state the coordinator works from.
       {
         matcher = "compact";
@@ -58,6 +49,16 @@
           {
             type = "command";
             command = "claude-sudo-guard";
+            timeout = 10;
+          }
+        ];
+      }
+      {
+        matcher = "Edit|Write|Bash";
+        hooks = [
+          {
+            type = "command";
+            command = "claude-event-guard '@knowledgeFile@'";
             timeout = 10;
           }
         ];
@@ -201,15 +202,6 @@
             type = "command";
             command = "jw hook stop || true";
             timeout = 180;
-          }
-        ];
-      }
-      {
-        hooks = [
-          {
-            type = "command";
-            command = "knowledge hook subagent-stop";
-            timeout = 30;
           }
         ];
       }

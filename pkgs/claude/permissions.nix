@@ -1,6 +1,6 @@
 # Claude Code permission rules (https://code.claude.com/docs/en/permissions),
-# imported by settings.nix as `permissions`. `@memoryDir@` is substituted at
-# build time.
+# imported by settings.nix as `permissions`. `@memoryDir@`, `@projectsDir@` and
+# `@knowledgeFile@` are substituted at build time.
 {
   allow = [
     "Bash(jj log:*)"
@@ -62,9 +62,6 @@
     "Bash(forge pr checks:*)"
     "Bash(forge pr comments:*)"
 
-    # Queueing notes for the knowledge curator.
-    "Bash(knowledge submit:*)"
-
     "Bash(tm:*)"
 
     "Bash(mvn test:*)"
@@ -76,17 +73,6 @@
     "Bash(shpool attach:*)"
     "Bash(shpool --no-daemonize attach:*)"
 
-    # The curator's files (injected into every session) and the note inbox: event
-    # sessions run in auto mode with the memory dir in additionalDirectories, so
-    # without these they could write them directly. The architect's own files
-    # (overview, decisions, log, notes) are not covered. Only Edit rules: they
-    # apply to Write too, Write path rules are never consulted.
-    "Edit(@memoryDir@/global.md)"
-    "Edit(@memoryDir@/topic/**)"
-    "Edit(@memoryDir@/lang/**)"
-    "Edit(@memoryDir@/org/**)"
-    "Edit(@memoryDir@/projects/*/facts.md)"
-    "Edit(~/.local/state/knowledge/inbox/**)"
     "Edit(~/.local/state/agent-sessions/**)"
 
     # MR comments, replies and resolves go only through `gitlab-review` drafts.
@@ -104,6 +90,7 @@
     "Bash(glab api *notes*)"
     "Bash(glab api *discussions*)"
   ];
+  ask = ["Edit(@knowledgeFile@)"];
   additionalDirectories = ["@memoryDir@" "@projectsDir@"];
   # every session starts in auto mode, also those jw and the event handlers start
   defaultMode = "auto";
