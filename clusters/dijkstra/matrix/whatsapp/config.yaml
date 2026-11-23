@@ -1,0 +1,44 @@
+env_config_prefix: BRIDGE_
+
+homeserver:
+  address: http://synapse.matrix.svc.cluster.local:8008
+  domain: ${DOMAIN}
+
+appservice:
+  address: http://whatsapp.matrix.svc.cluster.local:29318
+  hostname: 0.0.0.0
+  port: 29318
+  id: whatsapp
+  bot:
+    username: whatsappbot
+  username_template: "whatsapp_{{.}}"
+
+database:
+  type: sqlite3-fk-wal
+  uri: file:/data/whatsapp.db?_txlock=immediate
+
+bridge:
+  permissions:
+    "@nikodem:${DOMAIN}": admin
+
+network:
+  history_sync:
+    request_full_sync: true
+    full_sync_config:
+      days_limit: 3650
+
+backfill:
+  enabled: true
+  max_initial_messages: 100000
+
+encryption:
+  allow: false
+
+provisioning:
+  shared_secret: disable
+
+logging:
+  min_level: info
+  writers:
+    - type: stdout
+      format: json

@@ -1,0 +1,50 @@
+directory: /music
+library: /data/library.db
+timeout: 60
+
+import:
+  log: /music/beets-import.log
+  move: yes
+  write: yes
+  resume: no
+  incremental: no
+  quiet: yes
+  quiet_fallback: asis
+  duplicate_action: remove
+
+match:
+  strong_rec_thresh: 0.10
+
+plugins:
+  - musicbrainz
+  - fetchart
+  - embedart
+  - lastgenre
+  - lyrics
+  - missing
+  - duplicates
+  - badfiles
+  - edit
+  - scrub
+  - zero
+  - replaygain
+
+fetchart:
+  maxwidth: 1000
+
+embedart:
+  remove_art_file: yes
+  maxwidth: 1000
+
+lyrics:
+  synced: yes
+  sources: [lrcmux, lrclib, genius]
+
+replaygain:
+  backend: ffmpeg
+
+# Drop YouTube's auto-generated description, keep plain URLs and other comments.
+zero:
+  fields: comments
+  comments: ['Provided to YouTube']
+  update_database: yes
