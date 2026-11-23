@@ -1,5 +1,6 @@
 mod agent;
 mod cmd;
+mod hook;
 mod jj;
 mod msg;
 mod poll;
@@ -9,6 +10,7 @@ mod record;
 mod session;
 mod shpool;
 mod workspace;
+mod worktree;
 
 use std::process;
 
@@ -71,6 +73,18 @@ enum Command {
     },
     /// mark this agent session finished: it is stopped once it is idle and detached, and the worktrees it created are removed
     Done,
+    /// Claude Code hooks (a hook's JSON object on stdin) that run isolated worktrees in jj workspaces
+    #[command(hide = true)]
+    Hook {
+        #[command(subcommand)]
+        action: HookAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum HookAction {
+    /// WorktreeCreate: create the workspace (git worktree outside a jj repo) and print its directory
+    Create,
 }
 
 #[derive(Args)]
@@ -234,6 +248,7 @@ fn main() {
             SessionAction::Worktree(a) => session::cmd_session_worktree(a),
         },
         Command::Done => session::cmd_done(),
+        Command::Hook { action } => hook::cmd_hook(action),
     });
     if let Err(e) = result {
         if !e.is_empty() {

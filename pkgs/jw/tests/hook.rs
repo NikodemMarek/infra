@@ -1,0 +1,491 @@
+mod common;
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use common::{Env, Out};
+use serde_json::{json, Value};
+
+const AGENT: &str = "agent-0123abcd";
+const AGENT_WS: &str = "a-0123abcd";
+
+fn create_env(e: &Env, cwd: &Path, envs: &[(&str, &str)], name: &str) -> Out {
+    let input = json!({
+        "session_id": "sess",
+        "hook_event_name": "WorktreeCreate",
+        "cwd": cwd,
+        "name": name,
+    });
+    e.jw_stdin_env(cwd, envs, &input.to_string(), &["hook", "create"])
+}
+
+fn create(e: &Env, cwd: &Path, name: &str) -> Out {
+    create_env(e, cwd, &[], name)
+}
+
+fn printed(out: &Out) -> PathBuf {
+    out.ok();
+    assert!(out.stdout.ends_with('\n'), "stdout: {:?}", out.stdout);
+    let line = out.stdout.trim_end_matches('\n');
+    assert!(!line.contains('\n'), "one line expected: {:?}", out.stdout);
+    PathBuf::from(line)
+}
+
+fn sha16(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn registry_key(ws: &Path) -> String {
+    let repo = ws.join(".jj/repo");
+    let store = if repo.is_file() {
+        let target = PathBuf::from(fs::read_to_string(&repo).unwrap().trim());
+        ws.join(".jj").join(target)
+    } else {
+        repo
+    };
+    sha16(fs::canonicalize(store).unwrap().to_str().unwrap())
+}
+
+fn registry_dir(e: &Env, repo: &Path) -> PathBuf {
+    e.dir.join("claude/jj-agents").join(registry_key(repo))
+}
+
+fn entry(e: &Env, repo: &Path, name: &str) -> Value {
+    let p = registry_dir(e, repo).join(format!("{name}.json"));
+    let text = fs::read_to_string(&p).unwrap_or_else(|err| panic!("read {}: {err}", p.display()));
+    serde_json::from_str(&text).unwrap_or_else(|err| panic!("bad entry json ({err}): {text}"))
+}
+
+fn write_entry(e: &Env, repo: &Path, name: &str, v: &Value) {
+    let p = registry_dir(e, repo).join(format!("{name}.json"));
+    fs::write(p, serde_json::to_string_pretty(v).unwrap()).unwrap();
+}
+
+fn change_id(e: &Env, cwd: &Path, rev: &str) -> String {
+    e.jj(cwd, &["log", "-r", rev, "--no-graph", "-T", "change_id"])
+        .trim()
+        .to_string()
+}
+
+fn workspaces(e: &Env, repo: &Path) -> Vec<String> {
+    e.jj(repo, &["workspace", "list", "-T", "name ++ \"\\n\""])
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+fn is_empty(e: &Env, cwd: &Path, rev: &str) -> bool {
+    e.jj(cwd, &["log", "-r", rev, "--no-graph", "-T", "empty"])
+        .trim()
+        == "true"
+}
+
+fn git(e: &Env, cwd: &Path, args: &[&str]) -> String {
+    let o = e
+        .command("git", cwd)
+        .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        o.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    String::from_utf8_lossy(&o.stdout).trim().to_string()
+}
+
+fn git_repo(e: &Env) -> PathBuf {
+    let d = e.root.join("plain");
+    fs::create_dir_all(&d).unwrap();
+    git(e, &d, &["init", "-q", "-b", "trunk"]);
+    fs::write(d.join("file"), "one\n").unwrap();
+    git(e, &d, &["add", "file"]);
+    git(e, &d, &["commit", "-q", "-m", "one"]);
+    d
+}
+
+#[test]
+fn c1_create_agent_in_fresh_repo() {
+    let e = Env::new();
+    let repo = e.repo();
+    let caller = change_id(&e, &repo, "@");
+    assert!(!e.root.join("repo.agents").exists());
+
+    let out = create(&e, &repo, AGENT);
+    let d = printed(&out);
+    assert_eq!(d, e.root.join("repo.agents").join(AGENT_WS));
+    assert!(d.join(".jj").is_dir());
+    assert!(workspaces(&e, &repo).contains(&AGENT_WS.to_string()));
+
+    assert_eq!(change_id(&e, &d, "@-"), caller);
+    assert!(is_empty(&e, &d, "@"));
+
+    let log = e.log("claude-mcp-defaults.log");
+    assert!(
+        log.lines().any(|l| l == d.to_str().unwrap()),
+        "mcp-defaults log: {log}"
+    );
+
+    let key = registry_key(&repo);
+    assert_eq!(key.len(), 16);
+    assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
+    assert!(e
+        .dir
+        .join("claude/jj-agents")
+        .join(&key)
+        .join(format!("{AGENT}.json"))
+        .is_file());
+
+    let v = entry(&e, &repo, AGENT);
+    assert_eq!(v["name"], AGENT);
+    assert_eq!(v["root"], repo.to_str().unwrap());
+    assert_eq!(v["dir"], d.to_str().unwrap());
+    assert_eq!(v["agents"], e.root.join("repo.agents").to_str().unwrap());
+    assert_eq!(v["base"], caller);
+    assert_eq!(v["kind"], "agent");
+    assert_eq!(v["ws"], AGENT_WS);
+    assert!(v["touched"].as_f64().unwrap() > 1e9, "touched: {v}");
+    assert!(v.get("warned").is_none(), "warned must be omitted: {v}");
+    let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        ["agents", "base", "dir", "kind", "name", "root", "touched", "ws"]
+    );
+}
+
+#[test]
+fn c2_create_session_kind() {
+    let e = Env::new();
+    let repo = e.repo();
+    let trunk = change_id(&e, &repo, "main");
+    assert_ne!(trunk, change_id(&e, &repo, "@"));
+
+    let d = printed(&create(&e, &repo, "s-0101-120000-7"));
+    assert_eq!(d, e.root.join("repo.agents/s-0101-120000-7"));
+    assert!(workspaces(&e, &repo).contains(&"s-0101-120000-7".to_string()));
+    assert_eq!(change_id(&e, &d, "@-"), trunk);
+
+    let v = entry(&e, &repo, "s-0101-120000-7");
+    assert_eq!(v["kind"], "session");
+    assert_eq!(v["base"], trunk);
+    assert_eq!(v["name"], "s-0101-120000-7");
+    assert!(v.get("ws").is_none(), "ws must be omitted: {v}");
+    assert!(v.get("warned").is_none(), "warned must be omitted: {v}");
+    assert!(e
+        .log("claude-mcp-defaults.log")
+        .lines()
+        .any(|l| l == d.to_str().unwrap()));
+}
+
+#[test]
+fn c3_workspace_base_for_session() {
+    let e = Env::new();
+    let repo = e.repo();
+    e.jj(&repo, &["new", "main", "-m", "feature"]);
+    let feature = change_id(&e, &repo, "@");
+    e.jj(&repo, &["new", "main"]);
+    let trunk = change_id(&e, &repo, "main");
+
+    let d = printed(&create_env(
+        &e,
+        &repo,
+        &[("CLAUDE_WORKSPACE_BASE", &feature)],
+        "s-one",
+    ));
+    assert_eq!(change_id(&e, &d, "@-"), feature);
+    assert_eq!(entry(&e, &repo, "s-one")["base"], feature);
+
+    let d = printed(&create_env(
+        &e,
+        &repo,
+        &[("CLAUDE_WORKSPACE_BASE", "qqqqqqqqqqqqqqqq")],
+        "s-two",
+    ));
+    assert_eq!(change_id(&e, &d, "@-"), trunk);
+    assert_eq!(entry(&e, &repo, "s-two")["base"], trunk);
+
+    let d = printed(&create_env(
+        &e,
+        &repo,
+        &[("CLAUDE_WORKSPACE_BASE", "main")],
+        "s-three",
+    ));
+    assert_eq!(change_id(&e, &d, "@-"), trunk);
+}
+
+#[test]
+fn c4_workspace_base_ignored_for_agent() {
+    let e = Env::new();
+    let repo = e.repo();
+    e.jj(&repo, &["describe", "-m", "caller"]);
+    let caller = change_id(&e, &repo, "@");
+    e.jj(&repo, &["new", "main", "-m", "feature"]);
+    let feature = change_id(&e, &repo, "@");
+    e.jj(&repo, &["edit", &caller]);
+
+    let d = printed(&create_env(
+        &e,
+        &repo,
+        &[("CLAUDE_WORKSPACE_BASE", &feature)],
+        AGENT,
+    ));
+    assert_eq!(change_id(&e, &d, "@-"), caller);
+}
+
+#[test]
+fn c5_secondary_workspace_shares_registry() {
+    let e = Env::new();
+    let repo = e.repo();
+    let first = printed(&create(&e, &repo, AGENT));
+    let keys = || {
+        fs::read_dir(e.dir.join("claude/jj-agents"))
+            .unwrap()
+            .map(|d| d.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(keys(), [registry_key(&repo)]);
+
+    let second = printed(&create(&e, &first, "s-from-secondary"));
+    assert!(second.join(".jj").is_dir());
+    assert_ne!(first, second);
+    assert_eq!(keys(), [registry_key(&repo)]);
+    assert_eq!(registry_key(&first), registry_key(&repo));
+
+    let v = entry(&e, &repo, "s-from-secondary");
+    assert_eq!(v["root"], first.to_str().unwrap());
+    assert_eq!(v["dir"], second.to_str().unwrap());
+    assert!(workspaces(&e, &repo).contains(&"s-from-secondary".to_string()));
+}
+
+#[test]
+fn c7_repeat_returns_same_dir() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, AGENT));
+    let mut v = entry(&e, &repo, AGENT);
+    v["touched"] = json!(1000.0);
+    write_entry(&e, &repo, AGENT, &v);
+    fs::write(d.join("work"), "edit\n").unwrap();
+
+    let again = printed(&create(&e, &repo, AGENT));
+    assert_eq!(again, d);
+    assert!(d.join("work").exists());
+    assert!(entry(&e, &repo, AGENT)["touched"].as_f64().unwrap() > 1e9);
+    let n = workspaces(&e, &repo)
+        .iter()
+        .filter(|w| *w == AGENT_WS)
+        .count();
+    assert_eq!(n, 1);
+}
+
+#[test]
+fn c8_registered_dir_deleted_is_recreated() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::remove_dir_all(&d).unwrap();
+
+    let again = printed(&create(&e, &repo, AGENT));
+    assert_eq!(again, d);
+    assert!(d.join(".jj").is_dir());
+    let n = workspaces(&e, &repo)
+        .iter()
+        .filter(|w| *w == AGENT_WS)
+        .count();
+    assert_eq!(n, 1);
+    assert_eq!(entry(&e, &repo, AGENT)["dir"], d.to_str().unwrap());
+}
+
+#[test]
+fn c9_collision_with_unmanaged_workspace() {
+    let e = Env::new();
+    let repo = e.repo();
+    let other = e.workspace(AGENT_WS);
+
+    create(&e, &repo, AGENT).fail(&format!(
+        "a jj workspace named '{AGENT_WS}' already exists and isn't managed by this hook"
+    ));
+    assert!(other.join(".jj").is_dir());
+}
+
+#[test]
+fn c10_existing_dir_is_an_error() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = e.root.join("repo.agents/s-taken");
+    fs::create_dir_all(&d).unwrap();
+
+    let out = create(&e, &repo, "s-taken");
+    out.fail(&format!("{} already exists", d.display()));
+    assert!(out.stdout.is_empty(), "stdout: {:?}", out.stdout);
+    assert!(!workspaces(&e, &repo).contains(&"s-taken".to_string()));
+}
+
+#[test]
+fn c11_existing_dangling_symlink_is_an_error() {
+    let e = Env::new();
+    let repo = e.repo();
+    let agents = e.root.join("repo.agents");
+    fs::create_dir_all(&agents).unwrap();
+    let d = agents.join("s-link");
+    std::os::unix::fs::symlink(e.dir.join("nowhere"), &d).unwrap();
+
+    create(&e, &repo, "s-link").fail(&format!("{} already exists", d.display()));
+}
+
+#[test]
+fn c12_invalid_names() {
+    let e = Env::new();
+    let repo = e.repo();
+    let long = "a".repeat(101);
+    for name in ["", "bad/name", "has space", "-lead", &long] {
+        create(&e, &repo, name).fail(&format!("jw: invalid worktree name '{name}'"));
+    }
+
+    let input = json!({"cwd": repo}).to_string();
+    e.jw_stdin(&repo, &input, &["hook", "create"])
+        .fail("jw: invalid worktree name ''");
+    let input = json!({"cwd": repo, "name": 5}).to_string();
+    e.jw_stdin(&repo, &input, &["hook", "create"])
+        .fail("jw: invalid worktree name ''");
+
+    assert!(!e.root.join("repo.agents").exists());
+}
+
+#[test]
+fn c13_name_of_100_chars_is_valid() {
+    let e = Env::new();
+    let repo = e.repo();
+    let name = "b".repeat(100);
+    let d = printed(&create(&e, &repo, &name));
+    assert_eq!(d, e.root.join("repo.agents").join(&name));
+}
+
+#[test]
+fn c14_unparsable_stdin() {
+    let e = Env::new();
+    let repo = e.repo();
+    let out = e.jw_stdin(&repo, "not json", &["hook", "create"]);
+    out.fail("jw: ");
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn c15_cwd_defaults_to_process_cwd() {
+    let e = Env::new();
+    let repo = e.repo();
+    let input = json!({"name": "s-nocwd"}).to_string();
+    let out = e.jw_stdin(&repo, &input, &["hook", "create"]);
+    assert_eq!(printed(&out), e.root.join("repo.agents/s-nocwd"));
+}
+
+#[test]
+fn c16_agent_session_tracks_new_worktree() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create_env(&e, &repo, &[("AGENT_SESSION", "s1")], AGENT));
+    assert_eq!(e.record("s1")["worktrees"], json!([d.to_str().unwrap()]));
+}
+
+#[test]
+fn c17_no_tracking_without_agent_session() {
+    let e = Env::new();
+    let repo = e.repo();
+    printed(&create(&e, &repo, AGENT));
+    assert!(!e.state.join("agent-sessions").exists());
+    printed(&create_env(&e, &repo, &[("AGENT_SESSION", "")], "s-x"));
+    assert!(!e.state.join("agent-sessions").exists());
+}
+
+#[test]
+fn c18_tracking_error_still_succeeds() {
+    let e = Env::new();
+    let repo = e.repo();
+    let out = create_env(&e, &repo, &[("AGENT_SESSION", "bad/name")], AGENT);
+    let d = printed(&out);
+    assert_eq!(out.stdout, format!("{}\n", d.display()));
+    assert!(
+        out.stderr
+            .contains(&format!("jw: session worktree {}: ", d.display())),
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(d.join(".jj").is_dir());
+    assert_eq!(entry(&e, &repo, AGENT)["dir"], d.to_str().unwrap());
+}
+
+#[test]
+fn g1_git_fallback_new_branch() {
+    let e = Env::new();
+    let top = git_repo(&e);
+    let sub = top.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    let head = git(&e, &top, &["rev-parse", "HEAD"]);
+
+    let out = create(&e, &sub, "feat");
+    let wt = printed(&out);
+    assert_eq!(wt, top.join(".claude/worktrees/feat"));
+    assert!(wt.join("file").is_file());
+    assert_eq!(
+        git(&e, &wt, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "worktree-feat"
+    );
+    assert_eq!(git(&e, &wt, &["rev-parse", "HEAD"]), head);
+    assert!(e
+        .log("claude-mcp-defaults.log")
+        .lines()
+        .any(|l| l == wt.to_str().unwrap()));
+    assert!(!e.dir.join("claude/jj-agents").exists());
+}
+
+#[test]
+fn g2_git_fallback_existing_branch_reused() {
+    let e = Env::new();
+    let top = git_repo(&e);
+    let old = git(&e, &top, &["rev-parse", "HEAD"]);
+    fs::write(top.join("file"), "two\n").unwrap();
+    git(&e, &top, &["commit", "-q", "-am", "two"]);
+    git(&e, &top, &["branch", "worktree-feat", &old]);
+
+    let wt = printed(&create(&e, &top, "feat"));
+    assert_eq!(wt, top.join(".claude/worktrees/feat"));
+    assert_eq!(
+        git(&e, &wt, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "worktree-feat"
+    );
+    assert_eq!(git(&e, &wt, &["rev-parse", "HEAD"]), old);
+}
+
+#[test]
+fn g3_git_fallback_existing_worktree_is_printed() {
+    let e = Env::new();
+    let top = git_repo(&e);
+    let wt = printed(&create(&e, &top, "feat"));
+    let again = printed(&create(&e, &top, "feat"));
+    assert_eq!(again, wt);
+}
+
+#[test]
+fn g4_git_fallback_outside_any_repo_fails() {
+    let e = Env::new();
+    let plain = e.dir.join("nothing");
+    fs::create_dir_all(&plain).unwrap();
+    let out = create(&e, &plain, "feat");
+    assert_eq!(out.code, 1, "stderr: {}", out.stderr);
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn g5_git_fallback_invalid_name() {
+    let e = Env::new();
+    let top = git_repo(&e);
+    create(&e, &top, "bad/name").fail("jw: invalid worktree name 'bad/name'");
+    assert!(!top.join(".claude").exists());
+}
