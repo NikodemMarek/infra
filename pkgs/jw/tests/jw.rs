@@ -69,7 +69,7 @@ fn a1_agent_detached_start() {
 
     let out = e.jw_env(
         &e.root,
-        &[("CLAUDECODE", "1"), ("KNOWLEDGE_ORIGIN", "other")],
+        &[("CLAUDECODE", "1"), ("AGENT_ORIGIN", "other")],
         &["agent", "-d", "repo", "hello", "world"],
     );
     out.ok();
@@ -102,7 +102,7 @@ fn a1_agent_detached_start() {
     );
     assert!(env.contains(&format!("SHPOOL_SESSION_NAME={name}").as_str()));
     assert!(!env.iter().any(|l| l.starts_with("CLAUDECODE=")));
-    assert!(!env.iter().any(|l| l.starts_with("KNOWLEDGE_ORIGIN=")));
+    assert!(!env.iter().any(|l| l.starts_with("AGENT_ORIGIN=")));
 
     let r = e.record(&name);
     assert_eq!(r["kind"], "task");
@@ -144,11 +144,67 @@ fn a3_agent_leading_dashdash_is_all_prompt() {
 }
 
 #[test]
+fn e2_knowledge_origin_alone_is_not_event_session() {
+    let e = Env::new();
+    let repo = e.repo();
+    e.jw_env(
+        &repo,
+        &[("KNOWLEDGE_ORIGIN", "event:x")],
+        &["agent", "-d", "repo", "hi"],
+    )
+    .ok();
+    assert!(e.logs.join("shpool.log").exists());
+}
+
+#[test]
+fn a4_agent_origin_not_passed_to_claude() {
+    let e = Env::new();
+    e.repo();
+    e.jw_env(
+        &e.root,
+        &[("AGENT_ORIGIN", "other")],
+        &["agent", "-d", "repo", "hi"],
+    )
+    .ok();
+    let log = e.log("claude.log");
+    assert!(!claude_env(&log)
+        .iter()
+        .any(|l| l.starts_with("AGENT_ORIGIN=")));
+}
+
+#[test]
+fn a5_agent_repo_from_first_word() {
+    let e = Env::new();
+    e.repo();
+
+    let out = e.jw(&e.root, &["agent", "-d", "--", "repo hello"]);
+    out.ok();
+    let name = started(&out);
+    assert!(e.root.join("repo.agents").join(&name).join(".jj").is_dir());
+    let log = e.log("claude.log");
+    assert_eq!(claude_args(&log), ["--", "repo hello"]);
+    assert!(!e.logs.join("knowledge.log").exists());
+}
+
+#[test]
+fn a6_agent_no_repo_fails() {
+    let e = Env::new();
+    e.repo();
+    let msg = "jw: no repo: pass one or start the task with its name";
+
+    e.jw(&e.root, &["agent", "-d", "--", "hello"]).fail(msg);
+    e.jw(&e.root, &["agent", "-d"]).fail(msg);
+    assert!(!e.logs.join("shpool.log").exists());
+    assert!(!e.root.join("repo.agents").exists());
+    assert!(!e.logs.join("knowledge.log").exists());
+}
+
+#[test]
 fn e1_event_session_refusals() {
     let e = Env::new();
     let repo = e.repo();
     let ev = [
-        ("KNOWLEDGE_ORIGIN", "event:gitlab-note"),
+        ("AGENT_ORIGIN", "event:gitlab-note"),
         ("AGENT_SESSION", "s1"),
     ];
 
@@ -571,7 +627,7 @@ fn w2_worktree_in_event_session() {
     let out = e.jw_env(
         &e.home,
         &[
-            ("KNOWLEDGE_ORIGIN", "event:gitlab-note"),
+            ("AGENT_ORIGIN", "event:gitlab-note"),
             ("AGENT_SESSION", "s1"),
         ],
         &["session", "worktree", dir_str(&d)],

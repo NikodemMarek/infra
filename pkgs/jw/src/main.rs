@@ -56,7 +56,7 @@ enum Command {
     Info,
     /// pick a repo (the current one first) and print its name
     Pick,
-    /// run Claude in a shpool session in a new workspace of a repo (default: this one; outside a repo the one the prompt fits, else pick one)
+    /// run Claude in a shpool session in a new workspace of a repo (default: this one; outside a repo the one the prompt starts with, else pick one)
     #[command(visible_alias = "a")]
     Agent(AgentArgs),
     /// resume a Claude session of a repo (any of its workspaces; default: this one) in a shpool session, in its workspace (recreated on trunk() if it is gone)
