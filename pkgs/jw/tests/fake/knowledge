@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "knowledge $*" >> "$FAKE_LOG_DIR/knowledge.log"

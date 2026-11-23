@@ -9,7 +9,7 @@ const URL_MAX: usize = 2048;
 
 /// Event sessions run on untrusted text (GitLab); what they could hand off or write would become instructions elsewhere.
 pub fn in_event_session() -> bool {
-    env::var("KNOWLEDGE_ORIGIN").is_ok_and(|origin| origin.starts_with("event:"))
+    env::var("AGENT_ORIGIN").is_ok_and(|origin| origin.starts_with("event:"))
 }
 
 /// name, else the session this process runs in.

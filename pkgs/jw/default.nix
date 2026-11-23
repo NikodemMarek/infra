@@ -1,6 +1,6 @@
 # `jw`: the binary does the work; the fish function cds where it says.
-# fzf, shpool, direnv, cksum, knowledge, forge and event-pub are on a PATH suffix, so the user's own win; jj and claude come from
-# the user's PATH, and so does claude-bare, which knowledge uses.
+# fzf, shpool, direnv, cksum, forge and event-pub are on a PATH suffix, so the user's own win; jj and claude come from
+# the user's PATH.
 {
   lib,
   rustPlatform,
@@ -11,7 +11,6 @@
   shpool,
   direnv,
   coreutils,
-  knowledge,
   forge,
   event-bus,
   projectsRoot ? "~/projects",
@@ -39,7 +38,7 @@ assert lib.assertMsg (builtins.match "[~/][A-Za-z0-9._/-]*" projectsRoot != null
     postInstall = ''
       wrapProgram $out/bin/jw \
         --set JW_PROJECTS_ROOT '${projectsRoot}' \
-        --suffix PATH : ${lib.makeBinPath [fzf shpool direnv coreutils knowledge forge event-bus]}
+        --suffix PATH : ${lib.makeBinPath [fzf shpool direnv coreutils forge event-bus]}
       install -Dm644 ${./jw.fish} $out/share/fish/vendor_functions.d/jw.fish
       install -Dm644 ${./completions.fish} $out/share/fish/vendor_completions.d/jw.fish
       substituteInPlace $out/share/fish/vendor_completions.d/jw.fish \

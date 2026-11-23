@@ -133,8 +133,9 @@
   '';
 
   # runs in the shpool session: $1 = context dir, $2 = session lock, $3 = gitlab host,
-  # $4 = knowledge origin (`event:<type>`), exported so the knowledge CLI marks
-  # what the session submits as untrusted, optionally $5 = claude session id,
+  # $4 = agent origin (`event:<type>`), exported so jw refuses agent/resume/msg/session set
+  # and claude-event-guard denies edits to AGENTS.md, CLAUDE.md and the knowledge file,
+  # optionally $5 = claude session id,
   # $6 = session dir (see contextTool): then the lock is held on fd 8 while
   # claude runs, and a started conversation is resumed with the queued prompts
   launcher = writeShellApplication {
@@ -153,7 +154,7 @@
     # --add-dir is variadic and would swallow a following positional: keep an option after it
     text = ''
       export GITLAB_HOST="$3"
-      export KNOWLEDGE_ORIGIN="''${4:-}"
+      export AGENT_ORIGIN="''${4:-}"
       export PATH="$PATH:${jujutsu}/bin"
 
       # say it in the session and as an event; no SHPOOL_SESSION_NAME: this
@@ -268,7 +269,7 @@ in
       fi
       name=$(jq -r --arg repo "$repo" '"\($repo)\(if .target_iid then "-\(.target_iid)" else "" end)-\(.type | split(".") | last)" | gsub("[^A-Za-z0-9_.-]"; "-")' <<<"$event")
       host=$(jq -r '.host // ""' <<<"$event")
-      # event-subscribe sets ER_TYPE; sessions started here submit knowledge as untrusted
+      # event-subscribe sets ER_TYPE; the marker makes jw refuse agent/resume/msg/session set in these sessions
       origin="event:''${ER_TYPE:-unknown}"
       # fields of the session record (`jw session set`); the handler variant `name` is the kind that agent-inbox tabs match on
       record_title=$(jq -r '(.title // "" | tostring) as $t
@@ -309,7 +310,7 @@ in
         workdir=$dir
         notice="You are in the user's MAIN checkout, not the MR branch — do NOT modify files; only analyse and report."
         shown_prompt="$notice"$'\n\n'"$(jq -r --arg task "$task" -f ${fallbackFile} <<<"$event")"
-        cmd=(env "KNOWLEDGE_ORIGIN=$origin" claude "$shown_prompt")
+        cmd=(env "AGENT_ORIGIN=$origin" claude "$shown_prompt")
       fi
 
       if [[ -n "$dry_run" ]]; then
@@ -350,7 +351,7 @@ in
       taken() { local n _; while read -r n _; do [[ "$n" == "$1" ]] && return 0; done <<<"$existing"; return 1; }
       base=$name; i=2
       while taken "$name"; do name="$base-$i"; i=$((i + 1)); done
-      # exported before the job script is written, so the session gets it. No KNOWLEDGE_ORIGIN
+      # exported before the job script is written, so the session gets it. No AGENT_ORIGIN
       # in this environment (the launcher sets it): `jw session set` refuses event sessions
       # jw finds the shpool session by this name: keep it equal to the shpool session name
       export AGENT_SESSION=$name

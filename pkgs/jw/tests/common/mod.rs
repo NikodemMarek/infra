@@ -15,6 +15,7 @@ const FAKES: &[(&str, &str)] = &[
     ("shpool", include_str!("../fake/shpool")),
     ("direnv", include_str!("../fake/direnv")),
     ("claude", include_str!("../fake/claude")),
+    ("knowledge", include_str!("../fake/knowledge")),
     ("jj-stack", include_str!("../fake/jj-stack")),
     ("forge", include_str!("../fake/forge")),
     ("event-pub", include_str!("../fake/event-pub")),

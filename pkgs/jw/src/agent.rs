@@ -4,14 +4,14 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use std::process::{self, Command, Stdio};
+use std::process::{self, Command};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Local};
 use serde_json::{Map, Value};
 
-use crate::cmd::{output_timeout, output_with_input, stdin_is_tty};
+use crate::cmd::{output_with_input, stdin_is_tty};
 use crate::procs::{claude_dir, live_claudes};
 use crate::record::{valid_name, write_error, Record, Records};
 use crate::session::{in_event_session, session_name};
@@ -32,53 +32,6 @@ pub fn sh_quote(word: &str) -> String {
     }
 }
 
-/// Asks `knowledge route` which repo the task fits: (repo, reason), no repo if there is no confident guess.
-fn route(task: &str) -> (Option<String>, String) {
-    let names = repos();
-    if names.is_empty() {
-        return (None, format!("no jj repos under {}", root()));
-    }
-    eprintln!("jw: choosing a repo...");
-    let input: Vec<String> = names.iter().map(|n| format!("{}/{n}", root())).collect();
-    let mut cmd = Command::new("knowledge");
-    // a nested claude refuses to start otherwise
-    cmd.args(["route", "--", task])
-        .env_remove("CLAUDECODE")
-        .stderr(Stdio::piped());
-    let out = match output_timeout(&mut cmd, Some(input.join("\n")), Duration::from_secs(90)) {
-        Ok(Some(out)) => out,
-        Ok(None) => return (None, "routing failed: timed out".to_string()),
-        Err(e) => return (None, format!("routing failed: {e}")),
-    };
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let last = stderr.lines().map(str::trim).rfind(|l| !l.is_empty());
-        let why = match (last, out.status.code()) {
-            (Some(last), _) => last.to_string(),
-            (None, Some(code)) => format!("exit {code}"),
-            (None, None) => "exit -1".to_string(),
-        };
-        return (None, format!("routing failed: {why}"));
-    }
-    let answer: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
-    let Some(repo) = answer.get("repo") else {
-        return (None, "bad answer".to_string());
-    };
-    let reason = answer
-        .get("reason")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    match repo.as_str() {
-        Some(repo) if names.iter().any(|n| n == repo) => {
-            eprintln!("jw: {repo}: {reason}");
-            (Some(repo.to_string()), reason)
-        }
-        _ if reason.is_empty() => (None, "no clear match".to_string()),
-        _ => (None, reason),
-    }
-}
-
 /// The environment without the variables that tie a session to the caller's own (repo key, event queue, nested-claude
 /// marker). CLAUDE_CODE_* from a calling Claude (session id, child marker, messaging socket) would make the new Claude
 /// a child of the caller: it writes into the caller's transcript and never registers, so jw msg cannot reach it.
@@ -89,7 +42,7 @@ fn agent_env() -> BTreeMap<String, String> {
         "CLAUDE_EFFORT",
         "AI_AGENT",
         "CLAUDE_EVENT_SESSION_DIR",
-        "KNOWLEDGE_ORIGIN",
+        "AGENT_ORIGIN",
         "CLAUDE_WORKSPACE_BASE",
         "AGENT_SESSION",
     ];
@@ -155,7 +108,7 @@ pub fn cmd_agent(a: AgentArgs) -> Result<(), String> {
             }
             let home = match locate() {
                 Ok((_, home)) => home,
-                // not in a repo: the prompt says which, else pick one
+                // not in a repo: the task's first word if it names one, else pick
                 Err(_) => pick_for(&args.join(" "))?,
             };
             (home, args)
@@ -186,26 +139,17 @@ pub fn cmd_agent(a: AgentArgs) -> Result<(), String> {
     )
 }
 
-/// The repo for a task outside a repo: the one the task says, else a picked one.
+/// The repo for a task outside a repo: the one the task starts with, else a picked one.
 fn pick_for(task: &str) -> Result<String, String> {
-    let tty = stdin_is_tty();
-    let blank = task.trim().is_empty();
-    if !tty && blank {
-        return Err("no repo: pass one (no terminal to pick)".to_string());
+    let named = task
+        .split_whitespace()
+        .next()
+        .filter(|word| repos().iter().any(|r| r == word));
+    if let Some(name) = named {
+        return Ok(format!("{}/{name}", root()));
     }
-    let (guess, why) = if blank {
-        (None, String::new())
-    } else {
-        route(task)
-    };
-    if let Some(guess) = guess {
-        return Ok(format!("{}/{guess}", root()));
-    }
-    if !tty {
-        return Err(format!("no repo chosen ({why})"));
-    }
-    if !why.is_empty() {
-        eprintln!("jw: no repo chosen ({why}), pick one");
+    if !stdin_is_tty() {
+        return Err("no repo: pass one or start the task with its name".to_string());
     }
     repo_home(None)
 }
