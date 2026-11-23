@@ -1,5 +1,6 @@
 {
   imports = [
+    ./monitoring.nix
     ./networking.nix
     ./nix.nix
     ./openssh.nix
