@@ -44,3 +44,10 @@ spec:
       ports:
         - protocol: TCP
           port: 4222
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 7777
