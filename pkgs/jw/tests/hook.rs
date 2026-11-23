@@ -1135,3 +1135,361 @@ fn s25_stop_refreshes_caller_root_before_agent_dir() {
         Some("unsaved in root\n")
     );
 }
+
+const SESSION: &str = "s-0101-120000-7";
+
+fn remove_input(path: &Path) -> String {
+    json!({
+        "session_id": "sess",
+        "hook_event_name": "WorktreeRemove",
+        "cwd": "/",
+        "worktree_path": path,
+    })
+    .to_string()
+}
+
+fn remove(e: &Env, cwd: &Path, path: &Path) -> Out {
+    e.jw_stdin(cwd, &remove_input(path), &["hook", "remove"])
+}
+
+fn entry_exists(e: &Env, repo: &Path, name: &str) -> bool {
+    registry_dir(e, repo).join(format!("{name}.json")).exists()
+}
+
+#[test]
+fn r1_remove_agent_integrates_and_deletes() {
+    let e = Env::new();
+    let repo = e.repo();
+    let base = change_id(&e, &repo, "@");
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::write(d.join("work"), "agent work\n").unwrap();
+
+    let out = remove(&e, &repo, &d);
+    out.ok();
+    assert!(out.stdout.is_empty(), "stdout: {:?}", out.stdout);
+    assert!(
+        out.stderr
+            .contains("squashed 1 file(s) from agent workspace"),
+        "stderr: {}",
+        out.stderr
+    );
+    assert_eq!(
+        file_in(&e, &repo, &base, "work").as_deref(),
+        Some("agent work\n")
+    );
+    assert!(!d.exists());
+    assert!(!workspaces(&e, &repo).contains(&AGENT_WS.to_string()));
+    assert!(!entry_exists(&e, &repo, AGENT));
+    assert!(!e.root.join("repo.agents").exists());
+}
+
+#[test]
+fn r2_remove_agent_keeps_agents_dir_when_not_empty() {
+    let e = Env::new();
+    let repo = e.repo();
+    let a = printed(&create(&e, &repo, AGENT));
+    let other = printed(&create(&e, &repo, "agent-feed0001"));
+
+    remove(&e, &repo, &a).ok();
+    assert!(!a.exists());
+    assert!(other.is_dir());
+    assert!(e.root.join("repo.agents").is_dir());
+}
+
+#[test]
+fn r3_remove_python_format_entry() {
+    let e = Env::new();
+    let repo = e.repo();
+    let base = change_id(&e, &repo, "@");
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::write(d.join("work"), "py\n").unwrap();
+    let text = format!(
+        "{{\n \"name\": \"{AGENT}\",\n \"root\": \"{}\",\n \"dir\": \"{}\",\n \"base\": \"{base}\",\n \"kind\": \"agent\",\n \"touched\": 1700000000.123\n}}",
+        repo.display(),
+        d.display()
+    );
+    fs::write(registry_dir(&e, &repo).join(format!("{AGENT}.json")), text).unwrap();
+
+    remove(&e, &repo, &d).ok();
+    assert_eq!(file_in(&e, &repo, &base, "work").as_deref(), Some("py\n"));
+    assert!(!d.exists());
+    assert!(!workspaces(&e, &repo).contains(&AGENT_WS.to_string()));
+    assert!(!entry_exists(&e, &repo, AGENT));
+    assert!(!e.root.join("repo.agents").exists());
+}
+
+#[test]
+fn r4_remove_agent_conflict_fails_and_keeps_workspace() {
+    let e = Env::new();
+    let (repo, d, _base) = conflict_setup(&e);
+
+    let out = remove(&e, &repo, &d);
+    assert_eq!(out.code, 1, "stderr: {}", out.stderr);
+    assert!(out.stderr.starts_with("jw: "), "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("CONFLICTS"), "stderr: {}", out.stderr);
+    assert!(d.join("file").exists());
+    assert!(workspaces(&e, &repo).contains(&AGENT_WS.to_string()));
+    assert!(entry_exists(&e, &repo, AGENT));
+}
+
+#[test]
+fn r5_remove_clean_session_is_deleted() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, SESSION));
+
+    let out = remove(&e, &repo, &d);
+    out.ok();
+    assert!(!out.stderr.contains("keeping"), "stderr: {}", out.stderr);
+    assert!(!d.exists());
+    assert!(!workspaces(&e, &repo).contains(&SESSION.to_string()));
+    assert!(!entry_exists(&e, &repo, SESSION));
+    assert!(!e.root.join("repo.agents").exists());
+}
+
+#[test]
+fn r6_remove_session_with_changes_is_kept() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, SESSION));
+    fs::write(d.join("work"), "mine\n").unwrap();
+
+    let out = remove(&e, &repo, &d);
+    out.ok();
+    assert!(
+        out.stderr
+            .contains(&format!("keeping {}: it has changes", d.display())),
+        "stderr: {}",
+        out.stderr
+    );
+    assert_eq!(fs::read_to_string(d.join("work")).unwrap(), "mine\n");
+    assert!(workspaces(&e, &repo).contains(&SESSION.to_string()));
+    assert!(entry_exists(&e, &repo, SESSION));
+}
+
+#[test]
+fn r7_remove_unregistered_jj_root_does_nothing() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = e.workspace("s-0101-120000-9");
+
+    remove(&e, &repo, &d).ok();
+    assert!(d.join(".jj").is_dir());
+    assert!(workspaces(&e, &repo).contains(&"s-0101-120000-9".to_string()));
+}
+
+#[test]
+fn r8_remove_missing_or_absent_path_does_nothing() {
+    let e = Env::new();
+    let repo = e.repo();
+    let out = remove(&e, &repo, &e.root.join("does-not-exist"));
+    out.ok();
+    assert!(out.stdout.is_empty());
+    let out = e.jw_stdin(&repo, &json!({}).to_string(), &["hook", "remove"]);
+    out.ok();
+    assert!(out.stdout.is_empty());
+    assert!(repo.join(".jj").is_dir());
+}
+
+#[test]
+fn r9_remove_git_worktree_clean_is_removed() {
+    let e = Env::new();
+    let top = git_repo(&e);
+    let wt = printed(&create(&e, &top, "feat"));
+    assert!(wt.is_dir());
+
+    let out = remove(&e, &top, &wt);
+    out.ok();
+    assert!(!wt.exists());
+    assert!(!git(&e, &top, &["worktree", "list", "--porcelain"]).contains("worktrees/feat"));
+}
+
+#[test]
+fn r10_remove_git_worktree_dirty_is_kept() {
+    let e = Env::new();
+    let top = git_repo(&e);
+    let wt = printed(&create(&e, &top, "feat"));
+    fs::write(wt.join("scratch"), "x\n").unwrap();
+
+    remove(&e, &top, &wt).ok();
+    assert!(wt.join("scratch").exists());
+    assert!(git(&e, &top, &["worktree", "list", "--porcelain"]).contains("worktrees/feat"));
+}
+
+#[test]
+fn r11_remove_plain_dir_outside_any_repo_fails() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = e.root.join("loose");
+    fs::create_dir_all(&d).unwrap();
+
+    let out = remove(&e, &repo, &d);
+    assert_eq!(out.code, 1, "stderr: {}", out.stderr);
+    assert!(out.stderr.starts_with("jw: "), "stderr: {}", out.stderr);
+    assert!(d.is_dir());
+}
+
+fn title_input(session_name: &str, dir: &Path) -> String {
+    json!({
+        "session_id": "sess",
+        "session_name": session_name,
+        "workspace": {"current_dir": dir},
+    })
+    .to_string()
+}
+
+fn title(e: &Env, dir: &Path, session_name: &str) -> Out {
+    e.jw_stdin(dir, &title_input(session_name, dir), &["hook", "title"])
+}
+
+fn quiet(out: &Out) {
+    out.ok();
+    assert!(out.stdout.is_empty(), "stdout: {:?}", out.stdout);
+}
+
+#[test]
+fn t1_title_renames_session_workspace() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, SESSION));
+
+    quiet(&title(&e, &d, "Fix the Bug!"));
+    let ws = workspaces(&e, &repo);
+    assert!(ws.contains(&"s-fix-the-bug".to_string()), "{ws:?}");
+    assert!(!ws.contains(&SESSION.to_string()), "{ws:?}");
+    assert_eq!(entry(&e, &repo, SESSION)["ws"], "s-fix-the-bug");
+    assert!(d.is_dir());
+}
+
+#[test]
+fn t2_title_renames_only_once() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, SESSION));
+
+    quiet(&title(&e, &d, "first"));
+    quiet(&title(&e, &d, "second"));
+    let ws = workspaces(&e, &repo);
+    assert!(ws.contains(&"s-first".to_string()), "{ws:?}");
+    assert!(!ws.contains(&"s-second".to_string()), "{ws:?}");
+    assert_eq!(entry(&e, &repo, SESSION)["ws"], "s-first");
+}
+
+#[test]
+fn t3_title_taken_name_gets_suffix() {
+    let e = Env::new();
+    let repo = e.repo();
+    let a = printed(&create(&e, &repo, SESSION));
+    let b = printed(&create(&e, &repo, "s-0101-120000-8"));
+    let c = printed(&create(&e, &repo, "s-0101-120000-9"));
+
+    quiet(&title(&e, &a, "Same"));
+    quiet(&title(&e, &b, "Same"));
+    quiet(&title(&e, &c, "same"));
+    assert_eq!(entry(&e, &repo, SESSION)["ws"], "s-same");
+    assert_eq!(entry(&e, &repo, "s-0101-120000-8")["ws"], "s-same-2");
+    assert_eq!(entry(&e, &repo, "s-0101-120000-9")["ws"], "s-same-3");
+    let ws = workspaces(&e, &repo);
+    assert!(ws.contains(&"s-same-2".to_string()), "{ws:?}");
+}
+
+#[test]
+fn t4_title_ignores_non_session_workspaces() {
+    let e = Env::new();
+    let repo = e.repo();
+    let agent = printed(&create(&e, &repo, AGENT));
+    quiet(&title(&e, &agent, "Hello"));
+    assert!(entry(&e, &repo, AGENT)["ws"] == AGENT_WS);
+    assert!(workspaces(&e, &repo).contains(&AGENT_WS.to_string()));
+
+    let unmanaged = e.workspace("s-0101-120000-5");
+    quiet(&title(&e, &unmanaged, "Hello"));
+    let ws = workspaces(&e, &repo);
+    assert!(ws.contains(&"s-0101-120000-5".to_string()), "{ws:?}");
+    assert!(!ws.contains(&"s-hello".to_string()), "{ws:?}");
+
+    quiet(&title(&e, &repo, "Hello"));
+    assert!(!workspaces(&e, &repo).contains(&"s-hello".to_string()));
+}
+
+#[test]
+fn t5_title_empty_slug_does_nothing() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, SESSION));
+    quiet(&title(&e, &d, "!!!"));
+    quiet(&title(&e, &d, ""));
+    assert!(workspaces(&e, &repo).contains(&SESSION.to_string()));
+    assert!(entry(&e, &repo, SESSION).get("ws").is_none());
+}
+
+#[test]
+fn t6_title_uses_cwd_when_no_workspace_dir() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, SESSION));
+    let input = json!({"session_name": "via cwd", "cwd": d}).to_string();
+    quiet(&e.jw_stdin(&repo, &input, &["hook", "title"]));
+    assert!(workspaces(&e, &repo).contains(&"s-via-cwd".to_string()));
+}
+
+#[test]
+fn t7_title_from_subdirectory_of_workspace() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, SESSION));
+    let sub = d.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    quiet(&title(&e, &sub, "nested"));
+    assert!(workspaces(&e, &repo).contains(&"s-nested".to_string()));
+}
+
+#[test]
+fn t8_title_bad_input_exits_zero_silently() {
+    let e = Env::new();
+    let repo = e.repo();
+    quiet(&e.jw_stdin(&repo, "not json", &["hook", "title"]));
+    quiet(&e.jw_stdin(&repo, "{}", &["hook", "title"]));
+    quiet(&e.jw_stdin(
+        &repo,
+        &title_input("x", &e.root.join("nowhere")),
+        &["hook", "title"],
+    ));
+}
+
+#[test]
+fn t9_remove_after_title_deletes_renamed_workspace() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, SESSION));
+    quiet(&title(&e, &d, "x"));
+    assert!(workspaces(&e, &repo).contains(&"s-x".to_string()));
+
+    remove(&e, &repo, &d).ok();
+    let ws = workspaces(&e, &repo);
+    assert!(!ws.contains(&"s-x".to_string()), "{ws:?}");
+    assert!(!ws.contains(&SESSION.to_string()), "{ws:?}");
+    assert!(!d.exists());
+    assert!(!entry_exists(&e, &repo, SESSION));
+}
+
+#[test]
+fn r12_remove_agent_with_other_integrate_error_keeps_everything() {
+    let e = Env::new();
+    let (repo, d, _base) = immutable_setup(&e);
+
+    let out = remove(&e, &repo, &d);
+    assert_eq!(out.code, 1, "stderr: {}", out.stderr);
+    assert!(out.stderr.starts_with("jw: "), "stderr: {}", out.stderr);
+    assert!(d.join("work").exists());
+    assert!(workspaces(&e, &repo).contains(&AGENT_WS.to_string()));
+    assert!(entry_exists(&e, &repo, AGENT));
+}
+
+#[test]
+fn x1_unknown_hook_action_is_a_usage_error() {
+    let e = Env::new();
+    let repo = e.repo();
+    let out = e.jw_stdin(&repo, "{}", &["hook", "frobnicate"]);
+    assert_eq!(out.code, 2, "stderr: {}", out.stderr);
+}

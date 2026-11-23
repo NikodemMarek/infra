@@ -49,8 +49,16 @@ pub fn dirname(path: &str) -> &str {
         .unwrap_or("")
 }
 
+/// The canonical path; for a path that does not exist, its canonical parent with the name appended, else path itself.
 pub fn realpath(path: impl AsRef<Path>) -> PathBuf {
-    fs::canonicalize(path.as_ref()).unwrap_or_else(|_| path.as_ref().to_path_buf())
+    let path = path.as_ref();
+    if let Ok(real) = fs::canonicalize(path) {
+        return real;
+    }
+    match (path.parent().map(fs::canonicalize), path.file_name()) {
+        (Some(Ok(parent)), Some(name)) => parent.join(name),
+        _ => path.to_path_buf(),
+    }
 }
 
 pub fn is_dir(path: &str) -> bool {
@@ -587,3 +595,7 @@ pub fn cmd_pick() -> Result<(), String> {
         Err(e) => Err(e),
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/workspace.rs"]
+mod unit_tests;

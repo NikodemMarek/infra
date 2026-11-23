@@ -56,12 +56,43 @@ fn stop(input: &Map<String, Value>) {
     println!("{out}");
 }
 
+/// Never fails and prints nothing: the statusline runs it.
+fn title(input: &Map<String, Value>) {
+    let dir = input
+        .get("workspace")
+        .and_then(|w| w.get("current_dir"))
+        .and_then(Value::as_str)
+        .filter(|d| !d.is_empty())
+        .or_else(|| input.get("cwd").and_then(Value::as_str))
+        .unwrap_or("");
+    let name = input
+        .get("session_name")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    worktree::title(name, dir);
+}
+
 pub fn cmd_hook(action: HookAction) -> Result<(), String> {
     match action {
         HookAction::Create => create(&read_input()?),
         HookAction::Stop => {
             match read_input() {
                 Ok(input) => stop(&input),
+                Err(e) => eprintln!("jw: {e}"),
+            }
+            Ok(())
+        }
+        HookAction::Remove => {
+            let input = read_input()?;
+            let path = input
+                .get("worktree_path")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            worktree::remove(path)
+        }
+        HookAction::Title => {
+            match read_input() {
+                Ok(input) => title(&input),
                 Err(e) => eprintln!("jw: {e}"),
             }
             Ok(())

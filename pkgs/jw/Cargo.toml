@@ -13,3 +13,4 @@ libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.10"
+unicode-normalization = "0.1"
