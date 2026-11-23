@@ -39,10 +39,17 @@ spec:
       ports:
         leafnodes:
           enabled: true
+    promExporter:
+      enabled: true
     natsBox:
       enabled: false
     podTemplate:
       merge:
+        metadata:
+          annotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/port: "7777"
+            prometheus.io/path: /metrics
         spec:
           nodeSelector:
             kubernetes.io/hostname: triss
