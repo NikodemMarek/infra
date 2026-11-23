@@ -4,7 +4,6 @@
   "enabledManagers": ["custom.regex", "flux", "github-actions", "kubernetes", "nix", "terraform"],
   "schedule": ["* * * * 6"],
   "minimumReleaseAge": "5 days",
-  "ignorePaths": ["clusters/dijkstra/flux-system/**"],
   "ignoreDeps": ["shani", "matrix-gateway"],
   "flux": { "managerFilePatterns": ["/^clusters/.+\\.yaml$/"] },
   "kubernetes": { "managerFilePatterns": ["/^clusters/.+\\.yaml$/"] },
@@ -21,6 +20,7 @@
   ],
   "lockFileMaintenance": { "enabled": true, "schedule": ["* * * * 6"] },
   "packageRules": [
+    { "matchManagers": ["kubernetes"], "matchFileNames": ["clusters/dijkstra/flux-system/**"], "enabled": false },
     { "matchUpdateTypes": ["major"], "minimumReleaseAge": "14 days" },
     { "matchManagers": ["github-actions"], "groupName": "GitHub Actions" },
     { "matchManagers": ["nix"], "matchUpdateTypes": ["digest"], "enabled": false },
