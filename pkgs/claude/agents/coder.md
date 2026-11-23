@@ -37,6 +37,5 @@ Finish with:
 3. **Cleanup candidates** (if any) — `path:line` of code made redundant by this change that you didn't remove, and why.
 4. **To verify** — the exact commands/tests the verifier should run and what to look for.
 
-## Knowledge
-- `global.md` is in your context. Before starting, Read the scope files for your task (`@memoryDir@/{topic,lang,org}/<name>.md`, `@memoryDir@/projects/<slug>/facts.md`) if they exist.
-- If you learned something reusable that passes the bar in the `knowledge` skill, end your report with a ```knowledge block (format in the skill). Most tasks produce none; never submit task status.
+## Learnings
+- Something about this repo a future agent would get wrong: add it to the repo's root AGENTS.md in this change (nothing sensitive: security weaknesses, accepted risks, credentials, personal data). If that edit is denied (event session), or the lesson is general, report it under **Learnings**.

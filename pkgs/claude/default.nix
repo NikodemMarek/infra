@@ -33,6 +33,8 @@
   dataDir ? "$HOME/.local/share/claude",
   # trusted without the trust prompt, with every repo below it; shell-expanded at runtime
   projectsDir ? "$HOME/projects",
+  # cross-repo knowledge file imported by CLAUDE.md; must start with $HOME/ (rendered as ~/, so permission rules match). null -> $dataDir/knowledge.md
+  knowledgeFile ? null,
 }: let
   mdEntries = dir: lib.filterAttrs (n: t: t == "regular" && lib.hasSuffix ".md" n) (builtins.readDir dir);
 
@@ -74,6 +76,7 @@
     "extraPackages"
     "dataDir"
     "projectsDir"
+    "knowledgeFile"
   ];
 
   # Inner builder: takes fully-resolved config. Wrapped in makeOverridable so
@@ -88,6 +91,7 @@
       extraPackages,
       dataDir,
       projectsDir,
+      knowledgeFile,
     }: let
       # "$HOME/.local/share/claude" -> "~/.local/share/claude" (for prose in the markdown files)
       # The deny rules in the settings use the `~/` form, so a dataDir outside $HOME would silently disable them.
@@ -98,6 +102,14 @@
         if lib.hasPrefix "$HOME/" projectsDir
         then "~" + lib.removePrefix "$HOME" projectsDir
         else assert lib.assertMsg (lib.hasPrefix "/" projectsDir) "claude: projectsDir must start with $HOME/ or / (got ${projectsDir})"; projectsDir;
+      resolvedKnowledgeFile =
+        if knowledgeFile == null
+        then "${dataDir}/knowledge.md"
+        else knowledgeFile;
+      prettyKnowledgeFile =
+        if lib.hasPrefix "$HOME/" resolvedKnowledgeFile
+        then "~" + lib.removePrefix "$HOME" resolvedKnowledgeFile
+        else throw "claude: knowledgeFile must start with $HOME/ (got ${resolvedKnowledgeFile})";
 
       settingsFile = writeText "claude-settings.json" (builtins.toJSON settings);
 
@@ -115,6 +127,7 @@
           -e ${lib.escapeShellArg "s|@dataDir@|${prettyDataDir}|g"} \
           -e ${lib.escapeShellArg "s|@memoryDir@|${prettyMemoryDir}|g"} \
           -e ${lib.escapeShellArg "s|@projectsDir@|${prettyProjectsDir}|g"} \
+          -e ${lib.escapeShellArg "s|@knowledgeFile@|${prettyKnowledgeFile}|g"} \
           {} +
       '';
 
@@ -365,7 +378,7 @@
           # Overlay-friendly customisation, e.g.
           #   prev.claude.extend { skills.foo = ./foo; settings.permissions.allow = [ "..." ]; }
           # attrsets (settings, agents, skills) deep-merge, extraPackages concatenates,
-          # instructions/dataDir/projectsDir are replaced. Results carry `extend` again.
+          # instructions/dataDir/projectsDir/knowledgeFile are replaced. Results carry `extend` again.
           extend = cfg: let
             unknown = lib.subtractLists knownKeys (lib.attrNames cfg);
           in
@@ -374,6 +387,7 @@
                 instructions = cfg.instructions or instructions;
                 dataDir = cfg.dataDir or dataDir;
                 projectsDir = cfg.projectsDir or projectsDir;
+                knowledgeFile = cfg.knowledgeFile or knowledgeFile;
                 settings = deepMerge settings (cfg.settings or {});
                 # `null` entries remove an agent/skill, e.g. `skills.commit = null;`
                 agents = dropNulls (deepMerge agents (cfg.agents or {}));
@@ -407,5 +421,5 @@ in
       if settings == null
       then import ./settings.nix
       else settings;
-    inherit extraPackages dataDir projectsDir;
+    inherit extraPackages dataDir projectsDir knowledgeFile;
   }

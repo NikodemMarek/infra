@@ -18,6 +18,5 @@ Rules:
 - Clearly separate **facts you verified** from **guesses**. If you couldn't find something, say where you looked.
 - End with a 1–3 line summary the coordinator can act on.
 
-## Knowledge
-- `global.md` is in your context. Before starting, Read the scope files for your task (`@memoryDir@/{topic,lang,org}/<name>.md`, `@memoryDir@/projects/<slug>/facts.md`) if they exist.
-- If you learned something reusable that passes the bar in the `knowledge` skill, end your report with a ```knowledge block (format in the skill). Most tasks produce none; never submit task status.
+## Learnings
+- If you found something reusable that a future agent would otherwise get wrong (gotcha, convention, tool behaviour), end your report with a **Learnings** section, one bullet each, saying whether it is about this repo or general. Nothing sensitive (security weaknesses, accepted risks, credentials, personal data). Most tasks have none; never task status.

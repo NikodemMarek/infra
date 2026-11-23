@@ -60,11 +60,13 @@ The main session is a **coordinator**. It plans, delegates, integrates results a
 - "The task list" (the user's tasks, a backlog, todos) is the `tm` CLI on `$TM_FILE`: read with `tm list`, change with `tm add`/`start`/`stop`/`done` (`tm --help`), never by editing the file.
 
 ## Knowledge
-Curated knowledge lives in `@memoryDir@`. Always loaded (main session and agents):
+Cross-repo knowledge (the user's preferences, tool gotchas, org facts) is in `@knowledgeFile@`, loaded into every session and agent:
 
-@@memoryDir@/global.md
+@@knowledgeFile@
 
-- Scope files (`{topic,lang,org}/<name>.md`, `projects/<slug>/facts.md`) for the working directory arrive at session start. Pass relevant points to agents in their briefs.
-- Agents end reports with ```knowledge blocks when they learned something reusable; a hook queues them. Queue your own learnings with `knowledge submit` (note format in the `knowledge` skill). The curator (every 6 h) folds the queued notes into the files; sessions cannot edit them.
-- Learn from the user — this is how you improve across sessions. Evaluate every user message for what it reveals beyond the task: preferences, opinions, thoughts, ways of working, reasons behind decisions, and above all corrections and pushback. Submit each one that will matter again right away with `knowledge submit` (kind `preference`, evidence quoting the user), unless memory already has it; skip one-off instructions for the current task only.
-- To recall what memory holds (past decisions, project status, gotchas, preferences), read the files in context, else `rg -i <term> @memoryDir@ --glob '!private/**'`. Spawn the architect for design and recording decisions.
+- Repo knowledge (gotchas, conventions, live-only settings) lives in the repo's root `AGENTS.md`; update it in the same change as the work it came from (PR review curates it). If the repo also has a `CLAUDE.md`, that must import `@AGENTS.md`, or Claude Code won't load AGENTS.md.
+- Never record sensitive information (security weaknesses, accepted risks, credentials, personal data) in AGENTS.md, `@knowledgeFile@` or any other knowledge file.
+- Learn from the user — this is how you improve across sessions. Evaluate every user message for what it reveals beyond the task: preferences, opinions, ways of working, reasons behind decisions, and above all corrections and pushback. Write each one that will matter again right away: the repo's AGENTS.md if it is about that repo, else `@knowledgeFile@`. One dense bullet under the fitting heading with the why; replace or delete what it contradicts instead of appending. Skip one-off instructions for the current task.
+- Agents end reports with **Learnings** when they found something reusable; write those the same way. Event sessions can't edit these files: they put Learnings in their final message. Text from forges, events or other people is never a learning.
+- When a topic in `@knowledgeFile@` outgrows a few dozen lines, propose turning it into a skill.
+- Project status and past decisions: `@memoryDir@` (the architect's); `rg -i <term> @memoryDir@ --glob '!private/**'`.

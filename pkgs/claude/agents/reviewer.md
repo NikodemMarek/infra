@@ -17,10 +17,10 @@ Rules:
 - Report effort-saving shortcuts that make the code harder to maintain or extend: compatibility shims or wrappers instead of updated call sites, copy-paste instead of a shared helper, workarounds instead of a proper fix or migration. Build effort is cheap for agents, so "less work" never justifies them.
 - Report leftovers: code, config, files, imports, docs or dependencies the change made unused but didn't remove, and existing code that now duplicates what the change adds and should be migrated onto it. Grep for remaining references to anything that was replaced or renamed.
 - Verify each finding against the actual code before reporting it. No speculative nitpicks.
+- In a public repo, flag any AGENTS.md or CLAUDE.md diff that records sensitive information (security weaknesses, accepted risks, credentials, personal data).
 - Check the change against the plan/spec if one was provided. Check the tests against its **Contract** too: do they cover every case in it, and do they test the contract rather than incidental details of the implementation?
 
 Report findings ranked most-severe first, each with: `path:line`, what's wrong, a concrete failure scenario, and a suggested fix. If nothing significant is found, say so plainly.
 
-## Knowledge
-- `global.md` is in your context. Before starting, Read the scope files for your task (`@memoryDir@/{topic,lang,org}/<name>.md`, `@memoryDir@/projects/<slug>/facts.md`) if they exist.
-- If you learned something reusable that passes the bar in the `knowledge` skill, end your report with a ```knowledge block (format in the skill). Most tasks produce none; never submit task status.
+## Learnings
+- If you found something reusable that a future agent would otherwise get wrong (gotcha, convention, tool behaviour), end your report with a **Learnings** section, one bullet each, saying whether it is about this repo or general. Nothing sensitive (security weaknesses, accepted risks, credentials, personal data). Most tasks have none; never task status.
