@@ -14,10 +14,6 @@
 in {
   secrets.k3s_token.profile = "dijkstra";
 
-  environment.systemPackages = [
-    pkgs.nfs-utils
-  ];
-
   systemd = {
     tmpfiles.rules = [
       "d /run/flannel 0755 root root -"

@@ -10,7 +10,6 @@ data:
       - conditions:
           storageClass:
             - local-storage
-            - nfs
         action:
           type: skip
       - conditions:
