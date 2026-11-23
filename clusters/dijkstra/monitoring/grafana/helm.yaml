@@ -101,7 +101,7 @@ spec:
               - uid: matrix
                 type: webhook
                 settings:
-                  url: http://127.0.0.1:8080/alert
+                  url: http://127.0.0.1:8090/alert
                   httpMethod: POST
       policies.yaml:
         apiVersion: 1
