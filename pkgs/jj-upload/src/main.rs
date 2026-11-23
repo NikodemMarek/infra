@@ -382,8 +382,14 @@ fn upload(remote: &str, prefix: &str, revset: &str, draft: bool, dry_run: bool) 
                 }
             }
         }
-        let names: Vec<&str> = stale.iter().map(String::as_str).collect();
-        push(remote, &names)?;
+        let names: Vec<&str> = stale
+            .iter()
+            .map(String::as_str)
+            .filter(|b| pushed.contains_key(*b))
+            .collect();
+        if !names.is_empty() && !push(remote, &names)?.ok {
+            return Err("deleting stale branches failed".to_string());
+        }
     }
     Ok(())
 }
