@@ -489,3 +489,649 @@ fn g5_git_fallback_invalid_name() {
     create(&e, &top, "bad/name").fail("jw: invalid worktree name 'bad/name'");
     assert!(!top.join(".claude").exists());
 }
+
+const HEX: &str = "0123abcd";
+const CONTEXT_TAIL: &str =
+    " Reply with this sentence verbatim, followed by your complete previous final report unchanged.";
+
+fn stop_input(agent_id: &str, cwd: &Path, active: Option<bool>) -> String {
+    let mut v = json!({
+        "session_id": "sess",
+        "hook_event_name": "SubagentStop",
+        "agent_id": agent_id,
+        "cwd": cwd,
+    });
+    if let Some(a) = active {
+        v["stop_hook_active"] = json!(a);
+    }
+    v.to_string()
+}
+
+fn stop_with(e: &Env, repo: &Path, agent_id: &str, cwd: &Path, active: Option<bool>) -> Out {
+    e.jw_stdin(repo, &stop_input(agent_id, cwd, active), &["hook", "stop"])
+}
+
+fn stop(e: &Env, repo: &Path, d: &Path) -> Out {
+    stop_with(e, repo, HEX, d, None)
+}
+
+fn b8(base: &str) -> String {
+    base[..8].to_string()
+}
+
+fn no_output(out: &Out) {
+    out.ok();
+    assert!(out.stdout.is_empty(), "stdout: {:?}", out.stdout);
+}
+
+fn file_in(e: &Env, repo: &Path, rev: &str, name: &str) -> Option<String> {
+    let o = e
+        .command("jj", repo)
+        .args(["--no-pager", "file", "show", "-r", rev, name])
+        .output()
+        .unwrap();
+    o.status
+        .success()
+        .then(|| String::from_utf8_lossy(&o.stdout).into_owned())
+}
+
+fn problem_output(out: &Out, active: bool) -> String {
+    out.ok();
+    let v = out.json();
+    let msg = v["systemMessage"].as_str().unwrap().to_string();
+    if active {
+        assert!(v.get("hookSpecificOutput").is_none(), "output: {v}");
+        assert_eq!(v.as_object().unwrap().len(), 1, "output: {v}");
+    } else {
+        let h = &v["hookSpecificOutput"];
+        assert_eq!(h["hookEventName"], "SubagentStop");
+        assert_eq!(h["additionalContext"], format!("{msg}{CONTEXT_TAIL}"));
+        assert_eq!(v.as_object().unwrap().len(), 2, "output: {v}");
+        assert_eq!(h.as_object().unwrap().len(), 2, "output: {v}");
+    }
+    msg
+}
+
+fn assert_conflict(out: &Out, active: bool) -> String {
+    let msg = problem_output(out, active);
+    assert!(
+        msg.contains("which left CONFLICTS in"),
+        "systemMessage: {msg}"
+    );
+    msg
+}
+
+fn assert_problem(out: &Out, dir: &Path, expect: &str, active: bool) -> String {
+    let msg = problem_output(out, active);
+    let tail = format!(". The agent's work is kept in {}.", dir.display());
+    assert!(
+        msg.starts_with("jj integration problem: "),
+        "systemMessage: {msg}"
+    );
+    assert!(msg.ends_with(&tail), "systemMessage: {msg}");
+    assert!(msg.contains(expect), "systemMessage: {msg}");
+    msg
+}
+
+#[test]
+fn s1_stop_squashes_agent_work_into_base() {
+    let e = Env::new();
+    let repo = e.repo();
+    let base = change_id(&e, &repo, "@");
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::write(d.join("work"), "agent work\n").unwrap();
+    fs::write(d.join("file"), "edited\n").unwrap();
+    let mut v = entry(&e, &repo, AGENT);
+    v["touched"] = json!(1000.0);
+    write_entry(&e, &repo, AGENT, &v);
+
+    let out = stop(&e, &repo, &d);
+    out.ok();
+    let j = out.json();
+    assert_eq!(
+        j["systemMessage"],
+        format!(
+            "jj: squashed 2 file(s) from agent workspace {AGENT_WS} into {} (no description)",
+            b8(&base)
+        )
+    );
+    assert!(j.get("hookSpecificOutput").is_none(), "output: {j}");
+    assert_eq!(j.as_object().unwrap().len(), 1, "output: {j}");
+
+    assert_eq!(
+        file_in(&e, &repo, &base, "work").as_deref(),
+        Some("agent work\n")
+    );
+    assert_eq!(
+        file_in(&e, &repo, &base, "file").as_deref(),
+        Some("edited\n")
+    );
+    assert!(is_empty(&e, &d, "@"));
+    assert_eq!(change_id(&e, &d, "@-"), base);
+    assert!(entry(&e, &repo, AGENT)["touched"].as_f64().unwrap() > 1e9);
+}
+
+#[test]
+fn s2_stop_message_shows_first_description_line() {
+    let e = Env::new();
+    let repo = e.repo();
+    e.jj(&repo, &["describe", "-m", "feature x\n\nmore text"]);
+    let base = change_id(&e, &repo, "@");
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::write(d.join("work"), "w\n").unwrap();
+
+    let out = stop(&e, &repo, &d);
+    out.ok();
+    assert_eq!(
+        out.json()["systemMessage"],
+        format!(
+            "jj: squashed 1 file(s) from agent workspace {AGENT_WS} into {} feature x",
+            b8(&base)
+        )
+    );
+    assert_eq!(file_in(&e, &repo, &base, "work").as_deref(), Some("w\n"));
+}
+
+#[test]
+fn s3_stop_accepts_cwd_inside_workspace() {
+    let e = Env::new();
+    let repo = e.repo();
+    let base = change_id(&e, &repo, "@");
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::create_dir_all(d.join("sub/deeper")).unwrap();
+    fs::write(d.join("work"), "w\n").unwrap();
+
+    let out = stop_with(&e, &repo, HEX, &d.join("sub/deeper"), Some(false));
+    out.ok();
+    assert!(out.json()["systemMessage"]
+        .as_str()
+        .unwrap()
+        .starts_with("jj: squashed 1 file(s)"));
+    assert!(file_in(&e, &repo, &base, "work").is_some());
+}
+
+#[test]
+fn s4_stop_without_work_is_silent() {
+    let e = Env::new();
+    let repo = e.repo();
+    let base = change_id(&e, &repo, "@");
+    let d = printed(&create(&e, &repo, AGENT));
+    let before = e.jj(
+        &repo,
+        &[
+            "log",
+            "-r",
+            "all()",
+            "--no-graph",
+            "-T",
+            "commit_id ++ \"\\n\"",
+        ],
+    );
+
+    no_output(&stop(&e, &repo, &d));
+
+    let after = e.jj(
+        &repo,
+        &[
+            "log",
+            "-r",
+            "all()",
+            "--no-graph",
+            "-T",
+            "commit_id ++ \"\\n\"",
+        ],
+    );
+    assert_eq!(before, after);
+    assert!(is_empty(&e, &d, "@"));
+    assert_eq!(change_id(&e, &d, "@-"), base);
+    assert!(d.join(".jj").is_dir());
+}
+
+#[test]
+fn s5_stop_unknown_agent_id_is_silent() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::write(d.join("work"), "w\n").unwrap();
+    let base = change_id(&e, &repo, "@");
+
+    no_output(&stop_with(&e, &repo, "deadbeef", &d, None));
+    assert!(file_in(&e, &repo, &base, "work").is_none());
+    assert!(d.join("work").exists());
+}
+
+#[test]
+fn s6_stop_without_registry_is_silent() {
+    let e = Env::new();
+    let repo = e.repo();
+    no_output(&stop_with(&e, &repo, HEX, &repo, None));
+    assert!(!e.dir.join("claude/jj-agents").exists());
+}
+
+#[test]
+fn s7_stop_agent_id_must_be_lowercase_hex() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::write(d.join("work"), "w\n").unwrap();
+    let base = change_id(&e, &repo, "@");
+    for id in [
+        "",
+        "0123ABCD",
+        "../agent-0123abcd",
+        "0123abcd/..",
+        "0123abc*",
+        "xyz",
+    ] {
+        no_output(&stop_with(&e, &repo, id, &d, None));
+    }
+    assert!(file_in(&e, &repo, &base, "work").is_none());
+}
+
+#[test]
+fn s8_stop_cwd_outside_workspace_is_silent() {
+    let e = Env::new();
+    let repo = e.repo();
+    let base = change_id(&e, &repo, "@");
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::write(d.join("work"), "w\n").unwrap();
+    let sibling = e.root.join("repo.agents/a-0123abcd-other");
+    fs::create_dir_all(&sibling).unwrap();
+
+    for cwd in [
+        repo.clone(),
+        sibling,
+        e.root.clone(),
+        PathBuf::from("/nonexistent"),
+    ] {
+        no_output(&stop_with(&e, &repo, HEX, &cwd, None));
+    }
+    assert!(file_in(&e, &repo, &base, "work").is_none());
+    assert!(d.join("work").exists());
+}
+
+#[test]
+fn s9_stop_missing_cwd_is_silent() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::write(d.join("work"), "w\n").unwrap();
+    let base = change_id(&e, &repo, "@");
+
+    let input = json!({"agent_id": HEX}).to_string();
+    no_output(&e.jw_stdin(&d, &input, &["hook", "stop"]));
+    assert!(file_in(&e, &repo, &base, "work").is_none());
+}
+
+fn conflict_setup(e: &Env) -> (PathBuf, PathBuf, String) {
+    let repo = e.repo();
+    let base = change_id(e, &repo, "@");
+    let d = printed(&create(e, &repo, AGENT));
+    e.jj(&repo, &["new", "-m", "child"]);
+    fs::write(repo.join("file"), "child\n").unwrap();
+    e.jj(&repo, &["status"]);
+    fs::write(d.join("file"), "agent\n").unwrap();
+    (repo, d, base)
+}
+
+#[test]
+fn s10_stop_conflict_reports_with_additional_context() {
+    let e = Env::new();
+    let (repo, d, base) = conflict_setup(&e);
+
+    let out = stop(&e, &repo, &d);
+    let msg = assert_conflict(&out, false);
+    assert!(
+        msg.starts_with(&format!(
+            "jj: squashed 1 file(s) from agent workspace {AGENT_WS} into {} (no description), which left CONFLICTS in ",
+            b8(&base)
+        )),
+        "systemMessage: {msg}"
+    );
+    assert!(
+        msg.contains("(jj resolve --list -r "),
+        "systemMessage: {msg}"
+    );
+    assert!(msg.ends_with(")."), "systemMessage: {msg}");
+
+    assert_eq!(
+        file_in(&e, &repo, &base, "file").as_deref(),
+        Some("agent\n")
+    );
+    let conflicted = e.jj(
+        &repo,
+        &[
+            "log",
+            "-r",
+            "conflicts() ~ empty()",
+            "--no-graph",
+            "-T",
+            "change_id.short(8) ++ \"\\n\"",
+        ],
+    );
+    assert!(!conflicted.trim().is_empty());
+    for id in conflicted.lines() {
+        assert!(msg.contains(id), "{id} missing from {msg}");
+    }
+}
+
+#[test]
+fn s11_stop_conflict_with_stop_hook_active_has_no_additional_context() {
+    let e = Env::new();
+    let (repo, d, base) = conflict_setup(&e);
+
+    let out = stop_with(&e, &repo, HEX, &d, Some(true));
+    assert_conflict(&out, true);
+    assert_eq!(
+        file_in(&e, &repo, &base, "file").as_deref(),
+        Some("agent\n")
+    );
+}
+
+#[test]
+fn s12_stop_hook_active_false_still_adds_context() {
+    let e = Env::new();
+    let (repo, d, _) = conflict_setup(&e);
+    let out = stop_with(&e, &repo, HEX, &d, Some(false));
+    assert_conflict(&out, false);
+}
+
+#[test]
+fn s13_stop_hook_active_does_not_silence_success_message() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::write(d.join("work"), "w\n").unwrap();
+
+    let out = stop_with(&e, &repo, HEX, &d, Some(true));
+    out.ok();
+    let j = out.json();
+    assert!(j["systemMessage"]
+        .as_str()
+        .unwrap()
+        .starts_with("jj: squashed 1 file(s)"));
+    assert!(j.get("hookSpecificOutput").is_none());
+}
+
+fn immutable_setup(e: &Env) -> (PathBuf, PathBuf, String) {
+    let repo = e.repo();
+    let base = change_id(e, &repo, "@");
+    let d = printed(&create(e, &repo, AGENT));
+    e.jj(&repo, &["new"]);
+    e.jj(&repo, &["tag", "set", "frozen", "-r", &base]);
+    assert_eq!(
+        e.jj(
+            &repo,
+            &[
+                "log",
+                "-r",
+                &format!("immutable() & {base}"),
+                "--no-graph",
+                "-T",
+                "change_id"
+            ]
+        )
+        .trim(),
+        base
+    );
+    fs::write(d.join("work"), "w\n").unwrap();
+    (repo, d, base)
+}
+
+#[test]
+fn s14_stop_immutable_base_is_an_integration_problem() {
+    let e = Env::new();
+    let (repo, d, base) = immutable_setup(&e);
+
+    let out = stop(&e, &repo, &d);
+    let msg = assert_problem(
+        &out,
+        &d,
+        &format!("base change {} is immutable now", b8(&base)),
+        false,
+    );
+    assert!(
+        msg.starts_with("jj integration problem: "),
+        "systemMessage: {msg}"
+    );
+    assert!(
+        msg.ends_with(&format!(". The agent's work is kept in {}.", d.display())),
+        "systemMessage: {msg}"
+    );
+    assert!(d.join("work").exists());
+    assert!(file_in(&e, &repo, &base, "work").is_none());
+}
+
+#[test]
+fn s15_stop_immutable_base_with_stop_hook_active() {
+    let e = Env::new();
+    let (repo, d, base) = immutable_setup(&e);
+    let out = stop_with(&e, &repo, HEX, &d, Some(true));
+    assert_problem(
+        &out,
+        &d,
+        &format!("base change {} is immutable now", b8(&base)),
+        true,
+    );
+}
+
+#[test]
+fn s16_stop_workspace_dir_gone() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::remove_dir_all(&d).unwrap();
+
+    let out = stop(&e, &repo, &d);
+    assert_problem(
+        &out,
+        &d,
+        &format!("workspace {} no longer exists", d.display()),
+        false,
+    );
+    assert_eq!(entry(&e, &repo, AGENT)["dir"], d.to_str().unwrap());
+}
+
+#[test]
+fn s17_stop_dir_gone_with_stop_hook_active() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::remove_dir_all(&d).unwrap();
+    let out = stop_with(&e, &repo, HEX, &d, Some(true));
+    assert_problem(
+        &out,
+        &d,
+        &format!("workspace {} no longer exists", d.display()),
+        true,
+    );
+}
+
+#[test]
+fn s18_stop_agent_base_gone_is_an_integration_problem() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::write(d.join("work"), "w\n").unwrap();
+    let mut v = entry(&e, &repo, AGENT);
+    v["base"] = json!("k".repeat(32));
+    write_entry(&e, &repo, AGENT, &v);
+
+    let out = stop(&e, &repo, &d);
+    assert_problem(&out, &d, "base change kkkkkkkk is gone", false);
+    assert!(d.join("work").exists());
+}
+
+#[test]
+fn s19_stop_agent_not_on_top_of_base_is_a_problem() {
+    let e = Env::new();
+    let repo = e.repo();
+    let base = change_id(&e, &repo, "@");
+    let d = printed(&create(&e, &repo, AGENT));
+    e.jj(&d, &["rebase", "-r", "@", "-d", "main"]);
+    fs::write(d.join("work"), "w\n").unwrap();
+
+    let out = stop(&e, &repo, &d);
+    assert_problem(
+        &out,
+        &d,
+        &format!("the agent's @ is no longer on top of base {}", b8(&base)),
+        false,
+    );
+    assert!(file_in(&e, &repo, &base, "work").is_none());
+}
+
+#[test]
+fn s20_stop_folds_stale_twin_edits() {
+    let e = Env::new();
+    let repo = e.repo();
+    let base = change_id(&e, &repo, "@");
+    let d = printed(&create(&e, &repo, AGENT));
+    let agent_change = change_id(&e, &d, "@");
+    fs::write(d.join("late"), "unsaved\n").unwrap();
+    e.jj(
+        &repo,
+        &["describe", "-r", &agent_change, "-m", "renamed elsewhere"],
+    );
+
+    let out = stop(&e, &repo, &d);
+    out.ok();
+    assert!(
+        out.stderr.contains("jw: folded unsaved edits ("),
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr
+            .contains(&format!("back into @ of {}", d.display())),
+        "stderr: {}",
+        out.stderr
+    );
+    assert_eq!(
+        out.json()["systemMessage"],
+        format!(
+            "jj: squashed 1 file(s) from agent workspace {AGENT_WS} into {} (no description)",
+            b8(&base)
+        )
+    );
+    assert_eq!(
+        file_in(&e, &repo, &base, "late").as_deref(),
+        Some("unsaved\n")
+    );
+    let twins = e.jj(
+        &d,
+        &[
+            "log",
+            "-r",
+            &format!("change_id({agent_change})"),
+            "--no-graph",
+            "-T",
+            "commit_id ++ \"\\n\"",
+        ],
+    );
+    assert_eq!(twins.lines().count(), 0, "twins: {twins}");
+}
+
+#[test]
+fn s21_stop_bad_stdin_is_silent_exit_zero() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::write(d.join("work"), "w\n").unwrap();
+    let base = change_id(&e, &repo, "@");
+
+    for input in ["not json", "", "{", "[]"] {
+        let out = e.jw_stdin(&repo, input, &["hook", "stop"]);
+        no_output(&out);
+        assert!(!out.stderr.trim().is_empty(), "stderr empty for {input:?}");
+    }
+    assert!(file_in(&e, &repo, &base, "work").is_none());
+}
+
+#[test]
+fn s22_stop_missing_agent_id_is_silent() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::write(d.join("work"), "w\n").unwrap();
+    let base = change_id(&e, &repo, "@");
+
+    let input = json!({"cwd": d}).to_string();
+    no_output(&e.jw_stdin(&repo, &input, &["hook", "stop"]));
+    assert!(file_in(&e, &repo, &base, "work").is_none());
+}
+
+#[test]
+fn s23_stop_is_idempotent() {
+    let e = Env::new();
+    let repo = e.repo();
+    let d = printed(&create(&e, &repo, AGENT));
+    fs::write(d.join("work"), "w\n").unwrap();
+
+    assert!(stop(&e, &repo, &d).ok().json()["systemMessage"].is_string());
+    no_output(&stop(&e, &repo, &d));
+}
+
+#[test]
+fn s24_stop_leaves_other_agents_alone() {
+    let e = Env::new();
+    let repo = e.repo();
+    let base = change_id(&e, &repo, "@");
+    let a = printed(&create(&e, &repo, AGENT));
+    let other = printed(&create(&e, &repo, "agent-feed0001"));
+    fs::write(a.join("work"), "a\n").unwrap();
+    fs::write(other.join("theirs"), "o\n").unwrap();
+
+    stop(&e, &repo, &a).ok();
+    assert!(file_in(&e, &repo, &base, "work").is_some());
+    assert!(file_in(&e, &repo, &base, "theirs").is_none());
+    assert!(other.join("theirs").exists());
+}
+
+#[test]
+fn s25_stop_refreshes_caller_root_before_agent_dir() {
+    let e = Env::new();
+    let repo = e.repo();
+    let base = change_id(&e, &repo, "@");
+    let d = printed(&create(&e, &repo, AGENT));
+    let agent_change = change_id(&e, &d, "@");
+    fs::write(repo.join("callers"), "unsaved in root\n").unwrap();
+    fs::write(d.join("agents"), "agent work\n").unwrap();
+
+    let out = stop(&e, &repo, &d);
+    out.ok();
+    assert_eq!(
+        out.json()["systemMessage"],
+        format!(
+            "jj: squashed 1 file(s) from agent workspace {AGENT_WS} into {} (no description)",
+            b8(&base)
+        )
+    );
+    assert_eq!(
+        file_in(&e, &repo, &base, "callers").as_deref(),
+        Some("unsaved in root\n")
+    );
+    assert_eq!(
+        file_in(&e, &repo, &base, "agents").as_deref(),
+        Some("agent work\n")
+    );
+    assert!(is_empty(&e, &d, "@"));
+    assert_eq!(change_id(&e, &d, "@-"), base);
+    let twins = e.jj(
+        &d,
+        &[
+            "log",
+            "-r",
+            &format!("change_id({agent_change})"),
+            "--no-graph",
+            "-T",
+            "commit_id ++ \"\\n\"",
+        ],
+    );
+    assert_eq!(twins.lines().count(), 0, "twins: {twins}");
+    e.jj(&repo, &["status"]);
+    assert_eq!(
+        file_in(&e, &repo, "@", "callers").as_deref(),
+        Some("unsaved in root\n")
+    );
+}

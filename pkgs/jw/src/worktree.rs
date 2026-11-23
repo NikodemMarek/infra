@@ -60,6 +60,22 @@ impl Registry {
         }
     }
 
+    /// The registry and entry of an isolated agent, looked up in every repo's registry.
+    fn find_agent(agent_id: &str) -> Option<(Registry, Entry)> {
+        if !is_hex(agent_id) {
+            return None;
+        }
+        let name = format!("agent-{agent_id}");
+        fs::read_dir(Path::new(&claude_dir()).join("jj-agents"))
+            .ok()?
+            .flatten()
+            .find_map(|d| {
+                let reg = Registry { dir: d.path() };
+                let entry = reg.load(&name)?;
+                Some((reg, entry))
+            })
+    }
+
     fn path(&self, name: &str) -> PathBuf {
         self.dir.join(format!("{name}.json"))
     }
@@ -164,6 +180,10 @@ fn create_git(cwd: &str, name: &str) -> Result<String, String> {
     Ok(wt)
 }
 
+fn is_hex(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 fn forget(root: &str, ws: &str) {
     let _ = Jj::repo(root).query(&["--ignore-working-copy", "workspace", "forget", ws]);
 }
@@ -212,9 +232,7 @@ fn base_change(jj: &Jj, session: bool) -> Result<String, String> {
 /// Under the registry lock: the directory of the workspace for name, and whether it was created now.
 fn create_locked(reg: &Registry, root: &str, name: &str) -> Result<(String, bool), String> {
     let jj = Jj::repo(root);
-    let agent_hex = name
-        .strip_prefix("agent-")
-        .filter(|h| !h.is_empty() && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
+    let agent_hex = name.strip_prefix("agent-").filter(|h| is_hex(h));
     let (wsname, kind) = match agent_hex {
         Some(hex) => (format!("a-{hex}"), "agent"),
         None => (name.to_string(), "session"),
@@ -300,4 +318,202 @@ pub fn create(name: &str, cwd: &str) -> Result<String, String> {
         }
     }
     Ok(dir)
+}
+
+enum Fail {
+    /// The integration left conflicts: the text is the whole report.
+    Conflict(String),
+    Other(String),
+}
+
+impl From<String> for Fail {
+    fn from(e: String) -> Fail {
+        Fail::Other(e)
+    }
+}
+
+fn short(id: &str) -> &str {
+    id.get(..8).unwrap_or(id)
+}
+
+/// Updates a stale workspace and snapshots it without losing unsaved edits. A workspace goes stale when a commit under
+/// its @ is rewritten; update-stale then snapshots unsaved edits into a divergent twin of @ and checks out the rebased
+/// clean @, so the twin is folded back into @.
+fn refresh(ws: &str) -> Result<(), String> {
+    let jj = Jj::repo(ws);
+    if let Err(e) = jj.query(&["workspace", "update-stale"]) {
+        if !e.contains("not stale") {
+            return Err(e);
+        }
+    }
+    let cid = jj.query(&["log", "--no-graph", "-r", "@", "-T", "change_id"])?;
+    let twins = format!("change_id({}) ~ @", cid.trim());
+    let ids = jj.query(&[
+        "log",
+        "--no-graph",
+        "-r",
+        &twins,
+        "-T",
+        r#"commit_id.short() ++ " ""#,
+    ])?;
+    let ids: Vec<&str> = ids.split_whitespace().collect();
+    if !ids.is_empty() {
+        jj.query(&["squash", "--from", &twins, "--into", "@", "-u"])?;
+        eprintln!(
+            "jw: folded unsaved edits ({}) back into @ of {ws}",
+            ids.join(", ")
+        );
+    }
+    jj.query(&["status"])?;
+    Ok(())
+}
+
+fn check_base(jj: &Jj, base: &str) -> Result<(), String> {
+    let states = jj
+        .query(&[
+            "log",
+            "--no-graph",
+            "-r",
+            &format!("change_id({base})"),
+            "-T",
+            r#"if(immutable, "immutable", "ok") ++ "\n""#,
+        ])
+        .unwrap_or_default();
+    let states: Vec<&str> = states.split_whitespace().collect();
+    let b8 = short(base);
+    match states[..] {
+        [] => return Err(format!("base change {b8} is gone")),
+        ["immutable"] => {
+            return Err(format!("base change {b8} is immutable now"));
+        }
+        [_] => {}
+        _ => return Err(format!("base change {b8} is divergent")),
+    }
+    let stray = jj.query(&[
+        "log",
+        "--no-graph",
+        "-r",
+        &format!("(change_id({base})..@) ~ change_id({base})::"),
+        "-T",
+        r#"change_id.short(8) ++ " ""#,
+    ])?;
+    let stray: Vec<&str> = stray.split_whitespace().collect();
+    if !stray.is_empty() {
+        return Err(format!(
+            "the agent's @ is no longer on top of base {b8} (also contains {})",
+            stray.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+/// The number of files that differ between the base and the @ of the workspace.
+fn changed_files(jj: &Jj, base: &str) -> Result<usize, String> {
+    let out = jj.query(&[
+        "diff",
+        "--from",
+        &format!("change_id({base})"),
+        "--to",
+        "@",
+        "--name-only",
+    ])?;
+    Ok(out.lines().filter(|l| !l.is_empty()).count())
+}
+
+/// Squashes everything the agent did (base..@) into its base. Returns a summary, None if there was nothing to do.
+fn integrate(entry: &Entry) -> Result<Option<String>, Fail> {
+    let base = &entry.base;
+    refresh(&entry.root)?;
+    refresh(&entry.dir)?;
+    let agent = Jj::repo(&entry.dir);
+    check_base(&agent, base)?;
+    let files = changed_files(&agent, base)?;
+    if files == 0 {
+        return Ok(None);
+    }
+    agent.query(&[
+        "squash",
+        "--from",
+        &format!("change_id({base})..@"),
+        "--into",
+        &format!("change_id({base})"),
+        "-u",
+    ])?;
+    // the base may be the caller's @
+    refresh(&entry.root)?;
+    let caller = Jj::repo(&entry.root);
+    let info = caller.query(&[
+        "log",
+        "--no-graph",
+        "-r",
+        &format!("change_id({base})"),
+        "-T",
+        r#"change_id.short(8) ++ "\x1f" ++ description.first_line() ++ "\n""#,
+    ])?;
+    let [info] = info.lines().collect::<Vec<_>>()[..] else {
+        return Err(format!(
+            "base change {} became divergent while squashing (a concurrent jj command?); check `jj log -r 'change_id({base})'`",
+            short(base)
+        )
+        .into());
+    };
+    let (cid, title) = info.split_once('\x1f').unwrap_or((info, ""));
+    let title = if title.is_empty() {
+        "(no description)"
+    } else {
+        title
+    };
+    let msg = format!(
+        "jj: squashed {files} file(s) from agent workspace {} into {cid} {title}",
+        entry.ws.as_deref().unwrap_or(&entry.name)
+    );
+    let conflicts = caller.query(&[
+        "log",
+        "--no-graph",
+        "-r",
+        &format!("change_id({base}):: & conflicts() ~ empty()"),
+        "-T",
+        r#"change_id.short(8) ++ " ""#,
+    ])?;
+    let conflicts: Vec<&str> = conflicts.split_whitespace().collect();
+    if !conflicts.is_empty() {
+        return Err(Fail::Conflict(format!(
+            "{msg}, which left CONFLICTS in {} (jj resolve --list -r <change>)",
+            conflicts.join(", ")
+        )));
+    }
+    Ok(Some(msg))
+}
+
+fn stop_locked(reg: &Registry, name: &str) -> Result<Option<String>, Fail> {
+    let _lock = reg.lock()?;
+    let Some(mut entry) = reg.load(name) else {
+        return Ok(None);
+    };
+    if !is_dir(&entry.dir) {
+        return Err(format!("workspace {} no longer exists", entry.dir).into());
+    }
+    let msg = integrate(&entry)?;
+    entry.touched = now();
+    reg.save(&entry).map_err(|e| e.to_string())?;
+    Ok(msg)
+}
+
+/// Squashes the work of the stopping agent into its base (SubagentStop hook); the workspace stays, so the agent can be
+/// resumed. The notes to report; Err is the problem to report, the workspace is kept.
+pub fn stop(agent_id: &str, cwd: &str) -> Result<Vec<String>, String> {
+    let Some((reg, entry)) = Registry::find_agent(agent_id) else {
+        return Ok(vec![]);
+    };
+    if !realpath(cwd).starts_with(realpath(&entry.dir)) {
+        return Ok(vec![]);
+    }
+    match stop_locked(&reg, &entry.name) {
+        Ok(msg) => Ok(msg.into_iter().collect()),
+        Err(Fail::Conflict(e)) => Err(format!("{e}.")),
+        Err(Fail::Other(e)) => Err(format!(
+            "jj integration problem: {e}. The agent's work is kept in {}.",
+            entry.dir
+        )),
+    }
 }
