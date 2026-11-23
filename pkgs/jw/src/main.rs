@@ -85,6 +85,8 @@ enum Command {
 enum HookAction {
     /// WorktreeCreate: create the workspace (git worktree outside a jj repo) and print its directory
     Create,
+    /// SubagentStop: squash the stopping agent's work into its base change, or report a conflict or problem
+    Stop,
 }
 
 #[derive(Args)]
