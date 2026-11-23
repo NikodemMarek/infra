@@ -63,6 +63,457 @@ spec:
             type: loki
             access: proxy
             url: http://loki.monitoring.svc:3100
+    extraConfigmapMounts:
+      - name: alert-bridge
+        mountPath: /etc/connect
+        configMap: grafana-alert-bridge
+        readOnly: true
+    extraContainers: |
+      - name: connect
+        image: docker.redpanda.com/redpandadata/connect:4.118.0
+        args: ["run", "/etc/connect/connect.yaml"]
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+          - name: alert-bridge
+            mountPath: /etc/connect
+            readOnly: true
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "5m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+    alerting:
+      contactpoints.yaml:
+        apiVersion: 1
+        contactPoints:
+          - orgId: 1
+            name: matrix
+            receivers:
+              - uid: matrix
+                type: webhook
+                settings:
+                  url: http://127.0.0.1:8080/alert
+                  httpMethod: POST
+      policies.yaml:
+        apiVersion: 1
+        policies:
+          - orgId: 1
+            receiver: matrix
+            group_by: [alertname, host]
+            repeat_interval: 12h
+      rules.yaml:
+        apiVersion: 1
+        groups:
+          - orgId: 1
+            name: infra
+            folder: infra
+            interval: 1m
+            rules:
+              - uid: host-down
+                title: HostDown
+                condition: C
+                for: 5m
+                noDataState: OK
+                execErrState: Alerting
+                annotations:
+                  summary: "{{`{{ .Labels.host }}`}} has not reported metrics for over 10 minutes"
+                data:
+                  - refId: A
+                    datasourceUid: vm
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: A
+                      expr: lag(node_time_seconds{host=~"triss|regis"}[1d]) > 600
+                      instant: true
+                      range: false
+                  - refId: B
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: B
+                      type: reduce
+                      expression: A
+                      reducer: count
+                      settings:
+                        mode: dropNN
+                  - refId: C
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: C
+                      type: threshold
+                      expression: B
+                      conditions:
+                        - evaluator:
+                            type: gt
+                            params: [0]
+              - uid: backup-stale
+                title: BackupStale
+                condition: C
+                for: 5m
+                noDataState: OK
+                execErrState: OK
+                annotations:
+                  summary: "Velero schedule {{`{{ .Labels.schedule }}`}} has had no successful backup for over 25 hours"
+                data:
+                  - refId: A
+                    datasourceUid: vm
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: A
+                      expr: time() - velero_backup_last_successful_timestamp{schedule="daily-openebs"} > 90000
+                      instant: true
+                      range: false
+                  - refId: B
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: B
+                      type: reduce
+                      expression: A
+                      reducer: count
+                      settings:
+                        mode: dropNN
+                  - refId: C
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: C
+                      type: threshold
+                      expression: B
+                      conditions:
+                        - evaluator:
+                            type: gt
+                            params: [0]
+              - uid: backup-failed
+                title: BackupFailed
+                condition: C
+                for: 5m
+                noDataState: OK
+                execErrState: OK
+                annotations:
+                  summary: "Velero schedule {{`{{ .Labels.schedule }}`}} had a failed or partially failed backup in the last day"
+                data:
+                  - refId: A
+                    datasourceUid: vm
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: A
+                      expr: increase(velero_backup_failure_total[1d]) > 0 or increase(velero_backup_partial_failure_total[1d]) > 0
+                      instant: true
+                      range: false
+                  - refId: B
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: B
+                      type: reduce
+                      expression: A
+                      reducer: count
+                      settings:
+                        mode: dropNN
+                  - refId: C
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: C
+                      type: threshold
+                      expression: B
+                      conditions:
+                        - evaluator:
+                            type: gt
+                            params: [0]
+              - uid: filesystem-full
+                title: FilesystemFull
+                condition: C
+                for: 5m
+                noDataState: OK
+                execErrState: OK
+                annotations:
+                  summary: "{{`{{ .Labels.host }}`}}:{{`{{ .Labels.mountpoint }}`}} has less than 10% space left"
+                data:
+                  - refId: A
+                    datasourceUid: vm
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: A
+                      expr: node_filesystem_avail_bytes{host=~"triss|regis",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{host=~"triss|regis",fstype!~"tmpfs|overlay"} < 0.10
+                      instant: true
+                      range: false
+                  - refId: B
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: B
+                      type: reduce
+                      expression: A
+                      reducer: count
+                      settings:
+                        mode: dropNN
+                  - refId: C
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: C
+                      type: threshold
+                      expression: B
+                      conditions:
+                        - evaluator:
+                            type: gt
+                            params: [0]
+              - uid: zpool-unhealthy
+                title: ZpoolUnhealthy
+                condition: C
+                for: 5m
+                noDataState: OK
+                execErrState: OK
+                annotations:
+                  summary: "Zpool {{`{{ .Labels.zpool }}`}} on {{`{{ .Labels.host }}`}} is {{`{{ .Labels.state }}`}}"
+                data:
+                  - refId: A
+                    datasourceUid: vm
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: A
+                      expr: node_zfs_zpool_state{state!="online"} == 1
+                      instant: true
+                      range: false
+                  - refId: B
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: B
+                      type: reduce
+                      expression: A
+                      reducer: count
+                      settings:
+                        mode: dropNN
+                  - refId: C
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: C
+                      type: threshold
+                      expression: B
+                      conditions:
+                        - evaluator:
+                            type: gt
+                            params: [0]
+              - uid: systemd-unit-failed
+                title: SystemdUnitFailed
+                condition: C
+                for: 5m
+                noDataState: OK
+                execErrState: OK
+                annotations:
+                  summary: "Unit {{`{{ .Labels.name }}`}} on {{`{{ .Labels.host }}`}} has failed"
+                data:
+                  - refId: A
+                    datasourceUid: vm
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: A
+                      expr: node_systemd_unit_state{state="failed",host=~"triss|regis"} == 1
+                      instant: true
+                      range: false
+                  - refId: B
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: B
+                      type: reduce
+                      expression: A
+                      reducer: count
+                      settings:
+                        mode: dropNN
+                  - refId: C
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: C
+                      type: threshold
+                      expression: B
+                      conditions:
+                        - evaluator:
+                            type: gt
+                            params: [0]
+              - uid: pvc-full
+                title: PvcFull
+                condition: C
+                for: 5m
+                noDataState: OK
+                execErrState: OK
+                annotations:
+                  summary: "PVC {{`{{ .Labels.namespace }}`}}/{{`{{ .Labels.persistentvolumeclaim }}`}} has less than 10% space left"
+                data:
+                  - refId: A
+                    datasourceUid: vm
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: A
+                      expr: kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes < 0.10
+                      instant: true
+                      range: false
+                  - refId: B
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: B
+                      type: reduce
+                      expression: A
+                      reducer: count
+                      settings:
+                        mode: dropNN
+                  - refId: C
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: C
+                      type: threshold
+                      expression: B
+                      conditions:
+                        - evaluator:
+                            type: gt
+                            params: [0]
+              - uid: crash-loop
+                title: CrashLoop
+                condition: C
+                for: 15m
+                noDataState: OK
+                execErrState: OK
+                annotations:
+                  summary: "Container {{`{{ .Labels.container }}`}} in {{`{{ .Labels.namespace }}`}}/{{`{{ .Labels.pod }}`}} is in CrashLoopBackOff"
+                data:
+                  - refId: A
+                    datasourceUid: vm
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: A
+                      expr: kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"} == 1
+                      instant: true
+                      range: false
+                  - refId: B
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: B
+                      type: reduce
+                      expression: A
+                      reducer: count
+                      settings:
+                        mode: dropNN
+                  - refId: C
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: C
+                      type: threshold
+                      expression: B
+                      conditions:
+                        - evaluator:
+                            type: gt
+                            params: [0]
+              - uid: cert-expiry
+                title: CertExpiry
+                condition: C
+                for: 5m
+                noDataState: OK
+                execErrState: OK
+                annotations:
+                  summary: "Certificate {{`{{ .Labels.namespace }}`}}/{{`{{ .Labels.name }}`}} expires in less than 14 days"
+                data:
+                  - refId: A
+                    datasourceUid: vm
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: A
+                      expr: certmanager_certificate_expiration_timestamp_seconds - time() < 14*86400
+                      instant: true
+                      range: false
+                  - refId: B
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: B
+                      type: reduce
+                      expression: A
+                      reducer: count
+                      settings:
+                        mode: dropNN
+                  - refId: C
+                    datasourceUid: __expr__
+                    relativeTimeRange:
+                      from: 600
+                      to: 0
+                    model:
+                      refId: C
+                      type: threshold
+                      expression: B
+                      conditions:
+                        - evaluator:
+                            type: gt
+                            params: [0]
     grafana.ini:
       server:
         root_url: https://grafana.${DOMAIN}

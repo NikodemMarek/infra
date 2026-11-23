@@ -258,7 +258,7 @@ Velero backs up the cluster daily at 18:00 Europe/Warsaw (schedule `daily-openeb
 
 - Backed up: every namespace except `kube-system`, `velero` and `flux-system`, without Secrets (they come from Bitwarden), and pod volumes through kopia, except `local-storage` (media on tank), `nfs`, emptyDir and PVCs labelled `backup: skip` (`velero/volume-policy.yaml`).
 - The beets library (`library.db`) is on its own PVC `beets-data`: `velero restore` that PVC, after deleting a leftover `library.db-journal` next to it (sqlite would roll it back onto the restored file).
-- Nothing alerts on a failed backup: check `velero backup get` now and then.
+- Grafana alerts post to Matrix `#alerts` (`monitoring/grafana/helm.yaml`), among them a stale (BackupStale) or failed (BackupFailed) Velero backup.
 
 #### Restore
 

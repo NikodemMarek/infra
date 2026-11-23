@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-alert-bridge
+  namespace: monitoring
+  annotations:
+    kustomize.toolkit.fluxcd.io/substitute: disabled
+data:
+  connect.yaml: |
+    http:
+      enabled: false
+
+    input:
+      http_server:
+        address: 127.0.0.1:8080
+        path: /alert
+        allowed_verbs: [POST]
+
+    pipeline:
+      processors:
+        - mapping: |
+            let text = if this.type() != "object" {
+              throw("body is not a JSON object")
+            } else if this.title.type() != "string" || this.message.type() != "string" {
+              throw("title and message must be strings")
+            } else {
+              (this.title + "\n" + this.message).re_replace_all("[\r\t]", " ").replace_all("@", "@​")
+            }
+            let lines = $text.split("\n")
+            root = {
+              "room": "alerts",
+              "body": if $lines.length() > 20 {
+                $lines.slice(0, 20).join("\n") + "\n… (truncated)"
+              } else {
+                $text
+              },
+            }
+
+    output:
+      reject_errored:
+        nats:
+          urls: [nats://nats.nats.svc.cluster.local:4222]
+          subject: matrix.send
