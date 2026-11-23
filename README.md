@@ -25,7 +25,7 @@ tofu/                  OpenTofu: Cloudflare, Tailscale, Oracle Cloud
 | `yenn` | x86_64 | laptop (Hyprland), LUKS + btrfs; `host-switch`, not a deploy node |
 | `geralt` | x86_64 | headless game streaming (Wolf + Moonlight), docker, libvirt; usually off |
 | `roach` | x86_64 | k3s agent |
-| `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool`, data pool `tank`), NFS server, Garage (S3 for Velero) |
+| `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool`, data pool `tank`), Garage (S3 for Velero) |
 | `triss` | aarch64 | k3s server, Oracle Cloud instance (qemu guest) |
 | `alp` | x86_64 | installer ISO (`mkiso`), not in `nixosConfigurations` |
 
@@ -184,8 +184,7 @@ Merging to `main` plans and applies (GitHub environment `tofu`, `BWS_ACCESS_TOKE
 
 ## Cluster
 
-`clusters/dijkstra` is a k3s cluster over tailscale: `triss` is the server (traefik and cloud controller disabled), `roach` and `regis` are agents joining it through its tailscale address. Node config is `host/features/optional/k3s.nix` plus the per-host `services.k3s` blocks; the token is `dijkstra/K3S_TOKEN` in the project `hosts`. `regis` exports NFS (`nfs.nix`) for app volumes.
-
+`clusters/dijkstra` is a k3s cluster over tailscale: `triss` is the server (traefik and cloud controller disabled), `roach` and `regis` are agents joining it through its tailscale address. Node config is `host/features/optional/k3s.nix` plus the per-host `services.k3s` blocks; the token is `dijkstra/K3S_TOKEN` in the project `hosts`.
 Flux, bootstrapped in `clusters/dijkstra/flux-system`, watches `main` of the GitHub repo and applies `./clusters/dijkstra`. The domain is the Flux variable `DOMAIN` (`flux-system/kustomization.yaml`); resources with shell `$` carry the `kustomize.toolkit.fluxcd.io/substitute: disabled` annotation.
 
 ### Cluster apps
@@ -255,7 +254,7 @@ CI shares a binary cache in the Garage bucket `nix-cache` on `regis`: `http://ni
 
 Velero backs up the cluster daily at 18:00 Europe/Warsaw (schedule `daily-openebs`), keeping each backup 30 days, to Garage on `regis` (`host/regis/garage.nix`): a single-node S3 store on `tank/garage`, bucket `velero` at `http://100.100.215.91:3900`, reachable only over `tailscale0` and `cni0`. Velero and Garage share one key pair: `dijkstra-velero/ACCESS_KEY_ID` and `SECRET_ACCESS_KEY` in the project `hosts` (Garage), copied as `velero/access_key_id` and `velero/secret_access_key` in the project `cluster` (rotate both).
 
-- Backed up: every namespace except `kube-system`, `velero` and `flux-system`, without Secrets (they come from Bitwarden), and pod volumes through kopia, except `local-storage` (media on tank), `nfs`, emptyDir and PVCs labelled `backup: skip` (`velero/volume-policy.yaml`).
+- Backed up: every namespace except `kube-system`, `velero` and `flux-system`, without Secrets (they come from Bitwarden), and pod volumes through kopia, except `local-storage` (media on tank), emptyDir and PVCs labelled `backup: skip` (`velero/volume-policy.yaml`).
 - The beets library (`library.db`) is on its own PVC `beets-data`: `velero restore` that PVC, after deleting a leftover `library.db-journal` next to it (sqlite would roll it back onto the restored file).
 - Grafana alerts post to Matrix `#alerts` (`monitoring/grafana/helm.yaml`), among them a stale (BackupStale) or failed (BackupFailed) Velero backup.
 
@@ -273,7 +272,7 @@ velero restore describe <restore> --details
 flux resume kustomization flux-system -n flux-system
 ```
 
-- Delete only the backed-up `openebs-*` PVCs. Keep the `backup: skip` and static `local-storage`/`nfs` ones: Velero restores their PV as is, so a deleted one stays Pending.
+- Delete only the backed-up `openebs-*` PVCs. Keep the `backup: skip` and static `local-storage` ones: Velero restores their PV as is, so a deleted one stays Pending.
 - A PVC shared by several Deployments (`arrstack-config-pvc`, `omniverse-pvc`) is restored through only one of their pods; the others start on the empty volume and write to it first. Restore those with kopia (below).
 - Don't delete the namespace: the static media PVs would go Released with a stale `claimRef` and the restored PVCs wouldn't bind.
 - Arrstack apps are scaled by KEDA: first `kubectl -n arrstack delete httpscaledobject --all` (Flux is suspended, so it doesn't recreate them).

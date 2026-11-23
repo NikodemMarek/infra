@@ -8,7 +8,6 @@
     ../features/optional/maintenance.nix
     ../features/optional/k3s.nix
 
-    ./nfs.nix
     ./garage.nix
   ];
 

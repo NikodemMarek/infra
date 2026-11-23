@@ -37,7 +37,6 @@ in {
     pkgs.fluxcd
     pkgs.velero
     pkgs.yamlfmt
-    pkgs.nfs-utils
     pkgs.k9s
     pkgs.k3s
     pkgs.pv-migrate
