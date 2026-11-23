@@ -1,0 +1,126 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: victoria-metrics
+  namespace: monitoring
+spec:
+  interval: 1h
+  url: https://victoriametrics.github.io/helm-charts/
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: victoria-metrics-single
+  namespace: monitoring
+  annotations:
+    kustomize.toolkit.fluxcd.io/substitute: disabled
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: victoria-metrics-single
+      version: "0.51.0"
+      sourceRef:
+        kind: HelmRepository
+        name: victoria-metrics
+        namespace: monitoring
+  values:
+    server:
+      retentionPeriod: "1y"
+      nodeSelector:
+        kubernetes.io/hostname: triss
+      resources:
+        requests:
+          memory: 256Mi
+        limits:
+          memory: 1Gi
+      persistentVolume:
+        enabled: true
+        existingClaim: victoria-metrics
+      service:
+        type: LoadBalancer
+        loadBalancerSourceRanges:
+          - 100.64.0.0/10
+      scrape:
+        enabled: true
+        config:
+          global:
+            scrape_interval: 60s
+          scrape_configs:
+            - job_name: victoriametrics
+              static_configs:
+                - targets:
+                    - localhost:8428
+            - job_name: kubelet
+              scheme: https
+              tls_config:
+                ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              metrics_path: /metrics
+              kubernetes_sd_configs:
+                - role: node
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_node_name]
+                  target_label: instance
+              metric_relabel_configs:
+                - source_labels: [__name__]
+                  regex: apiserver_.*_bucket|etcd_.*_bucket
+                  action: drop
+            - job_name: cadvisor
+              scheme: https
+              tls_config:
+                ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              metrics_path: /metrics/cadvisor
+              kubernetes_sd_configs:
+                - role: node
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_node_name]
+                  target_label: instance
+            - job_name: kubernetes-service-endpoints
+              honor_labels: true
+              kubernetes_sd_configs:
+                - role: endpointslice
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+                  regex: "true"
+                  action: keep
+                - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+                  regex: (.+)
+                  target_label: __metrics_path__
+                - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+                  regex: ([^:]+)(?::\d+)?;(\d+)
+                  replacement: $1:$2
+                  target_label: __address__
+                - source_labels: [__meta_kubernetes_namespace]
+                  target_label: namespace
+                - source_labels: [__meta_kubernetes_service_name]
+                  target_label: service
+                - source_labels: [__meta_kubernetes_pod_name]
+                  target_label: pod
+                - source_labels: [__meta_kubernetes_endpointslice_endpoint_node_name]
+                  target_label: node
+            - job_name: kubernetes-pods
+              honor_labels: true
+              kubernetes_sd_configs:
+                - role: pod
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+                  regex: "true"
+                  action: keep
+                - source_labels: [__meta_kubernetes_pod_phase]
+                  regex: Pending|Succeeded|Failed
+                  action: drop
+                - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+                  regex: (.+)
+                  target_label: __metrics_path__
+                - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+                  regex: ([^:]+)(?::\d+)?;(\d+)
+                  replacement: $1:$2
+                  target_label: __address__
+                - source_labels: [__meta_kubernetes_namespace]
+                  target_label: namespace
+                - source_labels: [__meta_kubernetes_pod_name]
+                  target_label: pod
+                - source_labels: [__meta_kubernetes_pod_node_name]
+                  target_label: node
