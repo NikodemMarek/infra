@@ -63,7 +63,6 @@
   matrix-gateway = pkgs.callPackage ./matrix-gateway {};
   tm = pkgs.callPackage ./tm {};
   matrix-gateway-image = pkgs.callPackage ./matrix-gateway/image.nix {};
-  shani-image = pkgs.callPackage ./shani/image.nix {};
 
   event-handlers = pkgs.callPackage ./event-handlers {};
 }
