@@ -9,12 +9,13 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::jj::Jj;
 use crate::procs::claude_dir;
 use crate::record::{now, valid_name};
 use crate::session::track_worktree;
-use crate::workspace::{dirname, is_dir, layout, realpath};
+use crate::workspace::{basename, dirname, has_agents_suffix, is_dir, layout, realpath};
 
 const LOCK_WAIT: Duration = Duration::from_secs(120);
 const NAME_MAX: usize = 100;
@@ -60,20 +61,51 @@ impl Registry {
         }
     }
 
+    fn all() -> impl Iterator<Item = Registry> {
+        fs::read_dir(Path::new(&claude_dir()).join("jj-agents"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|d| Registry { dir: d.path() })
+    }
+
     /// The registry and entry of an isolated agent, looked up in every repo's registry.
     fn find_agent(agent_id: &str) -> Option<(Registry, Entry)> {
         if !is_hex(agent_id) {
             return None;
         }
         let name = format!("agent-{agent_id}");
-        fs::read_dir(Path::new(&claude_dir()).join("jj-agents"))
-            .ok()?
+        Registry::all().find_map(|reg| {
+            let entry = reg.load(&name)?;
+            Some((reg, entry))
+        })
+    }
+
+    /// The registry and entry of the workspace whose directory is path, looked up in every repo's registry.
+    fn find_dir(path: &str) -> Option<(Registry, Entry)> {
+        let want = realpath(path);
+        Registry::all().find_map(|reg| {
+            let entry = reg
+                .entries()
+                .into_iter()
+                .find(|e| realpath(&e.dir) == want)?;
+            Some((reg, entry))
+        })
+    }
+
+    fn entries(&self) -> Vec<Entry> {
+        let Ok(files) = fs::read_dir(&self.dir) else {
+            return vec![];
+        };
+        let mut names: Vec<String> = files
             .flatten()
-            .find_map(|d| {
-                let reg = Registry { dir: d.path() };
-                let entry = reg.load(&name)?;
-                Some((reg, entry))
+            .filter_map(|f| {
+                let file = f.file_name().into_string().ok()?;
+                file.strip_suffix(".json").map(str::to_string)
             })
+            .collect();
+        names.sort();
+        names.iter().filter_map(|n| self.load(n)).collect()
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -99,15 +131,15 @@ impl Registry {
         let _ = fs::remove_file(self.path(name));
     }
 
-    /// Waits for the exclusive lock on the registry; it is held until the file is dropped.
-    fn lock(&self) -> Result<File, String> {
+    /// Waits up to wait for the exclusive lock on the registry; it is held until the file is dropped.
+    fn lock(&self, wait: Duration) -> Result<File, String> {
         let file = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(false)
             .open(self.dir.join(".lock"))
             .map_err(|e| e.to_string())?;
-        let deadline = Instant::now() + LOCK_WAIT;
+        let deadline = Instant::now() + wait;
         loop {
             match file.try_lock() {
                 Ok(()) => return Ok(file),
@@ -309,7 +341,7 @@ pub fn create(name: &str, cwd: &str) -> Result<String, String> {
     let reg = Registry::new(&root);
     fs::create_dir_all(&reg.dir).map_err(|e| e.to_string())?;
     let (dir, created) = {
-        let _lock = reg.lock()?;
+        let _lock = reg.lock(LOCK_WAIT)?;
         create_locked(&reg, &root, name)?
     };
     if created && env::var("AGENT_SESSION").is_ok_and(|s| !s.is_empty()) {
@@ -329,6 +361,14 @@ enum Fail {
 impl From<String> for Fail {
     fn from(e: String) -> Fail {
         Fail::Other(e)
+    }
+}
+
+impl From<Fail> for String {
+    fn from(fail: Fail) -> String {
+        match fail {
+            Fail::Conflict(e) | Fail::Other(e) => e,
+        }
     }
 }
 
@@ -486,7 +526,7 @@ fn integrate(entry: &Entry) -> Result<Option<String>, Fail> {
 }
 
 fn stop_locked(reg: &Registry, name: &str) -> Result<Option<String>, Fail> {
-    let _lock = reg.lock()?;
+    let _lock = reg.lock(LOCK_WAIT)?;
     let Some(mut entry) = reg.load(name) else {
         return Ok(None);
     };
@@ -517,3 +557,166 @@ pub fn stop(agent_id: &str, cwd: &str) -> Result<Vec<String>, String> {
         )),
     }
 }
+
+/// Forgets the jj workspace of the entry, removes its directory and the entry. Refuses to delete anything but a
+/// directory directly under a <repo>.agents directory.
+fn delete_workspace(reg: &Registry, entry: &Entry) -> Result<(), String> {
+    let agents = realpath(&entry.agents);
+    let d = realpath(&entry.dir);
+    let d_name = d.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if d.parent() != Some(agents.as_path())
+        || !has_agents_suffix(&agents.to_string_lossy())
+        || !valid_name(d_name)
+    {
+        return Err(format!(
+            "refusing to delete {}: not a workspace directly under a <repo>.agents directory",
+            d.display()
+        ));
+    }
+    let d = d.to_string_lossy().into_owned();
+    // its own workspace, whatever it is named now
+    let forgotten = is_dir(&d)
+        && Jj::repo(&d)
+            .query(&["--ignore-working-copy", "workspace", "forget"])
+            .is_ok();
+    if !forgotten {
+        forget(&entry.root, entry.ws.as_deref().unwrap_or(&entry.name));
+    }
+    let _ = fs::remove_dir_all(&d);
+    // jj keeps a git worktree registered for the forgotten workspace
+    let _ = git(&entry.root, &["worktree", "prune"]);
+    reg.remove(&entry.name);
+    let _ = fs::remove_dir(&agents);
+    Ok(())
+}
+
+/// Removes the worktree at path unless it is a jj workspace the hook doesn't manage or holds changes.
+fn remove_git(path: &str) -> Result<(), String> {
+    if Jj::in_dir(path)
+        .workspace_root()
+        .is_ok_and(|root| realpath(root) == realpath(path))
+    {
+        return Ok(());
+    }
+    if git(path, &["status", "--porcelain"])?.trim().is_empty() {
+        git(path, &["worktree", "remove", path])?;
+    }
+    Ok(())
+}
+
+fn remove_locked(reg: &Registry, name: &str, path: &str) -> Result<(), String> {
+    let _lock = reg.lock(LOCK_WAIT)?;
+    let Some(entry) = reg.load(name) else {
+        return Ok(());
+    };
+    if entry.kind == "agent" {
+        if let Some(msg) = integrate(&entry)? {
+            eprintln!("jw: {msg}");
+        }
+    } else if changed_files(&Jj::repo(&entry.dir), &entry.base)? > 0 {
+        eprintln!("jw: keeping {path}: it has changes");
+        return Ok(());
+    }
+    delete_workspace(reg, &entry)
+}
+
+/// Deletes the worktree at path (WorktreeRemove hook). An agent workspace is integrated first and kept on failure; a
+/// session workspace with changes, or a git worktree with changes, is kept.
+pub fn remove(path: &str) -> Result<(), String> {
+    if !is_dir(path) {
+        return Ok(());
+    }
+    match Registry::find_dir(path) {
+        Some((reg, entry)) => remove_locked(&reg, &entry.name, path),
+        None => remove_git(path),
+    }
+}
+
+/// The name for a jj workspace after the title of its session: ASCII letters and digits in lower case, separated by
+/// single dashes.
+pub fn slug(title: &str) -> String {
+    let mut out = String::new();
+    for c in title
+        .replace('ł', "l")
+        .replace('Ł', "L")
+        .nfkd()
+        .filter(char::is_ascii)
+    {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let out = out.trim_matches('-');
+    out[..out.len().min(40)].trim_end_matches('-').to_string()
+}
+
+/// As generated by the claude wrapper: s-MMDD-HHMMSS-N.
+fn is_session_name(name: &str) -> bool {
+    let all_digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    matches!(
+        name.split('-').collect::<Vec<_>>()[..],
+        ["s", a, b, n] if a.len() == 4 && b.len() == 6 && all_digits(a) && all_digits(b) && all_digits(n)
+    )
+}
+
+/// Names the jj workspace of a session after its title, once (the directory keeps its name). The statusline runs this
+/// often: it skips when the registry is busy, the next run retries.
+pub fn title(session_name: &str, dir: &str) {
+    let t = slug(session_name);
+    if t.is_empty() || dir.is_empty() {
+        return;
+    }
+    let mut root = realpath(dir);
+    while !root.join(".jj").is_dir() {
+        if !root.pop() {
+            return;
+        }
+    }
+    let root = root.to_string_lossy().into_owned();
+    let name = basename(&root);
+    if !is_session_name(name) {
+        return;
+    }
+    let reg = Registry::new(&root);
+    if !reg.load(name).is_some_and(|e| {
+        e.kind == "session" && e.ws.is_none() && realpath(&e.dir) == Path::new(&root)
+    }) {
+        return;
+    }
+    let Ok(_lock) = reg.lock(Duration::ZERO) else {
+        return;
+    };
+    let Some(mut entry) = reg.load(name).filter(|e| e.ws.is_none()) else {
+        return;
+    };
+    let jj = Jj::repo(&root);
+    let Ok(taken) = jj.query(&[
+        "--ignore-working-copy",
+        "workspace",
+        "list",
+        "-T",
+        r#"name ++ "\n""#,
+    ]) else {
+        return;
+    };
+    let taken: Vec<&str> = taken.split_whitespace().collect();
+    let mut new = format!("s-{t}");
+    let mut n = 2;
+    while taken.contains(&new.as_str()) {
+        new = format!("s-{t}-{n}");
+        n += 1;
+    }
+    // snapshots this workspace once; on failure the old name is kept, so that the next run doesn't retry
+    entry.ws = Some(if jj.query(&["workspace", "rename", &new]).is_ok() {
+        new
+    } else {
+        name.to_string()
+    });
+    let _ = reg.save(&entry);
+}
+
+#[cfg(test)]
+#[path = "../tests/unit/worktree.rs"]
+mod unit_tests;

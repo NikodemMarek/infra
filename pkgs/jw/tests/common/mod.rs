@@ -144,12 +144,8 @@ impl Env {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(stdin.as_bytes())
-            .unwrap();
+        // jw may exit without reading stdin
+        let _ = child.stdin.take().unwrap().write_all(stdin.as_bytes());
         let o = child.wait_with_output().unwrap();
         Out {
             code: o.status.code().unwrap_or(-1),

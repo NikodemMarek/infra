@@ -87,6 +87,10 @@ enum HookAction {
     Create,
     /// SubagentStop: squash the stopping agent's work into its base change, or report a conflict or problem
     Stop,
+    /// WorktreeRemove: integrate an agent workspace and delete it, keeping one that holds changes
+    Remove,
+    /// statusline: name a session's jj workspace after the session title
+    Title,
 }
 
 #[derive(Args)]
