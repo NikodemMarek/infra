@@ -111,13 +111,18 @@ pub fn cmd_session_status(a: SessionStatusArgs) -> Result<(), String> {
 }
 
 pub fn cmd_session_worktree(a: SessionWorktreeArgs) -> Result<(), String> {
+    track_worktree(&a.dir)
+}
+
+/// Records dir in the worktrees of this agent session.
+pub fn track_worktree(dir: &str) -> Result<(), String> {
     let name = agent_session_name()?;
-    let real = Some(Path::new(&a.dir))
+    let real = Some(Path::new(dir))
         .filter(|d| d.is_absolute())
         .and_then(|d| fs::canonicalize(d).ok())
         .filter(|d| d.is_dir())
         .and_then(|d| d.into_os_string().into_string().ok())
-        .ok_or_else(|| format!("not an absolute directory: {}", a.dir))?;
+        .ok_or_else(|| format!("not an absolute directory: {dir}"))?;
     Records::new().update(&name, |r| {
         let known = r.worktrees.len();
         r.worktrees.retain(|w| Path::new(w).exists());

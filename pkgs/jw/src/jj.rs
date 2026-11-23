@@ -5,16 +5,29 @@ use crate::cmd::output_timeout;
 
 pub struct Jj {
     dir: Option<String>,
+    repo: Option<String>,
 }
 
 impl Jj {
     pub fn here() -> Jj {
-        Jj { dir: None }
+        Jj {
+            dir: None,
+            repo: None,
+        }
     }
 
     pub fn in_dir(dir: &str) -> Jj {
         Jj {
             dir: Some(dir.to_string()),
+            repo: None,
+        }
+    }
+
+    /// jj -R path: the workspace at path, whatever the current directory is.
+    pub fn repo(path: &str) -> Jj {
+        Jj {
+            dir: None,
+            repo: Some(path.to_string()),
         }
     }
 
@@ -23,7 +36,30 @@ impl Jj {
         if let Some(dir) = &self.dir {
             cmd.current_dir(dir);
         }
+        if let Some(repo) = &self.repo {
+            cmd.args(["-R", repo]);
+        }
         cmd
+    }
+
+    /// Runs jj with stdout and stderr captured; a failure carries the command and jj's stderr.
+    pub fn query(&self, args: &[&str]) -> Result<String, String> {
+        let out = self
+            .command()
+            .args(["--no-pager", "--color=never"])
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| format!("jj: {e}"))?;
+        if !out.status.success() {
+            let place = self.repo.as_deref().or(self.dir.as_deref()).unwrap_or(".");
+            return Err(format!(
+                "`jj {}` in {place}: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
     /// Runs jj with its messages and errors going straight to the terminal; a failure carries no message.

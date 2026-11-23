@@ -23,6 +23,10 @@ const FAKES: &[(&str, &str)] = &[
         "claude-jj-workspace",
         include_str!("../fake/claude-jj-workspace"),
     ),
+    (
+        "claude-mcp-defaults",
+        include_str!("../fake/claude-mcp-defaults"),
+    ),
 ];
 
 pub struct Env {
@@ -119,11 +123,22 @@ impl Env {
     }
 
     pub fn jw_stdin(&self, cwd: &Path, stdin: &str, args: &[&str]) -> Out {
+        self.jw_stdin_env(cwd, &[], stdin, args)
+    }
+
+    pub fn jw_stdin_env(
+        &self,
+        cwd: &Path,
+        envs: &[(&str, &str)],
+        stdin: &str,
+        args: &[&str],
+    ) -> Out {
         use std::io::Write;
         use std::process::Stdio;
         let mut c = self.command(env!("CARGO_BIN_EXE_jw"), cwd);
         let mut child = c
             .args(args)
+            .envs(envs.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -165,6 +180,16 @@ impl Env {
         fs::write(home.join("file"), "content\n").unwrap();
         self.jj(&home, &["commit", "-m", "init"]);
         self.jj(&home, &["bookmark", "create", "main", "-r", "@-"]);
+        self.jj(
+            &home,
+            &[
+                "config",
+                "set",
+                "--repo",
+                "revset-aliases.\"trunk()\"",
+                "main",
+            ],
+        );
         home
     }
 
