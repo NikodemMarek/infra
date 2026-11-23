@@ -49,9 +49,12 @@
 
   sessionMessage = event-handlers.session-message.override {notify = forwardNotify;};
 
+  shaniForge = event-handlers.forge.override {session-message = sessionMessage;};
+
   shaniHandlers = callPackage ./handlers.nix {
     forward-notify = forwardNotify;
     session-message = sessionMessage;
+    forge = shaniForge;
   };
 
   shaniEventHandlers = event-handlers.override {handlers = shaniHandlers;};

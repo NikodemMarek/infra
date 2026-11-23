@@ -45,8 +45,11 @@ enum Command {
     Prune(PruneArgs),
     /// stop the finished sessions (jw done, or merged MRs) once idle and detached, and remove their merged workspaces (after jw done also the worktrees the session created, unless they hold work); stop the detached Claude shpool sessions idle or stuck on a permission prompt for 4 hours (their workspaces stay; resume with jw resume --session NAME)
     Reap,
-    /// tell running or stopped agent sessions about failed pipelines and new comments and reviews of their MRs, and running ones about merges
+    /// publish failed pipelines, new comments and reviews and merges of agent sessions' MRs as forge.* events
     Poll,
+    /// turn a forge event on stdin into the JSON line `jw msg` delivers (used by the forge event handler)
+    #[command(hide = true)]
+    ForgeNotice,
     /// print the jj workspace and stack of the current directory as JSON
     Info,
     /// pick a repo (the current one first) and print its name
@@ -217,6 +220,7 @@ fn main() {
         Command::Prune(a) => reap::cmd_prune(a),
         Command::Reap => reap::cmd_reap(),
         Command::Poll => poll::cmd_poll(),
+        Command::ForgeNotice => poll::cmd_forge_notice(),
         Command::Info => workspace::cmd_info(),
         Command::Pick => workspace::cmd_pick(),
         Command::Agent(a) => agent::cmd_agent(a),

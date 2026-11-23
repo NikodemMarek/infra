@@ -985,3 +985,153 @@ fn w7_worktree_prunes_vanished_paths_on_append() {
         json!([dir_str(&b), dir_str(&c)])
     );
 }
+
+const MR: &str = "https://github.com/o/r/pull/1";
+
+fn poll_env(e: &Env, mark: Option<Value>) {
+    e.repo();
+    let ws = e.workspace("s-poll");
+    let mut rec = json!({"workspace": dir_str(&ws), "status": "idle", "mrs": [MR]});
+    if let Some(m) = mark {
+        rec["mr_marks"] = json!({ MR: m });
+    }
+    e.write_record("p1", &rec.to_string());
+    fixture(e, "view", json!({"forge": "github", "state": "open"}));
+}
+
+fn fixture(e: &Env, name: &str, v: Value) {
+    fs::write(e.logs.join(format!("forge-{name}.json")), v.to_string()).unwrap();
+}
+
+fn pub_log(e: &Env) -> Vec<(String, Value)> {
+    let log = fs::read_to_string(e.logs.join("event-pub.log")).unwrap_or_default();
+    let lines: Vec<&str> = log.lines().collect();
+    lines
+        .chunks(2)
+        .map(|c| {
+            let ty = c[0].strip_prefix("type=").unwrap().to_string();
+            let body = c[1].strip_prefix("stdin=").unwrap();
+            (ty, serde_json::from_str(body).unwrap())
+        })
+        .collect()
+}
+
+fn gh_comment(id: i64) -> Value {
+    json!({"id": id, "kind": "comment", "author": "alice", "association": "NONE",
+           "created_at": "2026-11-22T10:00:00Z", "body": "please fix",
+           "url": "https://github.com/o/r/pull/1#c", "path": null, "line": null,
+           "review_state": null})
+}
+
+#[test]
+fn p1_poll_publishes_failed_pipeline_then_comment() {
+    let e = Env::new();
+    poll_env(&e, Some(json!({"seen": []})));
+    fixture(
+        &e,
+        "checks",
+        json!({"sha": "S0123456789", "state": "failed", "url": "https://ci/1",
+               "failed": [{"name": "build", "url": null}, {"name": "test", "url": null}]}),
+    );
+    fixture(&e, "comments", json!([gh_comment(77)]));
+
+    let out = e.jw(&e.root, &["poll"]);
+    out.ok();
+    stdout_has(&out, "notified p1");
+
+    let calls = pub_log(&e);
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[0].0, "forge.pipeline_failed");
+    assert_eq!(
+        calls[0].1,
+        json!({"type": "forge.pipeline_failed", "session": "p1", "forge": "github", "mr": MR,
+               "sha": "S0123456789", "url": "https://ci/1", "jobs": ["build", "test"]})
+    );
+    assert_eq!(calls[1].0, "forge.comment");
+    assert_eq!(
+        calls[1].1,
+        json!({"type": "forge.comment", "session": "p1", "forge": "github", "mr": MR, "id": 77,
+               "kind": "comment", "author": "alice", "association": "NONE", "body": "please fix",
+               "url": "https://github.com/o/r/pull/1#c", "path": null, "line": null,
+               "review_state": null})
+    );
+    assert_eq!(
+        e.record("p1")["mr_marks"][MR],
+        json!({"failed_sha": "S0123456789", "seen": ["comment:77"]})
+    );
+}
+
+#[test]
+fn p2_poll_publish_failure_leaves_record_unchanged() {
+    let e = Env::new();
+    poll_env(&e, Some(json!({"seen": []})));
+    fixture(
+        &e,
+        "checks",
+        json!({"sha": "S0123456789", "state": "failed", "url": null, "failed": []}),
+    );
+    fixture(&e, "comments", json!([gh_comment(77)]));
+    let msg = "event-pub: cannot publish events.forge.pipeline_failed: x";
+    fs::write(e.logs.join("event-pub.fail"), format!("{msg}\n")).unwrap();
+    let before = e.record("p1");
+
+    let out = e.jw(&e.root, &["poll"]);
+    out.ok();
+    assert!(
+        out.stderr.lines().any(|l| l == format!("jw: p1: {msg}")),
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(!out.stdout.contains("notified"), "{}", out.stdout);
+    assert_eq!(e.record("p1"), before);
+    assert_eq!(pub_log(&e).len(), 1);
+}
+
+#[test]
+fn p3_poll_without_activity_baselines_and_publishes_nothing() {
+    let e = Env::new();
+    poll_env(&e, None);
+    fixture(
+        &e,
+        "checks",
+        json!({"sha": "abc", "state": "success", "url": null, "failed": []}),
+    );
+    fixture(&e, "comments", json!([gh_comment(5)]));
+
+    let out = e.jw(&e.root, &["poll"]);
+    out.ok();
+    assert!(!out.stdout.contains("notified"), "{}", out.stdout);
+    assert!(!e.logs.join("event-pub.log").exists());
+    assert_eq!(
+        e.record("p1")["mr_marks"][MR],
+        json!({"seen": ["comment:5"]})
+    );
+}
+
+#[test]
+fn p4_forge_notice_cli() {
+    let e = Env::new();
+    let ev = |assoc: &str| {
+        json!({"type": "forge.comment", "session": "s1", "forge": "github", "mr": MR, "id": 1,
+               "kind": "comment", "author": "alice", "association": assoc, "body": "hi\nthere",
+               "url": null, "path": null, "line": null, "review_state": null})
+        .to_string()
+    };
+
+    let out = e.jw_stdin(&e.root, &ev("OWNER"), &["forge-notice"]);
+    out.ok();
+    assert_eq!(out.stdout.lines().count(), 1, "{}", out.stdout);
+    assert!(out.stdout.ends_with('\n'));
+    let v = out.json();
+    assert_eq!(v["to"], "s1");
+    let text = v["text"].as_str().unwrap();
+    assert!(text.contains(MR) && text.contains("- comment by @alice\n  > hi\n  > there"));
+
+    let out = e.jw_stdin(&e.root, &ev("NONE"), &["forge-notice"]);
+    out.ok();
+    assert_eq!(out.stdout, "");
+
+    let out = e.jw_stdin(&e.root, "not json", &["forge-notice"]);
+    out.fail("jw: invalid forge event");
+    assert_eq!(out.stdout, "");
+}

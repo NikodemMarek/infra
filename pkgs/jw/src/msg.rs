@@ -92,7 +92,7 @@ fn send(socket: &str, line: &str) -> std::io::Result<()> {
 }
 
 /// Sends text from origin to the running session name, retrying for wait; returns the session's label.
-pub fn deliver(name: &str, text: &str, origin: &str, wait: Duration) -> Result<String, String> {
+fn deliver(name: &str, text: &str, origin: &str, wait: Duration) -> Result<String, String> {
     let message = serde_json::json!({
         "type": "user",
         "message": {"role": "user", "content": message_content(text, origin)},
