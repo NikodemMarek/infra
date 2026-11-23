@@ -58,8 +58,6 @@ spec:
       enabled: false
     gatewayClass:
       enabled: false
-    metrics:
-      prometheus: null
     logs:
       general:
         level: INFO
