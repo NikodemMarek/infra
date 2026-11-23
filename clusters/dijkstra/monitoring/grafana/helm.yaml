@@ -1,0 +1,76 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: grafana-community
+  namespace: monitoring
+spec:
+  interval: 1h
+  url: https://grafana-community.github.io/helm-charts
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: grafana
+      version: "14.5.0"
+      sourceRef:
+        kind: HelmRepository
+        name: grafana-community
+        namespace: monitoring
+  values:
+    nodeSelector:
+      kubernetes.io/hostname: triss
+    deploymentStrategy:
+      type: Recreate
+    admin:
+      existingSecret: secrets
+      passwordKey: grafana_admin_password
+    env:
+      GF_SECURITY_ADMIN_USER: admin
+    persistence:
+      enabled: true
+      storageClassName: openebs-hostpath
+      size: 1Gi
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+    rbac:
+      namespaced: true
+    sidecar:
+      dashboards:
+        enabled: true
+        label: grafana_dashboard
+        labelValue: "1"
+        searchNamespace: monitoring
+    datasources:
+      datasources.yaml:
+        apiVersion: 1
+        datasources:
+          - name: VictoriaMetrics
+            uid: vm
+            type: prometheus
+            access: proxy
+            url: http://victoria-metrics-single-server.monitoring.svc:8428
+            isDefault: true
+          - name: Loki
+            uid: loki
+            type: loki
+            access: proxy
+            url: http://loki.monitoring.svc:3100
+    grafana.ini:
+      server:
+        root_url: https://grafana.${DOMAIN}
+      analytics:
+        reporting_enabled: false
+        check_for_updates: false
+        check_for_plugin_updates: false
+      users:
+        allow_sign_up: false
+      auth.anonymous:
+        enabled: false
