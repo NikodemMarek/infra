@@ -22,7 +22,7 @@ const NAME_MAX: usize = 100;
 const GC_AGE: f64 = 24.0 * 3600.0;
 const HOLDS_WORK: &str = "holds work";
 
-/// A workspace the hook created; the file format is shared with the Python hook.
+/// A workspace the hook created; entries written by the former Python hook still load.
 #[derive(Serialize, Deserialize)]
 struct Entry {
     name: String,

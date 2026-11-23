@@ -20,10 +20,6 @@ const FAKES: &[(&str, &str)] = &[
     ("event-pub", include_str!("../fake/event-pub")),
     ("gitlab-context", include_str!("../fake/gitlab-context")),
     (
-        "claude-jj-workspace",
-        include_str!("../fake/claude-jj-workspace"),
-    ),
-    (
         "claude-mcp-defaults",
         include_str!("../fake/claude-mcp-defaults"),
     ),

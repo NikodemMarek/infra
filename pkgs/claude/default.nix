@@ -15,6 +15,9 @@
   jj-upload,
   knowledge,
   agent-skills,
+  jw,
+  jujutsu,
+  git,
   # CLAUDE.md (path). null -> ./CLAUDE.md
   instructions ? null,
   # name (without .md) -> path. null -> every .md in ./agents
@@ -239,12 +242,12 @@
       '';
 
       # Sourced after the preamble: a plain interactive `claude [prompt]` in a repo's main jj
-      # workspace runs in its own one (`--worktree`, see claude-jj-workspace). Anything with
+      # workspace runs in its own one (`--worktree`, see `jw hook`). Anything with
       # flags or a subcommand, or already in a <repo>.agents/<name> workspace, runs as is.
       # Exception: the human's <repo>.agents/w-* workspaces (`jw new`) are never worked in by
       # claude directly; there it starts from the main workspace (the one whose trust counts)
       # and the session workspace begins on the w-* workspace's current change
-      # (CLAUDE_WORKSPACE_BASE, read by claude-jj-workspace).
+      # (CLAUDE_WORKSPACE_BASE, read by `jw hook`).
       # CLAUDE_NO_WORKSPACE=1 opts out. Always (unless already set) exports
       # CLAUDE_CODE_PROJECT_DIR_NAME as the main repo's session key, so all of a repo's
       # workspaces share one session list (`--resume`).
@@ -302,7 +305,7 @@
             cd "$main" || return 0
             export CLAUDE_WORKSPACE_BASE="$base"
           fi
-          # the jj workspace is renamed to s-<title> by `claude-jj-workspace title`; the directory keeps this name
+          # the jj workspace is renamed to s-<title> by `jw hook title`; the directory keeps this name
           __claude_ws="s-$(${coreutils}/bin/date +%m%d-%H%M%S)-$RANDOM"
         }
         __claude_workspace "$@" || true
@@ -310,7 +313,7 @@
           set -- --worktree "$__claude_ws" "$@"
         elif [ -t 0 ] && [ -t 1 ]; then
           # project MCP servers start disabled: avoids the blocking approval dialog (a --worktree
-          # session gets the same from claude-jj-workspace when it creates the workspace)
+          # session gets the same from `jw hook` when it creates the workspace)
           ${claude-hooks}/bin/claude-mcp-defaults "$PWD" || true
         fi
         unset -f __claude_project __claude_workspace
@@ -339,7 +342,8 @@
               ]
               ++ extraPackages
             )
-          }
+          } \
+            --suffix PATH : ${lib.makeBinPath [jw jujutsu git]}
 
           # Minimal headless claude for narrow tool runs (the curator, skills, route): no
           # MCP servers, slash commands, settings files or CLAUDE.md; the caller picks the tools

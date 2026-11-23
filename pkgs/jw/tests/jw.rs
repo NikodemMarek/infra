@@ -920,7 +920,6 @@ fn r8_reap_missing_tools_on_path() {
     e.repo();
     let tools = e.dir.join("tools");
     fs::create_dir_all(&tools).unwrap();
-    fs::remove_file(e.dir.join("bin/claude-jj-workspace")).unwrap();
     let git = which("git").expect("git on PATH");
     std::os::unix::fs::symlink(git, tools.join("git")).unwrap();
     let path = format!("{}:{}", e.dir.join("bin").display(), tools.display());
