@@ -37,7 +37,7 @@
     settings = null;
   };
 
-  # Standalone tools. claude takes knowledge, claude-hooks, claude-statusline
+  # Standalone tools. claude takes claude-hooks, claude-statusline
   # and jj-upload from the package set, so overrides of them propagate.
   # jj-upload needs the upstream jj: the wrapped one bundles jj-upload (recursion).
   jj-upload = pkgs.callPackage ./jj-upload {inherit (prev) jujutsu;};
@@ -55,7 +55,6 @@
   agent-skills = pkgs.callPackage ./agent-skills {};
   claude-hooks = pkgs.callPackage ./claude-hooks {};
   claude-statusline = pkgs.callPackage ./claude-statusline {};
-  knowledge = pkgs.callPackage ./knowledge {};
   agent-inbox = pkgs.callPackage ./agent-inbox {};
   matrix-inbox = pkgs.callPackage ./matrix-inbox {};
   agent-task = pkgs.callPackage ./agent-task {};

@@ -11,13 +11,12 @@ nix build .#claude                                # build it (from the repo root
 
 - `pkgs/claude/` - the wrapper (`default.nix`), `CLAUDE.md`, `agents/*.md`, `settings.nix` (rendered to `settings.json`), `permissions.nix` (imported by `settings.nix`) and this README
 - `pkgs/agent-skills/skills/` - `*/SKILL.md`, tool-agnostic skills shared by Claude and other tools (`jj`, `atomic-commits`, `commit`, `drill-me`); `claude` takes them from the `agent-skills` package
-- `pkgs/knowledge` - the knowledge CLI: `knowledge submit` (queue a note), `curate`, `skills`, `route`, hooks
 - `pkgs/jj-upload`, `pkgs/claude-hooks`, `pkgs/claude-statusline`, `pkgs/agent-skills` - the other tools
 - `pkgs/default.nix` - registers `claude` and the tools; `overlays/default.nix` exposes them as the `additions` overlay and `flake.nix` exports them as `packages`
 
 `@memoryDir@`, `@dataDir@`, `@projectsDir@` and `@knowledgeFile@` in the markdown files and the settings are substituted at build time. `knowledgeFile` (default `$dataDir/knowledge.md`) is the cross-repo knowledge file `CLAUDE.md` imports: edits ask for confirmation and event sessions are denied (`claude-event-guard`).
 
-The wrapper takes `knowledge`, `claude-hooks`, `claude-statusline`, `forge` and `jj-upload` from the package set (`callPackage`) and puts them on its `PATH`, so overriding any of them propagates into `claude`. `jw`, `jj` and `git`, which the workspace hooks (`jw hook`) need, go at the end of `PATH`, so the host's own win. Its default skills come from `agent-skills` the same way. `pkgs/default.nix` passes `null` for `instructions`, `agents`, `skills` and `settings` so that callPackage never injects a same-named package and the bundled defaults are used.
+The wrapper takes `claude-hooks`, `claude-statusline`, `forge` and `jj-upload` from the package set (`callPackage`) and puts them on its `PATH`, so overriding any of them propagates into `claude`. `jw`, `jj` and `git`, which the workspace hooks (`jw hook`) need, go at the end of `PATH`, so the host's own win. Its default skills come from `agent-skills` the same way. `pkgs/default.nix` passes `null` for `instructions`, `agents`, `skills` and `settings` so that callPackage never injects a same-named package and the bundled defaults are used.
 
 ## Using it in this flake
 
@@ -31,8 +30,6 @@ environment.systemPackages = [
 ```
 
 `claude-code` is unfree; the flake's `pkgs` allows it.
-
-The package also ships `claude-bare`, a minimal headless claude for narrow tool runs (used by `knowledge route`, `knowledge skills` and the curator): no MCP servers, slash commands, settings files, `CLAUDE.md` or workspace handling, so a call costs a fraction of the tokens. Pick its tools with `--tools`, e.g. `echo q | claude-bare -p --tools Read,Grep,Glob`. It is not `--bare`, which would drop the subscription login.
 
 ## Using it from another flake
 
@@ -62,7 +59,7 @@ Add this repo as an input and apply its `additions` overlay to **your own** nixp
 
 (The same overlay works in `import nixpkgs { overlays = [ ... ]; }` for home-manager or a plain `packages` output.) After changing this repo, `nix flake update dotfiles` in that flake and rebuild.
 
-Use the overlay, not `dotfiles.packages.<system>.claude`: the overlay builds the package with `callPackage` from your package set, so overrides you apply to nixpkgs or to other overlays (`claude-code`, `knowledge`, ...) propagate into it. `packages.*` are already built against this repo's nixpkgs and can't take overrides.
+Use the overlay, not `dotfiles.packages.<system>.claude`: the overlay builds the package with `callPackage` from your package set, so overrides you apply to nixpkgs or to other overlays (`claude-code`, `claude-hooks`, ...) propagate into it. `packages.*` are already built against this repo's nixpkgs and can't take overrides.
 
 ## Settings
 
@@ -96,7 +93,6 @@ On launch the wrapper uses `CLAUDE_CONFIG_DIR` (default: the package's `dataDir`
   memory/            the architect's project memory (a git repo, not managed by Nix): README.md, INDEX.md,
                      templates/ and projects/<slug>/{overview,decisions,log}.md + notes/; private/ is the user's
   ...                sessions, credentials, etc. (claude's own state)
-~/.local/state/knowledge/inbox/   the curator's inbox (one file per pending note)
 ```
 
 `.claude.json` (claude's own state) gets `hasCompletedOnboarding`, `hasSeenAutoDefaultNotice` and `projects.<path>.hasTrustDialogAccepted` for `projectsDir` (default `$HOME/projects`) added when missing, so a fresh data dir skips the first-run screens (theme picker, security notes, terminal setup), the auto mode notice and the trust prompt there; existing values are kept. A repo below `projectsDir` is also trusted on its own when launched in (`--worktree` needs that). Log in with `/login`.

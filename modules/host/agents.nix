@@ -23,7 +23,7 @@
   ];
 in {
   options.services.agents = {
-    enable = lib.mkEnableOption "the local NATS server, the event handlers, the knowledge curator timer and the idle Claude session reaper";
+    enable = lib.mkEnableOption "the local NATS server, the event handlers and the idle Claude session reaper";
     jwPackage = lib.mkPackageOption pkgs "jw" {};
     ghPackage = lib.mkPackageOption pkgs "gh" {};
     glabPackage = lib.mkPackageOption pkgs "glab" {};
@@ -67,16 +67,6 @@ in {
             };
           };
 
-          knowledge-curate = {
-            description = "Merge the pending knowledge notes into the knowledge store";
-            environment.KNOWLEDGE_CLAUDE = "${pkgs.claude}/bin/claude-bare";
-            serviceConfig = {
-              Type = "oneshot";
-              ExecStart = "${lib.getExe pkgs.knowledge} curate";
-            };
-            startAt = "*-*-* 00/6:15:00";
-          };
-
           jw-reap = {
             description = "Publish MR activity of agent sessions, stop finished or long-idle ones and remove their merged workspaces";
             environment = {
@@ -96,10 +86,6 @@ in {
         };
 
         timers = {
-          knowledge-curate.timerConfig = {
-            Persistent = true;
-            RandomizedDelaySec = "10min";
-          };
           jw-reap.timerConfig.Persistent = true;
         };
       };

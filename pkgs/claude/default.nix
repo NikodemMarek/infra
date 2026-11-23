@@ -13,7 +13,6 @@
   claude-statusline,
   forge,
   jj-upload,
-  knowledge,
   agent-skills,
   jw,
   jujutsu,
@@ -342,7 +341,6 @@
             --run "source ${preamble}" \
             --run "source ${workspace}" \
             --set-default DISABLE_AUTOUPDATER 1 \
-            --set-default KNOWLEDGE_CLAUDE $out/bin/claude-bare \
             --set-default SUDO_ASKPASS ${claude-hooks}/bin/claude-askpass \
             --prefix PATH : ${
             lib.makeBinPath (
@@ -351,24 +349,11 @@
                 claude-statusline
                 forge
                 jj-upload
-                knowledge
               ]
               ++ extraPackages
             )
           } \
             --suffix PATH : ${lib.makeBinPath [jw jujutsu git]}
-
-          # Minimal headless claude for narrow tool runs (the curator, skills, route): no
-          # MCP servers, slash commands, settings files or CLAUDE.md; the caller picks the tools
-          # with `--tools`. Not `--bare`: that drops the subscription login. Wraps the unwrapped
-          # claude (no jj workspace). Only CLAUDE_CONFIG_DIR is set (where the login is), not the
-          # preamble: that would relink the managed config of whichever claude runs it. Auto-memory
-          # is off here because settings.json, where settings.nix turns it off, is not loaded.
-          makeWrapper ${claude-code}/bin/claude $out/bin/claude-bare \
-            --run 'export CLAUDE_CONFIG_DIR="''${CLAUDE_CONFIG_DIR:-${dataDir}}"' \
-            --set-default DISABLE_AUTOUPDATER 1 \
-            --set-default CLAUDE_CODE_DISABLE_AUTO_MEMORY 1 \
-            --add-flags "--strict-mcp-config --disable-slash-commands --setting-sources="
         '';
 
         passthru = {

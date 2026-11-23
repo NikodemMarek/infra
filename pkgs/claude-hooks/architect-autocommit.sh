@@ -19,8 +19,8 @@ case "$abs" in
 *) exit 0 ;;
 esac
 rel="${abs#"$real"/}"
-# Serialise with other memory writers (the knowledge tooling takes the same lock).
-lockdir="${XDG_RUNTIME_DIR:-/tmp/user-$(id -u)}/knowledge"
+# Serialise concurrent architect commits.
+lockdir="${XDG_RUNTIME_DIR:-/tmp/user-$(id -u)}/claude-memory"
 mkdir -p "$lockdir" 2>/dev/null
 (
 	flock -w 30 9 || exit 0
