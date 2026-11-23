@@ -31,7 +31,7 @@ data:
         }
         import upstream
     }
-    radicale.nkmrk.com sonarr.nkmrk.com radarr.nkmrk.com lidarr.nkmrk.com qbittorrent.nkmrk.com bazarr.nkmrk.com prowlarr.nkmrk.com ollama.nkmrk.com audiomuse-ai.nkmrk.com omniverse.nkmrk.com photos.nkmrk.com matrix.nkmrk.com {
+    radicale.nkmrk.com sonarr.nkmrk.com radarr.nkmrk.com lidarr.nkmrk.com qbittorrent.nkmrk.com bazarr.nkmrk.com prowlarr.nkmrk.com ollama.nkmrk.com audiomuse-ai.nkmrk.com omniverse.nkmrk.com photos.nkmrk.com matrix.nkmrk.com grafana.nkmrk.com {
         errors
         rewrite name regex .* traefik-internal.default.svc.cluster.local. answer auto
         forward . 10.43.0.10
