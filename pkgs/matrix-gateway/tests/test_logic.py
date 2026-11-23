@@ -7,6 +7,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from matrix_gateway.data import Obj, ParseError, loads
 from matrix_gateway.logic import (
+    POST_ROOMS,
     ROUTE,
     TO_RE,
     Send,
@@ -280,6 +281,25 @@ def test_parse_send_post_room_invalid(line: str) -> None:
 
 def test_content_post_room() -> None:
     assert content(Send("a\x07b", room="mail")) == {"msgtype": "m.text", "body": "a�b"}
+
+
+def test_post_rooms() -> None:
+    assert POST_ROOMS == ("mail", "alerts")
+
+
+def test_parse_send_alerts_room() -> None:
+    assert parse_send('{"room":"alerts","body":"hi"}') == Send("hi", room="alerts")
+
+
+def test_parse_send_alerts_room_invalid() -> None:
+    assert parse_send('{"room":"alerts","body":""}') is None
+
+
+def test_content_alerts_room() -> None:
+    assert content(Send("a\x07b", room="alerts")) == {
+        "msgtype": "m.text",
+        "body": "a�b",
+    }
 
 
 def test_parse_send_deeply_nested() -> None:
