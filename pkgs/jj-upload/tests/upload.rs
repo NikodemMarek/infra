@@ -634,3 +634,67 @@ fn sync_fails_when_remote_branch_shares_no_version() {
     assert_eq!(e.commit_of(&a.change), before);
     assert_eq!(file_at(&e, &a.change, "a.txt"), "feat: a\n\nBody A\n");
 }
+
+fn push_extra_bookmark(e: &Env, change: &str, name: &str) {
+    e.jj(&["bookmark", "create", name, "-r", change]);
+    e.jj(&["git", "push", "--remote", "origin", "--bookmark", name]);
+    assert!(e.remote_branch(name).is_some());
+}
+
+fn reject_deletions(e: &Env) {
+    use std::os::unix::fs::PermissionsExt;
+    let hook = e.remote.join("hooks/pre-receive");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\nz=0000000000000000000000000000000000000000\n\
+         while read old new ref; do\n  [ \"$new\" = \"$z\" ] && exit 1\ndone\nexit 0\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn local_only_extra_bookmark_is_deleted_without_push() {
+    let (e, a, _b) = stack(Forge::GitLab);
+    e.upload(&[]).ok();
+    e.jj(&["bookmark", "create", "nm/extra", "-r", &a.change]);
+
+    e.upload(&[]).ok();
+
+    assert_eq!(e.remote_branch("nm/extra"), None);
+    assert!(e.remote_branch(&a.branch).is_some());
+    assert!(!e
+        .jj(&["bookmark", "list", "nm/extra"])
+        .contains("nm/extra"));
+}
+
+#[test]
+fn failing_stale_branch_delete_fails_the_upload() {
+    let (e, a, _b) = stack(Forge::GitLab);
+    e.upload(&[]).ok();
+    push_extra_bookmark(&e, &a.change, "nm/extra");
+    reject_deletions(&e);
+
+    let out = e.upload(&[]);
+
+    assert_ne!(out.code, 0, "stdout: {}", out.stdout);
+    assert!(
+        out.stderr.contains("deleting stale branches failed"),
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(e.remote_branch("nm/extra").is_some());
+}
+
+#[test]
+fn stale_branch_is_deleted_from_remote() {
+    let (e, a, _b) = stack(Forge::GitLab);
+    e.upload(&[]).ok();
+    push_extra_bookmark(&e, &a.change, "nm/extra");
+
+    e.upload(&[]).ok();
+
+    assert_eq!(e.remote_branch("nm/extra"), None);
+    assert!(e.remote_branch(&a.branch).is_some());
+}
