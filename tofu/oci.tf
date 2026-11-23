@@ -18,13 +18,17 @@ resource "oci_budget_budget" "tenancy" {
   targets        = [local.tenancy_ocid]
 }
 
+variable "budget_alert_email" {
+  type = string
+}
+
 resource "oci_budget_alert_rule" "any_spend" {
   budget_id      = oci_budget_budget.tenancy.id
   display_name   = "any-spend"
   type           = "ACTUAL"
   threshold_type = "PERCENTAGE"
   threshold      = 1
-  recipients     = "nmarekpub@proton.me"
+  recipients     = var.budget_alert_email
   message        = "Oracle Cloud tenancy is spending money"
 }
 
