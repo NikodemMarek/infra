@@ -29,9 +29,9 @@ input=$(cat)
 [ -z "$dir" ] && dir=$(pwd)
 short_dir="${dir/#"$HOME"/\~}"
 
-# Name the session's jj workspace after the session title (claude-jj-workspace decides; once, in the background)
-if [ -n "$session_name" ] && command -v claude-jj-workspace >/dev/null 2>&1; then
-	case "$dir" in */*.agents/s-*) printf '%s' "$input" | claude-jj-workspace title >/dev/null 2>&1 & ;; esac
+# Name the session's jj workspace after the session title (`jw hook title` decides; once, in the background)
+if [ -n "$session_name" ]; then
+	case "$dir" in */*.agents/s-*) printf '%s' "$input" | jw hook title >/dev/null 2>&1 & ;; esac
 fi
 
 # jj info from `jw info` (never snapshots): project, workspace, @ and its place in the stack.

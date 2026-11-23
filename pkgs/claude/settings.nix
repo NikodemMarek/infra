@@ -177,7 +177,7 @@
         hooks = [
           {
             type = "command";
-            command = "claude-jj-workspace create";
+            command = "jw hook create";
             timeout = 120;
           }
         ];
@@ -188,7 +188,7 @@
         hooks = [
           {
             type = "command";
-            command = "claude-jj-workspace remove";
+            command = "jw hook remove";
             timeout = 180;
           }
         ];
@@ -199,7 +199,7 @@
         hooks = [
           {
             type = "command";
-            command = "claude-jj-workspace stop";
+            command = "jw hook stop || true";
             timeout = 180;
           }
         ];

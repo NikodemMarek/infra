@@ -12,7 +12,6 @@
   gnugrep,
   gnused,
   python3,
-  jujutsu,
   stdenvNoCC,
   makeWrapper,
 }: let
@@ -201,33 +200,6 @@
       coreutils
     ];
   };
-
-  jjWorkspace = stdenvNoCC.mkDerivation {
-    pname = "claude-jj-workspace";
-    version = "0.1.0";
-
-    dontUnpack = true;
-    nativeBuildInputs = [makeWrapper];
-
-    installPhase = ''
-      runHook preInstall
-      install -Dm755 ${./jj-workspace.py} $out/bin/claude-jj-workspace
-      substituteInPlace $out/bin/claude-jj-workspace \
-        --replace-fail "#!/usr/bin/env python3" "#!${python3}/bin/python3"
-      wrapProgram $out/bin/claude-jj-workspace \
-        --suffix PATH : ${
-        lib.makeBinPath [
-          jujutsu
-          git
-          mcpDefaults
-          jw
-        ]
-      }
-      runHook postInstall
-    '';
-
-    meta.mainProgram = "claude-jj-workspace";
-  };
 in
   symlinkJoin {
     name = "claude-hooks";
@@ -244,11 +216,10 @@ in
       stopHook
       promptHook
       mcpDefaults
-      jjWorkspace
     ];
 
     meta = {
-      description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop and UserPromptSubmit hooks (queued follow-up prompts of event-started sessions, waiting notification), the status hook (session record status), jj workspaces for isolated agents, project MCP servers seeded as disabled";
+      description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop and UserPromptSubmit hooks (queued follow-up prompts of event-started sessions, waiting notification), the status hook (session record status), project MCP servers seeded as disabled";
       platforms = lib.platforms.unix;
     };
   }
