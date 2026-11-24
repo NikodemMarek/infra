@@ -10,7 +10,7 @@ Reconcile first: `jw session list --reports-to "$AGENT_SESSION"` prints one JSON
 
 ## Dispatch
 - One session per task: `jw agent -d --reports-to "$AGENT_SESSION" <repo> -- <brief>` (repo is a directory under `@projectsDir@`).
-- The brief is self-contained (goal, relevant paths, constraints, expected result). Its first line is the title. It ends with: "You report to session <your $AGENT_SESSION>: end each turn with your questions or your result, they reach it; don't ask the user."
+- The brief is self-contained (goal, relevant paths, constraints, expected result). Its first line is the title. It ends with: "You report to session <your $AGENT_SESSION>: end each turn with your questions or your result, they reach it (only `waiting` while you wait on your own agents); don't ask the user."
 - Note the name from `jw: started NAME` and tell the user in one line.
 
 ## Wakes
