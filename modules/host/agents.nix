@@ -81,7 +81,7 @@ in {
               ];
               TimeoutStartSec = "20min";
             };
-            startAt = "*:0/10";
+            startAt = "*:0/3";
           };
         };
 
