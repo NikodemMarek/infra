@@ -43,21 +43,23 @@ impl Shpool {
         Ok(status.success())
     }
 
-    /// Starts the session name in dir, running the shell script job, in the background.
-    pub fn start(&self, name: &str, dir: &str, job: &str) -> Result<bool, String> {
+    /// Starts the session name in dir, running the shell script job, in the background; it is killed when idle for ttl
+    /// (none: never).
+    pub fn start(
+        &self,
+        name: &str,
+        dir: &str,
+        job: &str,
+        ttl: Option<&str>,
+    ) -> Result<bool, String> {
         let script = format!("/bin/sh {}", crate::agent::sh_quote(job));
+        let mut args = vec!["attach", "-b"];
+        if let Some(ttl) = ttl {
+            args.extend(["--ttl", ttl]);
+        }
+        args.extend(["-d", dir, "-c", script.as_str(), name]);
         let status = self
-            .command(&[
-                "attach",
-                "-b",
-                "--ttl",
-                "1d",
-                "-d",
-                dir,
-                "-c",
-                script.as_str(),
-                name,
-            ])
+            .command(&args)
             .status()
             .map_err(|e| format!("shpool: {e}"))?;
         Ok(status.success())

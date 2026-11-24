@@ -12,8 +12,9 @@ use chrono::{DateTime, Local};
 use serde_json::{Map, Value};
 
 use crate::cmd::{output_with_input, stdin_is_tty};
+use crate::jj::Jj;
 use crate::procs::{claude_dir, live_claudes};
-use crate::record::{valid_name, write_error, Record, Records};
+use crate::record::{valid_name, write_error, Record, Records, MATE_KIND};
 use crate::session::{in_event_session, session_name};
 use crate::shpool::Shpool;
 use crate::workspace::{
@@ -131,28 +132,48 @@ pub fn cmd_agent(a: AgentArgs) -> Result<(), String> {
             (home, args)
         }
     };
-    let revision = a.revision.filter(|r| !r.is_empty());
-    // the default trunk() is resolved in home without a snapshot
-    let resolve_in = revision.as_ref().and_then(|_| resolve_dir(&home));
-    fetch(&home);
-    let text = prompt.join(" ");
-    // one argument after `--`: claude takes a single prompt, and neither a first word like `update` nor a leading `-` is parsed
-    let claude = if prompt.is_empty() {
-        vec!["claude".to_string()]
-    } else {
-        vec!["claude".to_string(), "--".to_string(), text.clone()]
-    };
-    launch(
+    start_agent(
         &home,
         a.detach,
-        claude,
-        &text,
+        a.revision,
+        prompt,
         reports_to.as_deref(),
+        false,
+    )
+}
+
+/// Starts Claude on the prompt in a new workspace of the repo at home (a first mate if mate).
+fn start_agent(
+    home: &str,
+    detach: bool,
+    revision: Option<String>,
+    prompt: &[String],
+    reports_to: Option<&str>,
+    mate: bool,
+) -> Result<(), String> {
+    let revision = revision.filter(|r| !r.is_empty());
+    // the default trunk() is resolved in home without a snapshot
+    let resolve_in = revision.as_ref().and_then(|_| resolve_dir(home));
+    fetch(home);
+    let text = prompt.join(" ");
+    // one argument after `--`: claude takes a single prompt, and neither a first word like `update` nor a leading `-` is parsed
+    let args: Vec<&str> = if prompt.is_empty() {
+        vec![]
+    } else {
+        vec!["--", &text]
+    };
+    launch(
+        home,
+        detach,
+        &args,
+        &text,
+        reports_to,
         |name| {
             let revision = revision.as_deref().unwrap_or("trunk()");
-            add_workspace(&home, revision, name, resolve_in.as_deref())
+            add_workspace(home, revision, name, resolve_in.as_deref())
         },
-        None,
+        Naming::New,
+        mate,
     )
 }
 
@@ -171,20 +192,44 @@ fn pick_for(task: &str) -> Result<String, String> {
     repo_home(None)
 }
 
-/// Runs argv in a new shpool session of the repo at home, with a record titled after text, and attaches to it unless
-/// detach. With resume the session is called that name if no shpool session has it, else s-<time>, and an existing
-/// record of the name only gets its workspace updated. make_dir(name) returns the directory to run in; it is called
-/// under the lock, once the name is chosen. The name is the session's identity: AGENT_SESSION, the record name and the
-/// shpool session name are equal, and jw finds a live Claude's shpool session by its AGENT_SESSION. reports_to is the
-/// session the new record names as its supervisor.
+/// How launch names the session.
+#[derive(Clone, Copy)]
+enum Naming<'a> {
+    /// s-<time>
+    New,
+    /// That name if no shpool session has it, else s-<time>; an existing record of the name only gets its workspace
+    /// updated.
+    Resume(&'a str),
+}
+
+/// The words of a claude command line: the first mate also gets its role prompt.
+fn claude_argv(mate: bool, args: &[&str]) -> Vec<String> {
+    let mut argv = vec!["claude".to_string()];
+    if mate {
+        argv.extend([
+            "--append-system-prompt-file".to_string(),
+            format!("{}/mate.md", claude_dir()),
+        ]);
+    }
+    argv.extend(args.iter().map(|a| a.to_string()));
+    argv
+}
+
+/// Runs claude with args in a new shpool session of the repo at home, with a record titled after text, and attaches to
+/// it unless detach. make_dir(name) returns the directory to run in; it is called under the lock, once the name is
+/// chosen. The name is the session's identity: AGENT_SESSION, the record name and the shpool session name are equal,
+/// and jw finds a live Claude's shpool session by its AGENT_SESSION. reports_to is the session the new record names as
+/// its supervisor. A first mate (mate) has its role prompt, the record kind MATE_KIND and no shpool ttl.
+#[allow(clippy::too_many_arguments)]
 fn launch(
     home: &str,
     detach: bool,
-    argv: Vec<String>,
+    args: &[&str],
     text: &str,
     reports_to: Option<&str>,
     make_dir: impl FnOnce(&str) -> Result<String, String>,
-    resume: Option<&str>,
+    naming: Naming,
+    mate: bool,
 ) -> Result<(), String> {
     let rundir = runtime_dir();
     let name = {
@@ -198,8 +243,10 @@ fn launch(
             .map_err(|e| format!("{lock_path}: {e}"))?;
         lock.lock().map_err(|e| format!("{lock_path}: {e}"))?;
         let taken = Shpool.list()?;
-        let name = match resume {
-            Some(name) if valid_name(name) && !taken.contains_key(name) => name.to_string(),
+        let name = match naming {
+            Naming::Resume(name) if valid_name(name) && !taken.contains_key(name) => {
+                name.to_string()
+            }
             _ => {
                 let base = Local::now().format("s-%m%d-%H%M%S").to_string();
                 let mut name = base.clone();
@@ -215,14 +262,16 @@ fn launch(
         };
         let dir = make_dir(&name)?;
         let records = Records::new();
-        let fields = if resume.is_some() && records.read(&name).is_some() {
-            Record {
+        let mut fields = match naming {
+            Naming::Resume(_) if records.read(&name).is_some() => Record {
                 workspace: Some(dir.clone()),
                 ..Record::default()
-            }
-        } else {
-            task_record(text, &dir, reports_to)
+            },
+            _ => task_record(text, &dir, reports_to),
         };
+        if mate {
+            fields.kind = Some(MATE_KIND.to_string());
+        }
         // the inbox shows the session from its record; a failure must not stop the session
         let recorded = records.update(&name, |r| {
             r.merge(fields);
@@ -233,8 +282,8 @@ fn launch(
         if let Err(e) = recorded {
             eprintln!("jw: {}", write_error(&e));
         }
-        let job = write_job(&rundir, &name, &dir, &argv)?;
-        let started = Shpool.start(&name, &dir, &job);
+        let job = write_job(&rundir, &name, &dir, &claude_argv(mate, args))?;
+        let started = Shpool.start(&name, &dir, &job, (!mate).then_some("1d"));
         if !matches!(started, Ok(true)) {
             // the script removes the file when it starts; the empty workspace is left for `jw prune`
             let _ = fs::remove_file(&job);
@@ -548,8 +597,33 @@ pub fn cmd_resume(a: ResumeArgs) -> Result<(), String> {
         eprintln!("jw: {root} is gone, recreated it as {dir} on trunk");
         Ok(dir)
     };
-    let claude = vec!["claude".to_string(), "--resume".to_string(), id];
-    launch(&home, a.detach, claude, &title, None, make_dir, Some(&name))
+    let mate = Records::new()
+        .read(&name)
+        .is_some_and(|r| r.kind.as_deref() == Some(MATE_KIND));
+    launch(
+        &home,
+        a.detach,
+        &["--resume", id.as_str()],
+        &title,
+        None,
+        make_dir,
+        Naming::Resume(&name),
+        mate,
+    )
+}
+
+pub fn cmd_mate() -> Result<(), String> {
+    if in_event_session() {
+        return Err("event sessions cannot start a mate".to_string());
+    }
+    let home = format!("{}/mate", root());
+    let jj = Jj::in_dir(&home);
+    if !is_dir(&format!("{home}/.jj")) {
+        fs::create_dir_all(&home).map_err(|e| format!("{home}: {e}"))?;
+        jj.git_init()?;
+    }
+    jj.ensure_main()?;
+    start_agent(&home, false, None, &[], None, true)
 }
 
 /// The session called prefix, else the only one starting with it.

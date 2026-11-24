@@ -103,6 +103,32 @@ impl Jj {
             .map(|_| ())
     }
 
+    pub fn has_remotes(&self) -> Result<bool, String> {
+        let out = self.query(&["--ignore-working-copy", "git", "remote", "list"])?;
+        Ok(!out.trim().is_empty())
+    }
+
+    pub fn git_init(&self) -> Result<(), String> {
+        self.run(&["git", "init"]).map(|_| ())
+    }
+
+    /// Makes bookmark main exist (on the working-copy commit if missing) and trunk() resolve to it, so workspaces of
+    /// a repo without a remote start on main; safe to repeat after a partial run.
+    pub fn ensure_main(&self) -> Result<(), String> {
+        let existing = self.query(&["--ignore-working-copy", "bookmark", "list", "main"])?;
+        if existing.trim().is_empty() {
+            self.run(&["bookmark", "create", "main", "-r", "@"])?;
+        }
+        self.run(&[
+            "config",
+            "set",
+            "--repo",
+            r#"revset-aliases."trunk()""#,
+            "main",
+        ])
+        .map(|_| ())
+    }
+
     pub fn git_clone(&self, url: &str, dir: &str) -> Result<(), String> {
         self.run(&["git", "clone", "--colocate", url, dir])
             .map(|_| ())

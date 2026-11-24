@@ -16,6 +16,8 @@ use crate::procs::home;
 const RECORD_MAX: u64 = 65536;
 const RECORD_DAYS: u64 = 7;
 const LOCK_WAIT: Duration = Duration::from_secs(5);
+/// The record kind of a first mate (`jw mate`): `jw reap` never stops it and pruning keeps its record.
+pub const MATE_KIND: &str = "mate";
 
 /// What the poller knows of one MR: the commit whose failed pipeline it reported, and the keys of the comments it has
 /// seen (empty: baselined).
@@ -305,7 +307,7 @@ impl Records {
         Ok(record)
     }
 
-    /// Deletes the records untouched for RECORD_DAYS.
+    /// Deletes the records untouched for RECORD_DAYS, except those of a mate that is not reaped.
     fn prune(&self) {
         let Ok(entries) = fs::read_dir(&self.dir) else {
             return;
@@ -318,7 +320,13 @@ impl Records {
             let path = entry.path();
             let old = fs::symlink_metadata(&path)
                 .is_ok_and(|m| m.is_file() && m.modified().is_ok_and(|t| t < cutoff));
-            if old {
+            let kept = entry
+                .file_name()
+                .to_str()
+                .and_then(|f| f.strip_suffix(".json"))
+                .and_then(|name| self.read(name))
+                .is_some_and(|r| r.kind.as_deref() == Some(MATE_KIND) && r.reaped.is_none());
+            if old && !kept {
                 let _ = fs::remove_file(&path);
             }
         }
