@@ -37,7 +37,7 @@ pub fn sh_quote(word: &str) -> String {
 /// marker). CLAUDE_CODE_* from a calling Claude (session id, child marker, messaging socket) would make the new Claude
 /// a child of the caller: it writes into the caller's transcript and never registers, so jw msg cannot reach it.
 fn agent_env() -> BTreeMap<String, String> {
-    const DROP: [&str; 8] = [
+    const DROP: [&str; 9] = [
         "CLAUDECODE",
         "CLAUDE_PID",
         "CLAUDE_EFFORT",
@@ -46,6 +46,7 @@ fn agent_env() -> BTreeMap<String, String> {
         "AGENT_ORIGIN",
         "CLAUDE_WORKSPACE_BASE",
         "AGENT_SESSION",
+        "AGENT_HEADLESS",
     ];
     env::vars_os()
         .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
@@ -506,8 +507,16 @@ fn resume_rows(
     Ok(rows)
 }
 
+/// The id of the newest Claude transcript of the repo home whose last workspace is workspace.
+pub(crate) fn latest_transcript(home: &str, workspace: &str) -> Result<Option<String>, String> {
+    Ok(resume_rows(home, true, Some(workspace), false)?
+        .into_iter()
+        .next()
+        .map(|row| row.id))
+}
+
 /// (home, workspace) of the record of session name; the repo comes from the workspace path if it is gone.
-fn session_repo(name: &str) -> Result<(String, String), String> {
+pub(crate) fn session_repo(name: &str) -> Result<(String, String), String> {
     let record = Records::new()
         .read(name)
         .ok_or_else(|| format!("no session record {name}"))?;
@@ -535,6 +544,13 @@ fn session_repo(name: &str) -> Result<(String, String), String> {
     Err(format!("no repo for session {name}"))
 }
 
+fn not_headless(name: &str) -> Result<(), String> {
+    if Records::new().read(name).is_some_and(|r| r.headless) {
+        return Err(format!("{name} is a headless worker; use jw msg"));
+    }
+    Ok(())
+}
+
 pub fn cmd_resume(a: ResumeArgs) -> Result<(), String> {
     if in_event_session() {
         return Err("event sessions cannot resume sessions".to_string());
@@ -546,6 +562,7 @@ pub fn cmd_resume(a: ResumeArgs) -> Result<(), String> {
     }
     let (home, row, name) = if let Some(session) = session {
         let name = session_name(Some(&session))?;
+        not_headless(&name)?;
         let (home, workspace) = session_repo(&name)?;
         if Shpool.list()?.contains_key(&name) {
             return Err(format!("session {name} is running"));
@@ -583,6 +600,7 @@ pub fn cmd_resume(a: ResumeArgs) -> Result<(), String> {
             .find(|r| r.label == label)
             .ok_or("no such session")?;
         let name = basename(&row.root).to_string();
+        not_headless(&name)?;
         (home, row, name)
     };
     let Row {
