@@ -83,6 +83,13 @@ enum PrCommand {
     Checks { pr: String },
     /// List the comments and reviews of a merge/pull request (number or URL)
     Comments { pr: String },
+    /// Print the last lines of a failed job's log as plain text (number or URL; job id from `checks`)
+    JobLog {
+        pr: String,
+        job_id: u64,
+        #[arg(long, default_value_t = 40, value_parser = clap::value_parser!(u32).range(1..))]
+        tail: u32,
+    },
 }
 
 fn main() -> ExitCode {
@@ -173,6 +180,12 @@ fn run(cli: Cli) -> Result<String> {
         } => {
             let (target, number) = target::resolve_pr(remote, &pr)?;
             json(&pr::comments(&target, number)?)
+        }
+        Command::Pr {
+            command: PrCommand::JobLog { pr, job_id, tail },
+        } => {
+            let (target, _) = target::resolve_pr(remote, &pr)?;
+            pr::job_log(&target, job_id, tail as usize)
         }
         Command::Upload { file } => json(&upload::upload(&target::resolve(remote)?, &file)?),
     }

@@ -41,6 +41,8 @@ input=
 form=
 paginate=false
 slurp=false
+output=
+escapes=false
 headers=()
 while [ $# -gt 0 ]; do
   case $1 in
@@ -50,7 +52,16 @@ while [ $# -gt 0 ]; do
     --form) form=${2:-}; shift 2 ;;
     --paginate) paginate=true; shift ;;
     --slurp) slurp=true; shift ;;
+    --output) output=${2:-}; shift 2 ;;
     -H) headers+=("${2:-}"); shift 2 ;;
+    --allow-escape-sequences)
+      if [ "$tool" != gh ]; then
+        echo "fake $tool: unexpected api flag: $1" >&2
+        exit 99
+      fi
+      escapes=true
+      shift
+      ;;
     -*)
       echo "fake $tool: unexpected api flag: $1" >&2
       exit 99
@@ -63,8 +74,8 @@ bodyfile=$d/body.tmp
 : >"$bodyfile"
 [ "$input" = - ] && cat >"$bodyfile"
 npath=${path//%3A/:}
-jq -nc --arg t "$tool" --arg h "$host" --arg m "$method" --arg p "$npath" --rawfile b "$bodyfile" --arg f "$form" --argjson pg "$paginate" --argjson sl "$slurp" \
-  '{tool:$t,host:$h,method:$m,path:$p,body:$b,form:$f,paginate:$pg,slurp:$sl,headers:$ARGS.positional}' \
+jq -nc --arg t "$tool" --arg h "$host" --arg m "$method" --arg p "$npath" --rawfile b "$bodyfile" --arg f "$form" --argjson pg "$paginate" --argjson sl "$slurp" --arg o "$output" --argjson es "$escapes" \
+  '{tool:$t,host:$h,method:$m,path:$p,body:$b,form:$f,paginate:$pg,slurp:$sl,output:$o,escapes:$es,headers:$ARGS.positional}' \
   --args ${headers[@]+"${headers[@]}"} >>"$d/calls.log"
 
 key="$method $npath"
@@ -75,7 +86,11 @@ if jq -e --arg k "$key" 'has($k)' "$d/routes.json" >/dev/null 2>&1; then
     echo "$tool: HTTP 422 (api call failed)" >&2
     exit 1
   fi
-  if [ "$paginate" = true ]; then
+  if [ "$(jq -r --arg k "$key" '.[$k] | type == "object" and has("__text")' "$d/routes.json")" = true ]; then
+    jq -j --arg k "$key" '.[$k].__text' "$d/routes.json"
+  elif [ "$output" = ndjson ]; then
+    jq -c --arg k "$key" '.[$k][]' "$d/routes.json"
+  elif [ "$paginate" = true ]; then
     jq -c --arg k "$key" '.[$k] | if type == "object" and has("__pages") then .__pages else [.] end' "$d/routes.json"
   else
     jq -c --arg k "$key" '.[$k]' "$d/routes.json"

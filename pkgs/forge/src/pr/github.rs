@@ -92,6 +92,7 @@ struct CheckRuns {
 
 #[derive(Deserialize)]
 struct CheckRun {
+    id: u64,
     name: String,
     status: String,
     conclusion: Option<String>,
@@ -130,6 +131,7 @@ pub fn checks(api: &Api, project: &str, number: u64) -> Result<Checks> {
             .into_iter()
             .filter(is_failed)
             .map(|r| FailedJob {
+                id: r.id,
                 name: r.name,
                 url: r.html_url,
             })
@@ -157,6 +159,7 @@ struct Review {
 struct Note {
     id: u64,
     pull_request_review_id: Option<u64>,
+    in_reply_to_id: Option<u64>,
     body: Option<String>,
     created_at: String,
     html_url: Option<String>,
@@ -165,6 +168,10 @@ struct Note {
     path: Option<String>,
     line: Option<u64>,
     original_line: Option<u64>,
+}
+
+pub fn job_log_path(project: &str, id: u64) -> String {
+    format!("repos/{project}/actions/jobs/{id}/logs")
 }
 
 fn login(user: Option<User>) -> String {
@@ -205,6 +212,7 @@ pub fn comments(api: &Api, project: &str, number: u64) -> Result<Vec<Comment>> {
             path: None,
             line: None,
             review_state: Some(r.state.to_lowercase()),
+            thread: None,
         });
     }
     for n in issue_comments {
@@ -219,6 +227,7 @@ pub fn comments(api: &Api, project: &str, number: u64) -> Result<Vec<Comment>> {
             path: None,
             line: None,
             review_state: None,
+            thread: None,
         });
     }
     for n in inline_comments {
@@ -238,6 +247,7 @@ pub fn comments(api: &Api, project: &str, number: u64) -> Result<Vec<Comment>> {
             path: n.path,
             line: n.line.or(n.original_line),
             review_state: None,
+            thread: Some(n.in_reply_to_id.unwrap_or(n.id).to_string()),
         });
     }
     comments.sort_by(|a, b| a.created_at.cmp(&b.created_at));
