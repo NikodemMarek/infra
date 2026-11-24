@@ -1,6 +1,7 @@
 {...}: {
   boot = {
     kernelModules = ["iTCO_wdt"];
+    blacklistedKernelModules = ["intel_oc_wdt"];
     kernelParams = ["panic=10" "zfs.zfs_arc_max=1073741824"];
     kernel.sysctl = {
       "kernel.panic" = 10;
