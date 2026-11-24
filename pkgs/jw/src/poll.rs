@@ -102,7 +102,7 @@ fn failure_line(sha: Option<&str>, jobs: &[String], url: Option<&str>) -> String
     format!("- pipeline failed on {short}{jobs}{link}")
 }
 
-fn quoted_body(body: &str) -> String {
+pub(crate) fn quoted_body(body: &str) -> String {
     let body = body
         .replace("\r\n", "\n")
         .replace(['\r', '\u{2028}', '\u{2029}', '\u{85}'], "\n");
