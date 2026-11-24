@@ -75,6 +75,7 @@ NixOS:
 
 - The `services.nats` module sets `settings.jetstream` itself: disable it with `lib.mkForce false`.
 - nats-server 2.14.7 refuses `lame_duck_duration` under 30s. A leafnode remote has no allow list, only deny lists.
+- Strings joined raw into a unit's `ExecStart` (e.g. `services.k3s.extraFlags`) go through systemd specifier expansion: write a literal `%` as `%%`.
 - `networking.nftables.ruleset` makes `flushRuleset` default to true, so every reload drops the tables other services created (docker, libvirt, kube-proxy, tailscale). Only `k3s.nix` sets `flushRuleset = false`; `tailscale.nix` and `libvirt.nix` declare their tables through `ruleset`, so hosts without k3s (`geralt`, `yenn`) still flush on a switch.
 
 `geralt`:
@@ -83,6 +84,11 @@ NixOS:
 - Harmless: the iwd segfault on resume and the Wolf xorg crash loop (status 11).
 - LAN IP `192.168.18.95` (DHCP, so confirm it with `ssh maintenance@regis ip neigh | grep b4:2e:99:a4:86:1c`). Tailnet down: `ssh -o HostKeyAlias=geralt -J maintenance@regis maintenance@192.168.18.95`.
 - `/etc/wolf/cfg/config.toml` is owned by Wolf (the original is kept as `.orig`): re-check it after Wolf upgrades. `WOLF_SKIP_WAYLAND_SOCKET_WAIT=TRUE` is required (wolf#462).
+
+`regis` (8 GB, no swap, the k3s node with the ZFS volumes):
+
+- No zram or swap: zram was tried and dropped as unreliable. Memory is kept in check by `host/regis/memory.nix` (ZFS ARC cap 1 GiB, earlyoom, kubelet `system-reserved` 2Gi and `memory.available` eviction, watchdog and panic-reboot sysctls). Garage (~1 GiB) and k3s run outside the pod budget.
+- Keep heavy pods without node-pinned storage (audiomuse-ai) on `triss`. Check the sum of pod memory requests on regis before adding one: above the allocatable ~5.1 GiB new pods stay Pending.
 
 Cluster:
 
