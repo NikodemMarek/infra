@@ -1,0 +1,2 @@
+#!/bin/sh
+FAKE_TOOL=glab exec bash "$(dirname "$0")/../forge" "$@"
