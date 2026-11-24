@@ -70,7 +70,7 @@ spec:
         kubernetes.io/hostname: regis
       containers:
         - name: immich-redis
-          image: docker.io/valkey/valkey:9@sha256:fb8d272e529ea567b9bf1302245796f21a2672b8368ca3fcb938ac334e613c8f
+          image: docker.io/valkey/valkey:9@sha256:1c2b25b09f354c66fe994733acdf12fcfd4bdf6f3bd92b88a93a70378d884056
           ports:
             - containerPort: 6379
           resources:
