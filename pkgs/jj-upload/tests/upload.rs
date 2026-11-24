@@ -147,6 +147,27 @@ fn reupload_updates_existing_mrs() {
 }
 
 #[test]
+fn reupload_sets_existing_mr_on_session() {
+    let (e, _a, _b) = stack(Forge::GitLab);
+    e.upload(&[]).ok();
+    assert!(e.jw_calls().is_empty(), "{:?}", e.jw_calls());
+
+    e.upload_with(&[], &[("AGENT_SESSION", "s-1")]).ok();
+
+    let jw = e.jw_calls();
+    for n in [1, 2] {
+        let url = e.mr(n)["url"].as_str().unwrap().to_string();
+        assert!(
+            jw.iter().any(|c| c.len() >= 2
+                && c[0] == "session"
+                && c[1] == "set"
+                && c.windows(2).any(|w| w[0] == "--mr" && w[1] == url)),
+            "no jw session set --mr {url}: {jw:?}"
+        );
+    }
+}
+
+#[test]
 fn github_stack_creates_one_pr_per_change() {
     let (e, a, b) = stack(Forge::GitHub);
     let a_commit = e.commit_of(&a.change);
