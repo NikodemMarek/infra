@@ -1,0 +1,27 @@
+#!/bin/sh
+echo "$*" >> "$FAKE_LOG_DIR/systemctl.log"
+[ "$1" = --user ] && shift
+cmd=$1
+shift
+case "$cmd" in
+is-active)
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		-*) shift ;;
+		*) break ;;
+		esac
+	done
+	file="$FAKE_LOG_DIR/active-$1"
+	state=inactive
+	if [ -s "$file" ]; then
+		state=$(head -n 1 "$file")
+		if [ "$(grep -c '' "$file")" -gt 1 ]; then
+			tail -n +2 "$file" > "$file.new"
+			mv "$file.new" "$file"
+		fi
+	fi
+	echo "$state"
+	[ "$state" = active ] && exit 0
+	exit 4
+	;;
+esac

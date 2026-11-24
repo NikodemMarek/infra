@@ -28,12 +28,12 @@ complete -c jw -n '__fish_seen_subcommand_from resume r' -l session -r -d 'resum
 complete -c jw -n '__fish_seen_subcommand_from resume r' -a '(__jw_repos)'
 complete -c jw -n '__fish_seen_subcommand_from cd c rm' -a '(__jw_workspaces)'
 complete -c jw -n '__fish_seen_subcommand_from attach' -a '(__jw_shpool_sessions)'
-complete -c jw -n '__fish_seen_subcommand_from session; and not __fish_seen_subcommand_from get set status worktree list' -a 'get set status worktree list'
+complete -c jw -n '__fish_seen_subcommand_from session; and not __fish_seen_subcommand_from get set status worktree list results ack' -a 'get set status worktree list results ack'
 complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from status; and not __fish_seen_subcommand_from busy idle waiting' -a 'busy idle waiting'
 complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from status' -l waiting-for -r -d 'what the session waits for (with waiting)'
 complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from status' -l cache-expires-at -r -d 'when the prompt cache goes cold (epoch seconds)'
 complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from list' -l reports-to -r -d 'only the sessions that report to the session NAME'
-complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from get set' -s s -l session -r -d 'session name (default: $AGENT_SESSION)'
+complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from get set results' -s s -l session -r -d 'session name (default: $AGENT_SESSION)'
 complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from set' -l kind -r -d 'what started the session'
 complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from set' -l title -r
 complete -c jw -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from set' -l description -r

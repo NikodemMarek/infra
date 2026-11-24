@@ -6,8 +6,11 @@ use serde::Serialize;
 
 use crate::record::{now, valid_name, Record, Records};
 use crate::shpool::Shpool;
+use crate::systemd::Systemd;
+use crate::worker;
 use crate::{
-    SessionGetArgs, SessionListArgs, SessionSetArgs, SessionStatusArgs, SessionWorktreeArgs,
+    SessionAckArgs, SessionGetArgs, SessionListArgs, SessionResultsArgs, SessionSetArgs,
+    SessionStatusArgs, SessionWorktreeArgs,
 };
 
 const URL_MAX: usize = 2048;
@@ -64,6 +67,9 @@ pub fn cmd_session_get(a: SessionGetArgs) -> Result<(), String> {
 struct Listed<'a> {
     name: &'a str,
     running: bool,
+    /// The numbers of the results the supervisor has not acked.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    unacked: Vec<u64>,
     #[serde(flatten)]
     record: &'a Record,
 }
@@ -73,13 +79,19 @@ pub fn cmd_session_list(a: SessionListArgs) -> Result<(), String> {
         return Err(format!("invalid session name: '{name}'"));
     }
     let running = Shpool.list()?;
-    for (name, record) in Records::new().load_all() {
+    let records = Records::new();
+    for (name, record) in records.load_all() {
         if a.reports_to.is_some() && record.reports_to != a.reports_to {
             continue;
         }
         let listed = Listed {
             name: &name,
-            running: running.contains_key(&name),
+            running: if record.headless {
+                Systemd.is_active(&worker::unit(&name)) == Some(true)
+            } else {
+                running.contains_key(&name)
+            },
+            unacked: records.result_seqs(&name),
             record: &record,
         };
         println!(
@@ -88,6 +100,24 @@ pub fn cmd_session_list(a: SessionListArgs) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+pub fn cmd_session_results(a: SessionResultsArgs) -> Result<(), String> {
+    let name = session_name(a.session.as_deref())?;
+    for result in Records::new().results(&name) {
+        println!(
+            "{}",
+            serde_json::to_string(&result).map_err(|e| e.to_string())?
+        );
+    }
+    Ok(())
+}
+
+pub fn cmd_session_ack(a: SessionAckArgs) -> Result<(), String> {
+    if in_event_session() {
+        return Err("event sessions cannot change session records".to_string());
+    }
+    Records::new().ack(&a.name, a.seq)
 }
 
 pub fn cmd_session_set(a: SessionSetArgs) -> Result<(), String> {

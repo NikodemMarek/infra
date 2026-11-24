@@ -2143,3 +2143,276 @@ fn m16_mate_init_without_main() {
     assert_eq!(parent, main);
     assert_eq!(e.record(&name)["kind"], "mate");
 }
+
+fn write_result_file(e: &Env, name: &str, seq: u64, kind: &str, text: &str) {
+    let d = e.state.join("agent-sessions/results").join(name);
+    fs::create_dir_all(&d).unwrap();
+    let body = json!({"seq": seq, "kind": kind, "text": text, "at": 1.0e9});
+    fs::write(d.join(format!("{seq}.json")), body.to_string()).unwrap();
+}
+
+fn result_exists(e: &Env, name: &str, seq: u64) -> bool {
+    e.state
+        .join("agent-sessions/results")
+        .join(name)
+        .join(format!("{seq}.json"))
+        .exists()
+}
+
+fn worker_env(results: &[(u64, &str, &str)]) -> Env {
+    let e = Env::new();
+    let last = results.iter().map(|r| r.0).max().unwrap_or(0);
+    e.write_record(
+        "W",
+        &format!(r#"{{"kind":"task","headless":true,"reports_to":"P","result_seq":{last}}}"#),
+    );
+    e.write_record("P", r#"{"kind":"mate"}"#);
+    for (seq, kind, text) in results {
+        write_result_file(&e, "W", *seq, kind, text);
+    }
+    e
+}
+
+#[test]
+fn res1_results_prints_unacked_by_number() {
+    let e = worker_env(&[
+        (2, "died", "boom"),
+        (1, "result", "done it"),
+        (10, "result", "ten"),
+    ]);
+    let o = e.jw(&e.root, &["session", "results", "-s", "W"]);
+    o.ok();
+    let v = lines(&o);
+    assert_eq!(v.len(), 3, "{}", o.stdout);
+    assert_eq!(v[0]["seq"], 1);
+    assert_eq!(v[0]["kind"], "result");
+    assert_eq!(v[0]["text"], "done it");
+    assert!(v[0]["at"].is_number());
+    assert_eq!(v[1]["seq"], 2);
+    assert_eq!(v[1]["kind"], "died");
+    assert_eq!(v[1]["text"], "boom");
+    assert_eq!(v[2]["seq"], 10);
+}
+
+#[test]
+fn res2_results_default_session_is_agent_session() {
+    let e = worker_env(&[(1, "result", "hi")]);
+    let o = e.jw_env(&e.root, &[("AGENT_SESSION", "W")], &["session", "results"]);
+    o.ok();
+    assert_eq!(lines(&o)[0]["text"], "hi");
+}
+
+#[test]
+fn res3_results_none_prints_nothing() {
+    let e = worker_env(&[]);
+    let o = e.jw(&e.root, &["session", "results", "-s", "W"]);
+    o.ok();
+    assert_eq!(o.stdout, "");
+    let o = e.jw(&e.root, &["session", "results", "-s", "nobody"]);
+    o.ok();
+    assert_eq!(o.stdout, "");
+}
+
+#[test]
+fn res4_results_needs_a_valid_session() {
+    let e = worker_env(&[]);
+    e.jw(&e.root, &["session", "results"]).fail("no session");
+    e.jw(&e.root, &["session", "results", "-s", "x/y"])
+        .fail("invalid session name");
+}
+
+#[test]
+fn ack1_deletes_up_to_seq() {
+    let e = worker_env(&[(1, "result", "a"), (2, "result", "b"), (3, "result", "c")]);
+    e.jw(&e.root, &["session", "ack", "W", "2"]).ok();
+    assert!(!result_exists(&e, "W", 1));
+    assert!(!result_exists(&e, "W", 2));
+    assert!(result_exists(&e, "W", 3));
+    let o = e.jw(&e.root, &["session", "results", "-s", "W"]);
+    o.ok();
+    assert_eq!(lines(&o).len(), 1);
+    e.jw(&e.root, &["session", "ack", "W", "3"]).ok();
+    assert!(!result_exists(&e, "W", 3));
+    assert_eq!(e.record("W")["result_seq"], 3);
+}
+
+#[test]
+fn ack2_beyond_the_last_result_fails() {
+    let e = worker_env(&[(1, "result", "a"), (2, "result", "b")]);
+    let o = e.jw(&e.root, &["session", "ack", "W", "3"]);
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(result_exists(&e, "W", 1));
+    assert!(result_exists(&e, "W", 2));
+}
+
+#[test]
+fn ack3_seq_must_be_a_number() {
+    let e = worker_env(&[(1, "result", "a")]);
+    let o = e.jw(&e.root, &["session", "ack", "W", "x"]);
+    assert_ne!(o.code, 0);
+    assert!(result_exists(&e, "W", 1));
+}
+
+#[test]
+fn ack4_again_is_fine() {
+    let e = worker_env(&[(1, "result", "a"), (2, "result", "b")]);
+    e.jw(&e.root, &["session", "ack", "W", "2"]).ok();
+    e.jw(&e.root, &["session", "ack", "W", "2"]).ok();
+    e.jw(&e.root, &["session", "ack", "W", "1"]).ok();
+}
+
+#[test]
+fn list_unacked() {
+    let e = worker_env(&[(1, "result", "a"), (3, "died", "b")]);
+    e.write_record("Q", r#"{"kind":"task"}"#);
+    let o = e.jw(&e.root, &["session", "list"]);
+    o.ok();
+    let v = lines(&o);
+    let by = |n: &str| v.iter().find(|x| x["name"] == n).unwrap().clone();
+    assert_eq!(by("W")["unacked"], json!([1, 3]));
+    assert_eq!(by("W")["headless"], true);
+    assert_eq!(by("W")["result_seq"], 3);
+    assert!(by("Q").get("unacked").is_none(), "{}", o.stdout);
+    e.jw(&e.root, &["session", "ack", "W", "3"]).ok();
+    let o = e.jw(&e.root, &["session", "list"]);
+    o.ok();
+    let w = lines(&o).into_iter().find(|x| x["name"] == "W").unwrap();
+    assert!(w.get("unacked").is_none(), "{}", o.stdout);
+}
+
+const RESULT_WAKE: &str = r#"{"type":"session.result","session":"W","seq":2}"#;
+
+#[test]
+fn rn_result_wake_names_the_result_and_quotes_the_text() {
+    let e = worker_env(&[(2, "result", "all\ngreen")]);
+    let o = notice(&e, RESULT_WAKE);
+    o.ok();
+    let v: Value =
+        serde_json::from_str(o.stdout.trim()).unwrap_or_else(|x| panic!("{x}: {}", o.stdout));
+    assert_eq!(v["to"], "P");
+    let text = v["text"].as_str().unwrap();
+    assert!(text.contains("jw session results -s W"), "{text}");
+    assert!(text.contains("jw session ack W 2"), "{text}");
+    assert!(text.contains("all"), "{text}");
+    assert!(text.contains("green"), "{text}");
+    assert_eq!(o.stdout.trim().lines().count(), 1);
+}
+
+#[test]
+fn rn_result_wake_quotes_a_long_result_whole() {
+    let long: String = (0..5000)
+        .map(|i| char::from(b'a' + (i % 26) as u8))
+        .collect();
+    let e = worker_env(&[(2, "result", &long)]);
+    let o = notice(&e, RESULT_WAKE);
+    o.ok();
+    let v: Value = serde_json::from_str(o.stdout.trim()).unwrap();
+    let text = v["text"].as_str().unwrap();
+    assert!(text.contains(&long), "result was cut: {} chars", text.len());
+}
+
+#[test]
+fn list_running_headless_comes_from_the_worker_unit() {
+    let e = Env::new();
+    e.write_record("W", r#"{"kind":"task","headless":true}"#);
+    e.write_record("X", r#"{"kind":"task","headless":true}"#);
+    e.write_record("T", r#"{"kind":"task"}"#);
+    fs::write(e.logs.join("active-jw-worker-W"), "active\n").unwrap();
+    fs::write(e.logs.join("active-jw-worker-T"), "active\n").unwrap();
+    let o = e.jw(&e.root, &["session", "list"]);
+    o.ok();
+    let v = lines(&o);
+    let by = |n: &str| v.iter().find(|x| x["name"] == n).unwrap().clone();
+    assert_eq!(by("W")["running"], true, "{}", o.stdout);
+    assert_eq!(by("X")["running"], false);
+    assert_eq!(by("T")["running"], false);
+}
+
+#[test]
+fn list_running_non_headless_comes_from_shpool_not_the_unit() {
+    let e = Env::new();
+    e.write_record("W", r#"{"kind":"task","headless":true}"#);
+    e.write_record("T", r#"{"kind":"task"}"#);
+    fs::write(e.dir.join("shpool-state"), "W attached\nT attached\n").unwrap();
+    let o = e.jw(&e.root, &["session", "list"]);
+    o.ok();
+    let v = lines(&o);
+    let by = |n: &str| v.iter().find(|x| x["name"] == n).unwrap().clone();
+    assert_eq!(by("T")["running"], true, "{}", o.stdout);
+    assert_eq!(by("W")["running"], false);
+}
+
+#[test]
+fn rn_result_wake_died_result_is_rendered_too() {
+    let e = worker_env(&[(2, "died", "exit status 137")]);
+    let o = notice(&e, RESULT_WAKE);
+    o.ok();
+    let v: Value = serde_json::from_str(o.stdout.trim()).unwrap();
+    assert_eq!(v["to"], "P");
+    assert!(v["text"].as_str().unwrap().contains("exit status 137"));
+}
+
+#[test]
+fn rn_result_wake_acked_is_silent() {
+    let e = worker_env(&[(1, "result", "a"), (2, "result", "b")]);
+    e.jw(&e.root, &["session", "ack", "W", "2"]).ok();
+    let o = notice(&e, RESULT_WAKE);
+    o.ok();
+    assert_eq!(o.stdout, "");
+}
+
+#[test]
+fn rn_result_wake_for_a_missing_number_is_silent() {
+    let e = worker_env(&[(1, "result", "a")]);
+    let o = notice(&e, RESULT_WAKE);
+    o.ok();
+    assert_eq!(o.stdout, "");
+}
+
+#[test]
+fn rn_result_wake_prints_nothing_without_a_target() {
+    let events = [
+        (r#"{"type":"session.result","session":"W"}"#, "none-seq"),
+        (
+            r#"{"type":"session.result","session":5,"seq":2}"#,
+            "bad-session",
+        ),
+        (
+            r#"{"type":"session.result","session":"W","seq":"2"}"#,
+            "str-seq",
+        ),
+        (r#"{"type":"session.result","seq":2}"#, "no-session"),
+        (
+            r#"{"type":"session.result","session":"nobody","seq":2}"#,
+            "unknown",
+        ),
+        (RESULT_WAKE, "no-supervisor"),
+        (RESULT_WAKE, "done"),
+        (RESULT_WAKE, "reaped"),
+        (RESULT_WAKE, "self"),
+        (RESULT_WAKE, "no-reports-to"),
+    ];
+    for (event, case) in events {
+        let e = worker_env(&[(2, "result", "x")]);
+        match case {
+            "no-supervisor" => fs::remove_file(e.record_path("P")).unwrap(),
+            "done" => e.write_record("P", r#"{"kind":"mate","status":"done"}"#),
+            "reaped" => e.write_record("P", r#"{"kind":"mate","reaped":1}"#),
+            "self" => e.write_record("W", r#"{"headless":true,"reports_to":"W","result_seq":2}"#),
+            "no-reports-to" => e.write_record("W", r#"{"headless":true,"result_seq":2}"#),
+            _ => {}
+        }
+        let o = notice(&e, event);
+        o.ok();
+        assert_eq!(o.stdout, "", "{event} / {case}");
+    }
+}
+
+#[test]
+fn rn_result_wake_ignores_the_attached_check() {
+    let e = worker_env(&[(2, "result", "x")]);
+    fs::write(e.dir.join("shpool-state"), "W attached\n").unwrap();
+    let o = notice(&e, RESULT_WAKE);
+    o.ok();
+    assert_ne!(o.stdout, "");
+}

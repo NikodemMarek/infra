@@ -10,7 +10,7 @@ use crate::workspace::{basename, dirname, has_agents_suffix};
 use crate::MsgArgs;
 
 const MSG_WAIT: Duration = Duration::from_secs(10);
-const MSG_MAX: usize = 8000;
+pub(crate) const MSG_MAX: usize = 8000;
 
 /// Who a message is from: the agent session, else the workspace, else the user at a terminal.
 fn sender() -> String {
