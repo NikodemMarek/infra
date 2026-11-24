@@ -70,7 +70,7 @@ spec:
         readOnly: true
     extraContainers: |
       - name: connect
-        image: docker.redpanda.com/redpandadata/connect:4.118.0
+        image: docker.redpanda.com/redpandadata/connect:4.119.0
         args: ["run", "/etc/connect/connect.yaml"]
         securityContext:
           allowPrivilegeEscalation: false
