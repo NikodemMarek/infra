@@ -169,7 +169,7 @@
     runtimeInputs = [coreutils];
   };
 
-  # Sets the status of the session record (busy, idle, waiting, ended); never fails.
+  # Sets the status of the session record (busy, idle, waiting); never fails.
   statusHook = shellHook {
     name = "claude-status-hook";
     src = ./status-hook.sh;

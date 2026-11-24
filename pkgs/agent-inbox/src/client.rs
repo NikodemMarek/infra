@@ -51,7 +51,7 @@ pub struct Record {
     pub url: String,
     pub mrs: Vec<String>,
     /// What the session does, written by the Claude hooks and `jw done`: `busy`, `idle`,
-    /// `waiting`, `ended` or `done`.
+    /// `waiting` or `done`.
     pub status: String,
     /// What a `waiting` session waits for (`permission prompt`).
     pub waiting_for: String,

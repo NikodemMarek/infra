@@ -91,8 +91,8 @@
     ];
     # The session record status (jw session status) follows the hooks: busy on UserPromptSubmit and
     # PostToolUse/PostToolUseFailure (back to work after a permission prompt), waiting on PermissionRequest, idle on Stop,
-    # SessionStart and the idle_prompt notification, ended on SessionEnd. Outside busy it also records the estimated
-    # prompt cache expiry.
+    # SessionStart and the idle_prompt notification. Nothing marks a session's end: the status keeps its last activity.
+    # Outside busy it also records the estimated prompt cache expiry.
     PostToolUse = [
       {
         hooks = [
@@ -122,17 +122,6 @@
           {
             type = "command";
             command = "claude-status-hook idle || true";
-            timeout = 10;
-          }
-        ];
-      }
-    ];
-    SessionEnd = [
-      {
-        hooks = [
-          {
-            type = "command";
-            command = "claude-status-hook ended || true";
             timeout = 10;
           }
         ];
