@@ -1,6 +1,6 @@
 # claude config
 
-`pkgs.claude`: a wrapped `claude` (Claude Code) with the whole config bundled in the Nix store: `CLAUDE.md`, agents, skills, settings, hook scripts and the statusline.
+`pkgs.claude`: a wrapped `claude` (Claude Code) with the whole config bundled in the Nix store: `CLAUDE.md`, `mate.md`, agents, skills, settings, hook scripts and the statusline.
 
 ```sh
 nix build .#claude                                # build it (from the repo root)
@@ -9,7 +9,7 @@ nix build .#claude                                # build it (from the repo root
 
 ## Layout
 
-- `pkgs/claude/` - the wrapper (`default.nix`), `CLAUDE.md`, `agents/*.md`, `settings.nix` (rendered to `settings.json`), `permissions.nix` (imported by `settings.nix`) and this README
+- `pkgs/claude/` - the wrapper (`default.nix`), `CLAUDE.md`, `mate.md` (the first mate's role prompt, appended with `--append-system-prompt-file` to the system prompt of every session `jw mate` starts or resumes), `agents/*.md`, `settings.nix` (rendered to `settings.json`), `permissions.nix` (imported by `settings.nix`) and this README
 - `pkgs/agent-skills/skills/` - `*/SKILL.md`, tool-agnostic skills shared by Claude and other tools (`jj`, `atomic-commits`, `commit`, `drill-me`); `claude` takes them from the `agent-skills` package
 - `pkgs/jj-upload`, `pkgs/claude-hooks`, `pkgs/claude-statusline`, `pkgs/agent-skills` - the other tools
 - `pkgs/default.nix` - registers `claude` and the tools; `overlays/default.nix` exposes them as the `additions` overlay and `flake.nix` exports them as `packages`
@@ -86,6 +86,7 @@ On launch the wrapper uses `CLAUDE_CONFIG_DIR` (default: the package's `dataDir`
 ```
 ~/.local/share/claude/
   CLAUDE.md          -> /nix/store/...-claude-config/CLAUDE.md
+  mate.md            -> /nix/store/...-claude-config/mate.md
   agents/<name>.md   -> /nix/store/...-claude-config/agents/<name>.md
   skills/<name>      -> /nix/store/...-claude-config/skills/<name>
   settings.json      -> /nix/store/...-claude-config/settings.json (read-only)

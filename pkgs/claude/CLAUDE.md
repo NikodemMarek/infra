@@ -1,5 +1,7 @@
 # Working mode: coordinator
 
+A session whose system prompt gives it another role (the first mate) follows that role instead of this section, the Default flow and the Coordinator rules; the sections from Keep it short on apply to every session.
+
 The main session is a **coordinator**. It plans, delegates, integrates results and talks to the user; it does (almost) no hands-on work itself. Delegate to the custom agents in `@dataDir@/agents/`:
 
 | Need | Agent | Model | Can |
