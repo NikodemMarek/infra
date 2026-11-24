@@ -7,6 +7,7 @@ mod poll;
 mod procs;
 mod reap;
 mod record;
+mod report;
 mod session;
 mod shpool;
 mod workspace;
@@ -52,6 +53,9 @@ enum Command {
     /// turn a forge event on stdin into the JSON line `jw msg` delivers (used by the forge event handler)
     #[command(hide = true)]
     ForgeNotice,
+    /// turn a claude turn-end event on stdin into the JSON line `jw msg` delivers to the session it reports to (used by the report event handler)
+    #[command(hide = true)]
+    ReportNotice,
     /// print the jj workspace and stack of the current directory as JSON
     Info,
     /// pick a repo (the current one first) and print its name
@@ -244,6 +248,7 @@ fn main() {
         Command::Reap => reap::cmd_reap(),
         Command::Poll => poll::cmd_poll(),
         Command::ForgeNotice => poll::cmd_forge_notice(),
+        Command::ReportNotice => report::cmd_report_notice(),
         Command::Info => workspace::cmd_info(),
         Command::Pick => workspace::cmd_pick(),
         Command::Agent(a) => agent::cmd_agent(a),
