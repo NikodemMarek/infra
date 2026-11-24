@@ -27,7 +27,7 @@ spec:
             claimName: ollama-local-models-pvc
       initContainers:
         - name: fetch-model
-          image: curlimages/curl:8.16.0
+          image: curlimages/curl:8.23.0
           securityContext:
             runAsUser: 0
           env:

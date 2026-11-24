@@ -71,7 +71,7 @@ spec:
                 defaultMode: 0755
           containers:
             - name: refresh
-              image: curlimages/curl:8.16.0
+              image: curlimages/curl:8.23.0
               command: ["/scripts/refresh.sh"]
               env:
                 - name: RADICALE_SUBSCRIBER_PASSWORD
