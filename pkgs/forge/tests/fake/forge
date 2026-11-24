@@ -79,21 +79,36 @@ jq -nc --arg t "$tool" --arg h "$host" --arg m "$method" --arg p "$npath" --rawf
   --args ${headers[@]+"${headers[@]}"} >>"$d/calls.log"
 
 key="$method $npath"
+if [ "$npath" = graphql ]; then
+  op=$(jq -r '.operationName // empty' "$bodyfile" 2>/dev/null)
+  key="$method $npath $op"
+fi
 if jq -e --arg k "$key" 'has($k)' "$d/routes.json" >/dev/null 2>&1; then
-  err=$(jq -r --arg k "$key" '.[$k].__error // empty' "$d/routes.json")
+  resp=$d/resp.tmp
+  if [ "$(jq -r --arg k "$key" '.[$k] | type == "object" and has("__seq")' "$d/routes.json")" = true ]; then
+    mkdir -p "$d/seq"
+    sf=$d/seq/$(printf '%s' "$key" | md5sum | cut -d' ' -f1)
+    n=0
+    [ -f "$sf" ] && n=$(cat "$sf")
+    echo $((n + 1)) >"$sf"
+    jq -c --arg k "$key" --argjson n "$n" '.[$k].__seq as $s | $s[if $n < ($s | length) then $n else ($s | length) - 1 end]' "$d/routes.json" >"$resp"
+  else
+    jq -c --arg k "$key" '.[$k]' "$d/routes.json" >"$resp"
+  fi
+  err=$(jq -r '(.__error? // empty)' "$resp")
   if [ -n "$err" ]; then
     jq -nc --arg m "$err" '{message:$m}'
     echo "$tool: HTTP 422 (api call failed)" >&2
     exit 1
   fi
-  if [ "$(jq -r --arg k "$key" '.[$k] | type == "object" and has("__text")' "$d/routes.json")" = true ]; then
-    jq -j --arg k "$key" '.[$k].__text' "$d/routes.json"
+  if [ "$(jq -r 'type == "object" and has("__text")' "$resp")" = true ]; then
+    jq -j '.__text' "$resp"
   elif [ "$output" = ndjson ]; then
-    jq -c --arg k "$key" '.[$k][]' "$d/routes.json"
+    jq -c '.[]' "$resp"
   elif [ "$paginate" = true ]; then
-    jq -c --arg k "$key" '.[$k] | if type == "object" and has("__pages") then .__pages else [.] end' "$d/routes.json"
+    jq -c 'if type == "object" and has("__pages") then .__pages else [.] end' "$resp"
   else
-    jq -c --arg k "$key" '.[$k]' "$d/routes.json"
+    cat "$resp"
   fi
   exit 0
 fi

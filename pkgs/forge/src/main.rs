@@ -2,6 +2,7 @@ mod api;
 mod cmd;
 mod jj;
 mod pr;
+mod review;
 mod target;
 mod upload;
 
@@ -89,6 +90,37 @@ enum PrCommand {
         job_id: u64,
         #[arg(long, default_value_t = 40, value_parser = clap::value_parser!(u32).range(1..))]
         tail: u32,
+    },
+    /// Create draft review comments from JSON on stdin (number or URL); the user publishes them
+    ///
+    /// Creates drafts only (GitLab draft notes, a GitHub pending review) and never publishes:
+    /// the user publishes or deletes them in the web UI. GitLab refuses when you already have
+    /// draft notes on the request.
+    ///
+    /// Input on stdin (unknown fields are rejected; at least one of summary, comments, replies):
+    ///   {
+    ///     "summary": "overall remark",
+    ///     "comments": [{"path": "src/a.rs", "line": 12, "side": "new", "body": "text"}],
+    ///     "replies": [{"thread": "ID", "body": "text", "resolve": false}]
+    ///   }
+    ///
+    /// comments: inline comments on a line of the diff. `line` (>= 1) is the file line number on
+    /// `side` ("new", the default, or "old" for a removed or unchanged line); the line must be
+    /// shown in the diff. A ```suggestion block belongs only in inline comments on the new side.
+    ///
+    /// replies: `thread` is the `thread` value of `forge pr comments`. `resolve` resolves the
+    /// thread (GitLab only; rejected on GitHub).
+    ///
+    /// --commit SHA reviews that version of the request (GitLab: the version whose head commit
+    /// is SHA; GitHub: the commit the comments are placed on) instead of the latest.
+    ///
+    /// Prints {"url": ..., "drafts": N}. When a write fails, the error says how many drafts were
+    /// already created.
+    #[command(verbatim_doc_comment)]
+    Review {
+        pr: String,
+        #[arg(long, value_name = "SHA")]
+        commit: Option<String>,
     },
 }
 
@@ -186,6 +218,14 @@ fn run(cli: Cli) -> Result<String> {
         } => {
             let (target, _) = target::resolve_pr(remote, &pr)?;
             pr::job_log(&target, job_id, tail as usize)
+        }
+        Command::Pr {
+            command: PrCommand::Review { pr, commit },
+        } => {
+            let (target, number) = target::resolve_pr(remote, &pr)?;
+            let input = std::io::read_to_string(std::io::stdin())
+                .map_err(|e| format!("cannot read stdin: {e}"))?;
+            json(&review::submit(&target, number, commit.as_deref(), &input)?)
         }
         Command::Upload { file } => json(&upload::upload(&target::resolve(remote)?, &file)?),
     }
