@@ -21,7 +21,7 @@ spec:
         kubernetes.io/hostname: regis
       containers:
         - name: sonarr
-          image: linuxserver/sonarr:4.0.20.3014-ls5
+          image: linuxserver/sonarr:4.0.20.3014-ls329
           env:
             - name: PUID
               value: "1000"
