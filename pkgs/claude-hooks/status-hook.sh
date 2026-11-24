@@ -1,4 +1,4 @@
-# Usage: claude-status-hook busy|idle|waiting|ended
+# Usage: claude-status-hook busy|idle|waiting
 # Keeps the status of the session record (`jw session status`) up to date; only for sessions with a record
 # (AGENT_SESSION: started by `jw agent` or an event). `waiting` gets the reason: a question for
 # AskUserQuestion, else the permission prompt of the tool. Unless busy, also records when the prompt cache goes

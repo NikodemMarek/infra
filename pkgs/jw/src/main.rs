@@ -232,7 +232,7 @@ struct SessionSetArgs {
 
 #[derive(Args)]
 struct SessionStatusArgs {
-    #[arg(value_parser = ["busy", "idle", "waiting", "ended"])]
+    #[arg(value_parser = ["busy", "idle", "waiting"])]
     state: String,
     /// what the session waits for (with waiting)
     #[arg(long)]
