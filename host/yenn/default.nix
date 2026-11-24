@@ -36,6 +36,7 @@
   users.users = {
     nikodem = {
       isNormalUser = true;
+      linger = true;
       hashedPasswordFile = config.secrets.users_nikodem_password.path;
       extraGroups = ["wheel" "docker" "libvirtd"];
       shell = pkgs.fish;
