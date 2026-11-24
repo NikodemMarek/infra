@@ -112,9 +112,9 @@ spec:
           env:
             - name: IMMICH_PORT
               value: "3003"
-            # FP32 (the default) needs over 3Gi to load the CLIP and face models on the iGPU
-            - name: MACHINE_LEARNING_OPENVINO_PRECISION
-              value: FP16
+            # the default "main" models force FP32, which needs over 3Gi to load the CLIP and face models on the iGPU
+            - name: MACHINE_LEARNING_MODEL_REVISION
+              value: v2
             # default is one thread per CPU: CLIP and both face models then load at once and blow the 4Gi limit
             - name: MACHINE_LEARNING_REQUEST_THREADS
               value: "1"
