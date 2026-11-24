@@ -1,6 +1,6 @@
 # PreToolUse guard for Edit/Write/NotebookEdit in subagents.
 # Usage: claude-guard-writes code    -> allow writes only inside the session cwd or $CLAUDE_PROJECTS_DIR, never into config/secrets/.git/architect memory
-#        claude-guard-writes tests   -> like code, but only test files (the verifier writes tests, never the implementation)
+#        claude-guard-writes tests   -> like code, but only test files (the tester writes tests, never the implementation)
 #        claude-guard-writes memory  -> allow writes only to the architect's own files in the memory repo
 #                                       (README.md, INDEX.md, templates/**, projects/<slug>/{overview,decisions,log}.md, projects/<slug>/notes/**)
 # (writeShellApplication prepends the shebang and `set -o errexit -o nounset -o pipefail`)
