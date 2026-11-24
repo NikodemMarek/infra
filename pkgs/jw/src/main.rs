@@ -87,6 +87,18 @@ enum Command {
         #[command(subcommand)]
         action: HookAction,
     },
+    /// the runner of headless sessions (the jw-worker-NAME unit runs it)
+    #[command(hide = true)]
+    Worker {
+        #[command(subcommand)]
+        action: WorkerAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkerAction {
+    /// run the queued messages of the headless session NAME as claude turns
+    Turn { name: String },
 }
 
 #[derive(Subcommand)]
@@ -297,6 +309,9 @@ fn main() {
         },
         Command::Done => session::cmd_done(),
         Command::Hook { action } => hook::cmd_hook(action),
+        Command::Worker { action } => match action {
+            WorkerAction::Turn { name } => worker::cmd_worker_turn(&name),
+        },
     });
     if let Err(e) = result {
         if !e.is_empty() {

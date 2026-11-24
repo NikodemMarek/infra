@@ -2416,3 +2416,610 @@ fn rn_result_wake_ignores_the_attached_check() {
     o.ok();
     assert_ne!(o.stdout, "");
 }
+
+fn queue_dir(e: &Env, name: &str) -> std::path::PathBuf {
+    e.state.join("agent-sessions/queue").join(name)
+}
+
+fn add_queue(e: &Env, name: &str, file: &str, text: &str) {
+    let d = queue_dir(e, name);
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join(file), text).unwrap();
+}
+
+/// The texts of the queue entries of name, by file name.
+fn queue_texts(e: &Env, name: &str) -> Vec<String> {
+    let Ok(rd) = fs::read_dir(queue_dir(e, name)) else {
+        return vec![];
+    };
+    let mut files: Vec<_> = rd.map(|f| f.unwrap().path()).collect();
+    files.sort();
+    files
+        .iter()
+        .map(|p| fs::read_to_string(p).unwrap())
+        .collect()
+}
+
+fn read_result(e: &Env, name: &str, seq: u64) -> Value {
+    let p = e
+        .state
+        .join("agent-sessions/results")
+        .join(name)
+        .join(format!("{seq}.json"));
+    let text = fs::read_to_string(&p).unwrap_or_else(|x| panic!("read {}: {x}", p.display()));
+    serde_json::from_str(&text).unwrap()
+}
+
+/// The repo, the workspace `C` and the records of headless worker C (reports to M).
+fn headless(e: &Env, extra: Value) -> (std::path::PathBuf, std::path::PathBuf) {
+    let home = e.repo();
+    let ws = e.workspace("C");
+    let mut rec = json!({
+        "kind": "task",
+        "headless": true,
+        "workspace": dir_str(&ws),
+        "reports_to": "M",
+        "title": "t"
+    });
+    for (k, v) in extra.as_object().unwrap() {
+        rec[k] = v.clone();
+    }
+    e.write_record("C", &rec.to_string());
+    e.write_record("M", r#"{"kind":"mate"}"#);
+    (home, ws)
+}
+
+fn set_active(e: &Env, content: &str) {
+    fs::write(e.logs.join("active-jw-worker-C"), content).unwrap();
+}
+
+fn run_log(e: &Env, n: usize) -> String {
+    e.log(&format!("claude-run-{n}.log"))
+}
+
+fn run_stdin(e: &Env, n: usize) -> String {
+    e.log(&format!("claude-run-{n}.stdin"))
+}
+
+fn run_logs(e: &Env) -> usize {
+    (1..)
+        .take_while(|n| e.logs.join(format!("claude-run-{n}.log")).exists())
+        .count()
+}
+
+/// `jw worker turn C` with a timeout, and the fake claude able to call jw.
+fn turn(e: &Env) -> Out {
+    let jw = env!("CARGO_BIN_EXE_jw");
+    let o = e
+        .command("timeout", &e.root)
+        .args(["60", jw, "worker", "turn", "C"])
+        .env("JW_BIN", jw)
+        .output()
+        .unwrap();
+    Out {
+        code: o.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+    }
+}
+
+fn claude_out(e: &Env, lines: &[Value]) {
+    let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    fs::write(e.logs.join("claude.out"), text.join("\n") + "\n").unwrap();
+}
+
+fn result_event(result: &str) -> Value {
+    json!({"type":"result","subtype":"success","is_error":false,"result":result,
+           "total_cost_usd":0.5,"duration_ms":1200,"num_turns":3,"permission_denials":[]})
+}
+
+fn event_seqs(e: &Env) -> Vec<u64> {
+    pub_log(e)
+        .into_iter()
+        .filter(|(t, _)| t == "session.result")
+        .map(|(_, v)| {
+            assert_eq!(v["type"], "session.result");
+            assert_eq!(v["session"], "C");
+            v["seq"].as_u64().unwrap()
+        })
+        .collect()
+}
+
+#[test]
+fn wt1_turn_runs_claude_and_writes_the_result() {
+    let e = Env::new();
+    let (_, ws) = headless(&e, json!({"status": "idle"}));
+    add_queue(&e, "C", "1-1.txt", "do the thing");
+    claude_out(
+        &e,
+        &[
+            json!({"type":"system","subtype":"init"}),
+            json!({"type":"assistant","message":{"content":[
+                {"type":"text","text":"on it"},
+                {"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}),
+            result_event("all done"),
+        ],
+    );
+    let o = turn(&e);
+    o.ok();
+
+    let r = read_result(&e, "C", 1);
+    assert_eq!(r["kind"], "result");
+    assert_eq!(r["text"], "all done");
+    assert_eq!(r["seq"], 1);
+    assert!(queue_texts(&e, "C").is_empty());
+    let rec = e.record("C");
+    assert!(rec.get("turn_base").is_none(), "{rec}");
+    assert_eq!(rec["status"], "idle");
+    assert_eq!(rec["result_seq"], 1);
+    assert_eq!(event_seqs(&e), [1]);
+
+    assert!(
+        o.stdout
+            .lines()
+            .any(|l| l.starts_with("tool Bash ") && l.contains(r#"{"command":"ls"}"#)),
+        "{}",
+        o.stdout
+    );
+    stdout_has(
+        &o,
+        "turn: cost_usd=0.5 duration_ms=1200 num_turns=3 is_error=false",
+    );
+
+    let log = run_log(&e, 1);
+    assert_eq!(
+        claude_args(&log),
+        [
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--permission-prompts",
+            "none",
+            "--disallowedTools",
+            "AskUserQuestion"
+        ]
+    );
+    assert_eq!(
+        log.lines().find_map(|l| l.strip_prefix("pwd=")),
+        Some(ws.to_str().unwrap())
+    );
+    let env = claude_env(&log);
+    for want in [
+        "AGENT_SESSION=C",
+        "AGENT_HEADLESS=1",
+        "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0",
+    ] {
+        assert!(env.contains(&want), "{want} missing in {env:?}");
+    }
+    assert_eq!(run_stdin(&e, 1), "do the thing");
+}
+
+#[test]
+fn wt2_turn_resumes_the_latest_transcript() {
+    let e = Env::new();
+    let (home, ws) = headless(&e, json!({"status": "idle"}));
+    write_transcript(&e, &home, "old-id", &ws);
+    add_queue(&e, "C", "1-1.txt", "next");
+    claude_out(&e, &[result_event("ok")]);
+    turn(&e).ok();
+    let log = run_log(&e, 1);
+    let args = claude_args(&log);
+    assert_eq!(&args[..3], ["-p", "--resume", "old-id"], "{args:?}");
+}
+
+#[test]
+fn wt3_two_entries_are_one_turn() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    add_queue(&e, "C", "2-1.txt", "second");
+    add_queue(&e, "C", "1-1.txt", "first");
+    claude_out(&e, &[result_event("ok")]);
+    turn(&e).ok();
+    assert_eq!(run_logs(&e), 1);
+    assert_eq!(run_stdin(&e, 1), "first\n\nsecond");
+    assert_eq!(e.record("C")["result_seq"], 1);
+    assert!(queue_texts(&e, "C").is_empty());
+    assert_eq!(event_seqs(&e), [1]);
+}
+
+#[test]
+fn wt4_denials_are_listed() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    add_queue(&e, "C", "1-1.txt", "go");
+    let mut ev = result_event("finished");
+    ev["permission_denials"] = json!([
+        {"tool_name":"Bash","tool_input":{"command":"rm -rf x"}},
+        {"tool_name":"Write","tool_input":{"file_path":"/a"}}
+    ]);
+    claude_out(&e, &[ev]);
+    turn(&e).ok();
+    let r = read_result(&e, "C", 1);
+    assert_eq!(r["kind"], "result");
+    assert_eq!(
+        r["text"],
+        "finished\n\nDenied tool calls (not run):\n- Bash: {\"command\":\"rm -rf x\"}\n- Write: {\"file_path\":\"/a\"}"
+    );
+}
+
+#[test]
+fn wt5_error_without_text_says_the_turn_failed() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    add_queue(&e, "C", "1-1.txt", "go");
+    claude_out(
+        &e,
+        &[json!({"type":"result","subtype":"error_max_turns","is_error":true,"result":""})],
+    );
+    let o = turn(&e);
+    o.ok();
+    let r = read_result(&e, "C", 1);
+    assert_eq!(r["kind"], "result");
+    assert!(
+        r["text"].as_str().unwrap().starts_with("turn failed ("),
+        "{r}"
+    );
+    assert!(r["text"].as_str().unwrap().contains("error_max_turns"));
+    stdout_has(
+        &o,
+        "turn: cost_usd=? duration_ms=? num_turns=? is_error=true",
+    );
+}
+
+#[test]
+fn wt6_no_result_event_is_a_died_result() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    add_queue(&e, "C", "1-1.txt", "go");
+    fs::write(e.logs.join("claude.out"), "not json\n").unwrap();
+    fs::write(e.logs.join("claude.err"), "boom\n").unwrap();
+    fs::write(e.logs.join("claude.exit"), "3\n").unwrap();
+    let o = turn(&e);
+    assert_ne!(o.code, 124, "runner did not stop: {}", o.stderr);
+    assert!(o.stderr.contains("boom"), "{}", o.stderr);
+    let r = read_result(&e, "C", 1);
+    assert_eq!(r["kind"], "died");
+    let text = r["text"].as_str().unwrap();
+    assert!(text.contains("exit status 3"), "{text}");
+    assert!(text.contains("boom"), "{text}");
+    assert!(text.contains("journalctl --user -u jw-worker-C"), "{text}");
+    assert_eq!(queue_texts(&e, "C"), ["go"]);
+    assert_eq!(event_seqs(&e), [1]);
+}
+
+#[test]
+fn wt7_message_during_a_turn_runs_as_the_next_turn() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    add_queue(&e, "C", "1-1.txt", "first");
+    set_active(&e, "active");
+    fs::write(e.logs.join("claude.msg"), "more please").unwrap();
+    claude_out(&e, &[result_event("ok")]);
+    let o = turn(&e);
+    o.ok();
+    assert_eq!(run_logs(&e), 2, "{}", o.stderr);
+    assert!(
+        run_stdin(&e, 2).contains("more please"),
+        "{}",
+        run_stdin(&e, 2)
+    );
+    assert!(
+        !run_stdin(&e, 1).contains("more please"),
+        "{}",
+        run_stdin(&e, 1)
+    );
+    assert_eq!(e.record("C")["result_seq"], 2);
+    assert_eq!(event_seqs(&e), [1, 2]);
+    assert!(queue_texts(&e, "C").is_empty());
+    assert!(!e.logs.join("systemd-run.log").exists());
+}
+
+#[test]
+fn wt8_turn_needs_a_headless_record() {
+    let e = Env::new();
+    let (_, ws) = headless(&e, json!({}));
+    e.write_record(
+        "C",
+        &json!({"kind":"task","workspace":dir_str(&ws)}).to_string(),
+    );
+    add_queue(&e, "C", "1-1.txt", "go");
+    turn(&e).fail("C is not a headless worker");
+    assert!(!e.logs.join("claude-run-1.log").exists());
+    fs::remove_file(e.record_path("C")).unwrap();
+    turn(&e).fail("C is not a headless worker");
+}
+
+#[test]
+fn wt9_done_stays_done() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    add_queue(&e, "C", "1-1.txt", "go");
+    fs::write(e.logs.join("claude.cmd"), "\"$JW_BIN\" done").unwrap();
+    claude_out(&e, &[result_event("bye")]);
+    turn(&e).ok();
+    assert_eq!(e.record("C")["status"], "done");
+    assert_eq!(read_result(&e, "C", 1)["text"], "bye");
+}
+
+#[test]
+fn wt10_empty_queue_closes_the_turn() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle", "turn_base": 0}));
+    turn(&e).ok();
+    assert!(e.record("C").get("turn_base").is_none());
+    assert!(!e.logs.join("claude-run-1.log").exists());
+}
+
+#[test]
+fn dm1_msg_to_idle_worker_starts_a_turn() {
+    let e = Env::new();
+    let (_, ws) = headless(&e, json!({"status": "idle"}));
+    let o = e.jw(&e.root, &["msg", "C", "hi"]);
+    o.ok();
+    assert!(o.stderr.contains("jw: started a turn of C"), "{}", o.stderr);
+    let texts = queue_texts(&e, "C");
+    assert_eq!(texts.len(), 1);
+    assert!(texts[0].starts_with("Message from user:"), "{}", texts[0]);
+    assert!(texts[0].contains("hi"));
+    let log = e.log("systemd-run.log");
+    assert_eq!(log.lines().count(), 1, "{log}");
+    let want = format!(
+        "--user --collect --quiet --unit jw-worker-C --working-directory {} --property RuntimeMaxSec=4h -- ",
+        ws.display()
+    );
+    let rest = log
+        .trim_end()
+        .strip_prefix(&want)
+        .unwrap_or_else(|| panic!("argv: {log}"));
+    assert!(rest.ends_with("/jw worker turn C"), "{rest}");
+}
+
+#[test]
+fn dm2_msg_to_open_turn_queues() {
+    let e = Env::new();
+    headless(&e, json!({"status": "busy", "turn_base": 0}));
+    set_active(&e, "active");
+    let o = e.jw(&e.root, &["msg", "C", "hi"]);
+    o.ok();
+    assert!(o.stderr.contains("jw: queued for C"), "{}", o.stderr);
+    assert_eq!(queue_texts(&e, "C").len(), 1);
+    assert!(!e.logs.join("systemd-run.log").exists());
+}
+
+#[test]
+fn dm3_open_turn_with_dead_unit_starts_one() {
+    let e = Env::new();
+    headless(&e, json!({"status": "busy", "turn_base": 0}));
+    let o = e.jw(&e.root, &["msg", "C", "hi"]);
+    o.ok();
+    assert!(o.stderr.contains("jw: started a turn of C"), "{}", o.stderr);
+    assert_eq!(e.log("systemd-run.log").lines().count(), 1);
+}
+
+#[test]
+fn dm4_waits_for_an_exiting_runner() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    set_active(&e, "active\ninactive");
+    let o = e.jw(&e.root, &["msg", "C", "hi"]);
+    o.ok();
+    assert!(o.stderr.contains("jw: started a turn of C"), "{}", o.stderr);
+    assert_eq!(e.log("systemd-run.log").lines().count(), 1);
+    let checks = e
+        .log("systemctl.log")
+        .lines()
+        .filter(|l| l.contains("is-active") && l.contains("jw-worker-C"))
+        .count();
+    assert!(checks >= 2, "is-active calls: {checks}");
+}
+
+#[test]
+fn dm5_persistent_start_failure_gives_up() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    fs::write(
+        e.logs.join("systemd-run.fail"),
+        "Failed to connect to bus\n",
+    )
+    .unwrap();
+    let t = std::time::Instant::now();
+    let o = e.jw(&e.root, &["msg", "C", "hi"]);
+    o.fail("cannot start a turn of C");
+    assert!(
+        o.stderr.contains("Failed to connect to bus"),
+        "{}",
+        o.stderr
+    );
+    assert!(t.elapsed().as_secs() >= 5, "{:?}", t.elapsed());
+    assert!(queue_texts(&e, "C").is_empty());
+}
+
+#[test]
+fn dm6_unreadable_unit_state_fails() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    set_active(&e, "garbage");
+    let o = e.jw(&e.root, &["msg", "C", "hi"]);
+    o.fail("cannot tell whether C's turn runs");
+    assert!(queue_texts(&e, "C").is_empty());
+    assert!(!e.logs.join("systemd-run.log").exists());
+}
+
+#[test]
+fn dm7_reaped_worker_refuses() {
+    let e = Env::new();
+    headless(&e, json!({"status": "done", "reaped": 1}));
+    e.jw(&e.root, &["msg", "C", "hi"])
+        .fail("session C is reaped");
+    assert!(queue_texts(&e, "C").is_empty());
+}
+
+#[test]
+fn rs1_resume_refuses_headless_by_name() {
+    let e = Env::new();
+    let (home, ws) = headless(&e, json!({"status": "idle"}));
+    write_transcript(&e, &home, "id", &ws);
+    e.jw(&e.root, &["resume", "-d", "--session", "C"])
+        .fail("C is a headless worker; use jw msg");
+    assert!(shpool_starts(&e).is_empty());
+    assert!(!e.logs.join("claude.log").exists());
+}
+
+#[test]
+fn rs2_resume_refuses_headless_picked_row() {
+    let e = Env::new();
+    let home = e.repo();
+    let name = "s-1124-000007";
+    let ws = e.workspace(name);
+    e.write_record(
+        name,
+        &json!({"kind":"task","headless":true,"workspace":dir_str(&ws)}).to_string(),
+    );
+    write_transcript(&e, &home, "id", &ws);
+    e.jw(&e.root, &["resume", "-d", "repo"])
+        .fail("is a headless worker; use jw msg");
+    assert!(shpool_starts(&e).is_empty());
+}
+
+#[test]
+fn hr1_reap_keeps_a_headless_workspace_until_done() {
+    let e = Env::new();
+    e.repo();
+    let ws = e.workspace("C");
+    e.write_record(
+        "C",
+        &json!({"kind":"task","headless":true,"workspace":dir_str(&ws),"status":"idle"})
+            .to_string(),
+    );
+    e.jw(&e.root, &["reap"]).ok();
+    assert!(ws.join(".jj").is_dir());
+    assert!(e.record("C").get("reaped").is_none());
+
+    e.write_record(
+        "C",
+        &json!({"kind":"task","headless":true,"workspace":dir_str(&ws),"status":"done"})
+            .to_string(),
+    );
+    e.jw(&e.root, &["reap"]).ok();
+    assert!(!ws.exists());
+    assert!(e.record("C")["reaped"].is_number());
+}
+
+#[test]
+fn hr2_prune_keeps_a_headless_workspace() {
+    let e = Env::new();
+    e.repo();
+    let merged = e.workspace("merged");
+    age(&merged);
+    let ws = e.workspace("C");
+    age(&ws);
+    e.write_record(
+        "C",
+        &json!({"kind":"task","headless":true,"workspace":dir_str(&ws),"status":"idle"})
+            .to_string(),
+    );
+    let out = e.jw(&e.root, &["prune", "--yes"]);
+    out.ok();
+    assert!(!merged.exists(), "{}", out.stderr);
+    assert!(ws.join(".jj").is_dir(), "{}", out.stderr);
+}
+
+#[test]
+fn wt11_claude_killed_by_a_signal_is_a_died_result() {
+    for sig in ["TERM", "KILL"] {
+        let e = Env::new();
+        headless(&e, json!({"status": "idle"}));
+        add_queue(&e, "C", "1-1.txt", "go");
+        fs::write(e.logs.join("claude.cmd"), format!("kill -{sig} $PPID")).unwrap();
+        let o = turn(&e);
+        assert_ne!(o.code, 124, "{sig}: runner did not stop: {}", o.stderr);
+        let r = read_result(&e, "C", 1);
+        assert_eq!(r["kind"], "died", "{sig}: {r}");
+        let text = r["text"].as_str().unwrap();
+        assert!(text.contains("signal"), "{sig}: {text}");
+        assert_eq!(queue_texts(&e, "C"), ["go"]);
+    }
+}
+
+#[test]
+fn wt12_opening_a_turn_keeps_done() {
+    let e = Env::new();
+    headless(&e, json!({"status": "done"}));
+    add_queue(&e, "C", "1-1.txt", "go");
+    claude_out(&e, &[result_event("ok")]);
+    turn(&e).ok();
+    let rec = e.record("C");
+    assert_eq!(rec["status"], "done", "{rec}");
+    assert!(rec.get("turn_base").is_none(), "{rec}");
+    assert_eq!(read_result(&e, "C", 1)["text"], "ok");
+}
+
+#[test]
+fn wt13_error_after_open_is_a_died_result() {
+    let e = Env::new();
+    let (_, ws) = headless(&e, json!({"status": "idle"}));
+    add_queue(&e, "C", "1-1.txt", "go");
+    e.write_record(
+        "C",
+        &json!({"kind":"task","headless":true,"reports_to":"M","title":"t","status":"idle",
+                "workspace":dir_str(&ws.join("does-not-exist"))})
+        .to_string(),
+    );
+    let o = turn(&e);
+    assert_ne!(o.code, 124, "{}", o.stderr);
+    let r = read_result(&e, "C", 1);
+    assert_eq!(r["kind"], "died", "{r}");
+    assert_eq!(queue_texts(&e, "C"), ["go"]);
+    assert!(
+        e.record("C").get("turn_base").is_none(),
+        "{}",
+        e.record("C")
+    );
+}
+
+#[test]
+fn p5_poll_headless_record_gets_merged_wrap_up() {
+    let e = Env::new();
+    e.repo();
+    let ws = e.workspace("s-poll");
+    e.write_record(
+        "C",
+        &json!({"kind":"task","headless":true,"workspace":dir_str(&ws),"status":"idle",
+                "mrs":[MR]})
+        .to_string(),
+    );
+    fixture(&e, "view", json!({"forge": "github", "state": "merged"}));
+
+    let out = e.jw(&e.root, &["poll"]);
+    out.ok();
+    let calls = pub_log(&e);
+    let merged: Vec<_> = calls.iter().filter(|(t, _)| t == "forge.merged").collect();
+    assert_eq!(merged.len(), 1, "{calls:?} stderr: {}", out.stderr);
+    assert_eq!(
+        merged[0].1,
+        json!({"type": "forge.merged", "session": "C", "mrs": [MR], "finished": true})
+    );
+}
+
+#[test]
+fn ev1_agent_env_drops_agent_headless() {
+    let e = Env::new();
+    e.repo();
+    e.jw_env(
+        &e.root,
+        &[("AGENT_HEADLESS", "1")],
+        &["agent", "-d", "repo", "hello"],
+    )
+    .ok();
+    let log = e.log("claude.log");
+    let env = claude_env(&log);
+    assert!(
+        env.iter().any(|l| l.starts_with("AGENT_SESSION=")),
+        "{env:?}"
+    );
+    assert!(
+        !env.iter().any(|l| l.starts_with("AGENT_HEADLESS")),
+        "{env:?}"
+    );
+}

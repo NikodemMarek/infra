@@ -9,7 +9,7 @@ use crate::agent::runtime_dir;
 use crate::cmd::which;
 use crate::jj::Jj;
 use crate::procs::{claude_sessions, in_use, live_claudes, session_procs, Claude};
-use crate::record::{now, write_error, Record, Records, MATE_KIND};
+use crate::record::{now, write_error, Record, Records};
 use crate::shpool::Shpool;
 use crate::workspace::{
     agent_workspace, ask_lost, basename, confirm, is_dir, is_gitlab, realpath, recent, remove,
@@ -216,15 +216,13 @@ fn killed_note(killed: &[Stopped]) -> String {
     )
 }
 
-/// The sessions reap and prune leave alone: first mates that are not done or reaped. A mate's repo has no work to
-/// merge, so its stack always reads as merged.
+/// The sessions reap and prune leave alone: first mates and headless workers that are not done or reaped. A mate's repo
+/// has no work to merge, so its stack always reads as merged.
 fn kept_sessions(records: &[(String, Record)]) -> HashSet<String> {
     records
         .iter()
         .filter(|(_, r)| {
-            r.kind.as_deref() == Some(MATE_KIND)
-                && r.reaped.is_none()
-                && r.status.as_deref() != Some("done")
+            r.long_lived() && r.reaped.is_none() && r.status.as_deref() != Some("done")
         })
         .map(|(name, _)| name.clone())
         .collect()

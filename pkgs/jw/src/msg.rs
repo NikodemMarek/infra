@@ -5,7 +5,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::procs::{live_claudes, Claude};
+use crate::record::Records;
 use crate::session::in_event_session;
+use crate::worker::{self, Delivery};
 use crate::workspace::{basename, dirname, has_agents_suffix};
 use crate::MsgArgs;
 
@@ -56,7 +58,7 @@ fn message_sessions(claudes: Vec<Claude>, name: &str) -> Vec<(u32, String, Strin
 
 /// Text as a quote under a header; every line break (also \r, U+2028/2029, U+0085) starts a quoted line and other
 /// control characters go, so the text cannot pass for a header.
-fn message_content(text: &str, origin: &str) -> String {
+pub(crate) fn message_content(text: &str, origin: &str) -> String {
     let text = text
         .replace("\r\n", "\n")
         .replace(['\r', '\u{2028}', '\u{2029}', '\u{85}'], "\n");
@@ -147,6 +149,16 @@ pub fn cmd_msg(a: MsgArgs) -> Result<(), String> {
         return Err("empty message".to_string());
     }
     let origin = a.sender.unwrap_or_else(sender);
+    if let Some(record) = Records::new().read(&a.name).filter(|r| r.headless) {
+        if record.reaped.is_some() {
+            return Err(format!("session {} is reaped", a.name));
+        }
+        match worker::deliver(&a.name, &message_content(&text, &origin))? {
+            Delivery::Queued => eprintln!("jw: queued for {}", a.name),
+            Delivery::Started => eprintln!("jw: started a turn of {}", a.name),
+        }
+        return Ok(());
+    }
     let session = deliver(&a.name, &text, &origin, MSG_WAIT)?;
     eprintln!("jw: sent to {session}");
     Ok(())

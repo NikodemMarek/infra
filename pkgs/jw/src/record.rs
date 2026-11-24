@@ -270,6 +270,11 @@ impl Records {
         Record::from_value(serde_json::from_slice(&data).ok()?)
     }
 
+    /// The directory of the messages queued for headless worker name.
+    pub fn queue_dir(&self, name: &str) -> PathBuf {
+        self.dir.join("queue").join(name)
+    }
+
     /// The records, sorted by name.
     pub fn load_all(&self) -> Vec<(String, Record)> {
         let Ok(entries) = fs::read_dir(&self.dir) else {

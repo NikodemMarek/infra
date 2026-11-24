@@ -1,0 +1,15 @@
+#!/bin/sh
+echo "$*" >> "$FAKE_LOG_DIR/systemd-run.log"
+if [ -f "$FAKE_LOG_DIR/systemd-run.fail" ]; then
+	cat "$FAKE_LOG_DIR/systemd-run.fail" >&2
+	exit 1
+fi
+unit=
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--unit) unit=$2; shift 2 ;;
+	--) break ;;
+	*) shift ;;
+	esac
+done
+echo active > "$FAKE_LOG_DIR/active-$unit"

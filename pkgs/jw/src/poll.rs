@@ -555,9 +555,10 @@ fn poll_record(name: &str, r: &Record) {
         eprintln!("jw: {name}: couldn't check its MRs");
         return;
     };
-    let running = live_claudes()
-        .iter()
-        .any(|c| c.agent.as_deref() == Some(name));
+    let running = r.headless
+        || live_claudes()
+            .iter()
+            .any(|c| c.agent.as_deref() == Some(name));
     let finished = running && mrs_merged(&polled.states) && {
         let stack = Jj::in_dir(&path).stack_merged();
         if stack.is_none() {

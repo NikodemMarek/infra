@@ -1,8 +1,41 @@
 #!/bin/sh
+if [ "$1" != -p ]; then
+	{
+		for a in "$@"; do
+			echo "arg=$a"
+		done
+		echo "pwd=$(pwd -P)"
+		env | sed 's/^/env=/'
+	} > "$FAKE_LOG_DIR/claude.log"
+	exit 0
+fi
+
+# Headless turn: run n writes claude-run-n.log (argv, pwd, env) and claude-run-n.stdin.
+n=1
+while [ -e "$FAKE_LOG_DIR/claude-run-$n.log" ]; do
+	n=$((n + 1))
+done
 {
 	for a in "$@"; do
 		echo "arg=$a"
 	done
 	echo "pwd=$(pwd -P)"
 	env | sed 's/^/env=/'
-} > "$FAKE_LOG_DIR/claude.log"
+} > "$FAKE_LOG_DIR/claude-run-$n.log"
+cat > "$FAKE_LOG_DIR/claude-run-$n.stdin"
+
+if [ -f "$FAKE_LOG_DIR/claude.msg" ]; then
+	content=$(cat "$FAKE_LOG_DIR/claude.msg")
+	rm -f "$FAKE_LOG_DIR/claude.msg"
+	"$JW_BIN" msg C -- "$content"
+fi
+if [ -f "$FAKE_LOG_DIR/claude.cmd" ]; then
+	cmd=$(cat "$FAKE_LOG_DIR/claude.cmd")
+	rm -f "$FAKE_LOG_DIR/claude.cmd"
+	sh -c "$cmd"
+fi
+[ -f "$FAKE_LOG_DIR/claude.out" ] && cat "$FAKE_LOG_DIR/claude.out"
+[ -f "$FAKE_LOG_DIR/claude.err" ] && cat "$FAKE_LOG_DIR/claude.err" >&2
+code=0
+[ -f "$FAKE_LOG_DIR/claude.exit" ] && code=$(cat "$FAKE_LOG_DIR/claude.exit")
+exit "$code"
