@@ -18,6 +18,7 @@
         ".local/share/direnv"
         ".local/share/claude"
         ".local/share/nvim"
+        ".local/state/agent-sessions"
         ".local/share/fish"
         ".local/share/Steam"
 
