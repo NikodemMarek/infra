@@ -27,13 +27,13 @@ Pick the narrowest check that proves the change:
 
 - One package: `nix build .#<pkg>` (runs its tests during the build).
 - A host: `nix build --dry-run .#nixosConfigurations.<host>.config.system.build.toplevel --override-input secrets path:<dir>`, where `<dir>` holds an (empty) `<host>.yaml`. `secrets-stub` has no files, so evaluation fails without the override. A full (non-dry) build or deploy needs `key: x` in `<host>.yaml` for every sops secret the host uses, else the manifest build fails; the empty file is enough for the dry run. CI (`hosts.yml`) builds every host on PRs.
-- The image triss imports (`matrix-gateway`): `nix build .#nixosConfigurations.triss.pkgs.matrix-gateway-image`. aarch64 builds on `yenn` through binfmt.
+- The `matrix-gateway` image: `nix build .#packages.aarch64-linux.matrix-gateway-image` (aarch64 builds on `yenn` through binfmt). CI (`images.yml`) builds it on PRs.
 - The cluster: `flux build kustomization flux-system --path ./clusters/dijkstra --kustomization-file ./clusters/dijkstra/flux-system/gotk-sync.yaml --dry-run`. `kustomize build clusters/dijkstra` fails: there is no `kustomization.yaml` there, Flux generates one. Against the live API: `kubectl apply --dry-run=server -f <file>`.
 - OpenTofu: `tofu fmt`, `tofu validate` and `tofu init -backend=false` run without a token.
 
 Rules:
 
-- `nix eval` is blocked in agent sessions. Use the dry-run build, or `nix repl` with `:lf .` for single values (e.g. `nixosConfigurations.triss.pkgs.matrix-gateway-image.imageTag`).
+- `nix eval` is blocked in agent sessions. Use the dry-run build, or `nix repl` with `:lf .` for single values (e.g. `nixosConfigurations.triss.config.services.k3s.role`).
 - Build in a jj workspace (no `.git`, so nix sees the files as they are). In the colocated main checkout new files are invisible to `nix build .#` until `git add`ed. Never use `path:.#` there: it copies the git-ignored plaintext keys (`host/alp/key`, `host/*/ssh_host_ed25519_key`, `host/*/disk.key`) into the store.
 - Format Nix with `nix run nixpkgs#alejandra`. Check scripts with `bash -n` and `nix run nixpkgs#shellcheck -- -s bash`.
 - Cluster: `KUBECONFIG` is `kubeconfig.yaml` (git-ignored) in the root of the `default` jj workspace; the dev shell sets it. `kubectl` is read-only unless asked.
@@ -56,7 +56,7 @@ Agents prepare changes and stacked PRs. Deploying and merging is the user's call
 - Hosts: `host-switch` (the current host, `yenn`) or `host-deploy <node>...` (deploy-rs as `maintenance`). A switch does not start or restart user units: `systemctl --user restart <unit>` (e.g. `matrix-inbox`).
 - Nothing is deployed by hand, neither by sessions nor by the user: every host, cluster and tofu change goes through the pipeline. When asked to deploy, merge the PR after the checks and watch the run.
 - Cluster: Flux applies merged changes (`flux reconcile kustomization flux-system -n flux-system --with-source` to hurry). The Kustomization has no health checks, so check the pods yourself.
-- Images built into triss (`services.k3s.images`, `imagePullPolicy: Never`, tag = the image's `imageTag`): put the new tag in the deployment, `host-deploy triss` from a checkout that contains every image-changing PR, then merge. Merging first leaves the pod in `ErrImageNeverPull`: `k3s ctr -n k8s.io images import <tar>`, then restart the pod (`buildLayeredImage`'s `imageTag` is the hash of the config derivation, not of the tarball). Changes to `pkgs/matrix-gateway` (its tests included) or nixpkgs change its tag. Remove old images by name; never `crictl rmi --prune`, it drops the imported ones.
+- `matrix-gateway`: `images.yml` pushes `ghcr.io/nikodemmarek/matrix-gateway:main` on merge; the deployment pins its digest, which Renovate bumps (or bump it by hand after the run).
 - Avoid `rollout restart` on Flux deployments: a second rollout follows about 30 s later.
 - Restart by hand after changing:
   - the NATS hub's leafnodes config: delete pod `nats-0`.
