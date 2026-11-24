@@ -1126,7 +1126,7 @@ fn p1_poll_publishes_failed_pipeline_then_comment() {
     assert_eq!(
         calls[0].1,
         json!({"type": "forge.pipeline_failed", "session": "p1", "forge": "github", "mr": MR,
-               "sha": "S0123456789", "url": "https://ci/1", "jobs": ["build", "test"]})
+               "sha": "S0123456789", "url": "https://ci/1", "jobs": ["build", "test"], "logs": []})
     );
     assert_eq!(calls[1].0, "forge.comment");
     assert_eq!(
@@ -1134,7 +1134,7 @@ fn p1_poll_publishes_failed_pipeline_then_comment() {
         json!({"type": "forge.comment", "session": "p1", "forge": "github", "mr": MR, "id": 77,
                "kind": "comment", "author": "alice", "association": "NONE", "body": "please fix",
                "url": "https://github.com/o/r/pull/1#c", "path": null, "line": null,
-               "review_state": null})
+               "review_state": null, "thread": []})
     );
     assert_eq!(
         e.record("p1")["mr_marks"][MR],

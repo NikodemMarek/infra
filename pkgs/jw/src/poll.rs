@@ -18,9 +18,14 @@ const FOOTER: &str = "Address the review feedback on this merge request and the 
 const WRAP_UP: &str = "The merge requests of this session are merged. Finish what is left of this work (e.g. record the outcome), then run `jw done`. The session is stopped once it is idle and nobody is attached.";
 
 const BODY_MAX: usize = 1000;
+const TAIL_MAX: usize = 2000;
+const THREAD_BODY_MAX: usize = 300;
+const THREAD_ENTRIES: usize = 3;
+const LOGGED_JOBS: usize = 3;
+const LOG_LINES: &str = "40";
 const FORGE_TIMEOUT: Duration = Duration::from_secs(60);
 const PUBLISH_TIMEOUT: Duration = Duration::from_secs(10);
-/// The time the poller works through the session records, so the run ends within its timeout.
+/// The time after which the poller starts no further record; the records left over wait for the next run.
 const POLL_DEADLINE: Duration = Duration::from_secs(240);
 
 #[derive(Deserialize)]
@@ -41,6 +46,8 @@ struct Checks {
 #[derive(Deserialize)]
 struct FailedJob {
     name: String,
+    #[serde(default)]
+    id: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -54,6 +61,20 @@ struct Comment {
     path: Option<String>,
     line: Option<u64>,
     review_state: Option<String>,
+    #[serde(default)]
+    thread: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+struct JobLog {
+    name: String,
+    tail: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+struct ThreadEntry {
+    author: String,
+    body: String,
 }
 
 fn mentions_path(rest: &str) -> bool {
@@ -102,24 +123,48 @@ fn failure_line(sha: Option<&str>, jobs: &[String], url: Option<&str>) -> String
     format!("- pipeline failed on {short}{jobs}{link}")
 }
 
-pub(crate) fn quoted_body(body: &str) -> String {
-    let body = body
+fn sanitized(text: &str) -> String {
+    let text = text
         .replace("\r\n", "\n")
         .replace(['\r', '\u{2028}', '\u{2029}', '\u{85}'], "\n");
-    let body: String = body
+    let text: String = text
         .chars()
         .filter(|&ch| ch == '\t' || ch == '\n' || !ch.is_control())
         .collect();
-    let body = body.trim();
-    let body = if body.chars().count() > BODY_MAX {
-        let head: String = body.chars().take(BODY_MAX).collect();
-        format!("{head}…")
-    } else {
-        body.to_string()
-    };
-    body.lines()
+    text.trim().to_string()
+}
+
+fn quote_lines(text: &str) -> String {
+    text.lines()
         .map(|line| format!("\n  > {}", defang(line)))
         .collect()
+}
+
+/// The text as `  > ` lines, cut to its first max chars.
+fn quoted_head(text: &str, max: usize) -> String {
+    let text = sanitized(text);
+    if text.chars().count() > max {
+        let head: String = text.chars().take(max).collect();
+        quote_lines(&format!("{head}…"))
+    } else {
+        quote_lines(&text)
+    }
+}
+
+/// The text as `  > ` lines, cut to its last max chars.
+fn quoted_tail(text: &str, max: usize) -> String {
+    let text = sanitized(text);
+    let len = text.chars().count();
+    if len > max {
+        let tail: String = text.chars().skip(len - max).collect();
+        quote_lines(&format!("…{tail}"))
+    } else {
+        quote_lines(&text)
+    }
+}
+
+pub(crate) fn quoted_body(body: &str) -> String {
+    quoted_head(body, BODY_MAX)
 }
 
 fn frame(mr: &str, line: &str) -> String {
@@ -158,6 +203,8 @@ enum Event {
         sha: Option<String>,
         url: Option<String>,
         jobs: Vec<String>,
+        #[serde(default)]
+        logs: Vec<JobLog>,
     },
     #[serde(rename = "forge.comment")]
     Comment {
@@ -173,6 +220,8 @@ enum Event {
         path: Option<String>,
         line: Option<u64>,
         review_state: Option<String>,
+        #[serde(default)]
+        thread: Vec<ThreadEntry>,
     },
     #[serde(rename = "forge.merged")]
     Merged {
@@ -200,6 +249,27 @@ impl Event {
     }
 }
 
+/// The last trusted comments before comments[i] in its thread, oldest first.
+fn thread_entries(forge: &str, comments: &[Comment], i: usize) -> Vec<ThreadEntry> {
+    let Some(thread) = comments[i].thread.as_deref() else {
+        return vec![];
+    };
+    let mut entries: Vec<ThreadEntry> = comments[..i]
+        .iter()
+        .rev()
+        .filter(|c| {
+            c.thread.as_deref() == Some(thread) && trusted(forge, c.association.as_deref())
+        })
+        .take(THREAD_ENTRIES)
+        .map(|c| ThreadEntry {
+            author: c.author.clone(),
+            body: c.body.chars().take(THREAD_BODY_MAX).collect(),
+        })
+        .collect();
+    entries.reverse();
+    entries
+}
+
 /// The events for what is new on one open MR, and the mark to store; mark None: the MR was never polled, so its
 /// comments are only taken note of.
 fn mr_events(
@@ -221,6 +291,7 @@ fn mr_events(
             sha: checks.sha.clone(),
             url: checks.url.clone(),
             jobs: checks.failed.iter().map(|j| j.name.clone()).collect(),
+            logs: vec![],
         });
         failed_sha = checks.sha.clone();
     }
@@ -228,8 +299,9 @@ fn mr_events(
         events.extend(
             comments
                 .iter()
-                .filter(|c| !m.seen.contains(&comment_key(c)))
-                .map(|c| Event::Comment {
+                .enumerate()
+                .filter(|(_, c)| !m.seen.contains(&comment_key(c)))
+                .map(|(i, c)| Event::Comment {
                     session: session.to_string(),
                     forge: forge.to_string(),
                     mr: mr.to_string(),
@@ -242,6 +314,7 @@ fn mr_events(
                     path: c.path.clone(),
                     line: c.line,
                     review_state: c.review_state.clone(),
+                    thread: thread_entries(forge, comments, i),
                 }),
         );
     }
@@ -261,11 +334,23 @@ fn merged_event(session: &str, newly: &[String], finished: bool, running: bool) 
 fn render(e: &Event) -> Option<String> {
     match e {
         Event::PipelineFailed {
-            mr, sha, url, jobs, ..
-        } => Some(frame(
             mr,
-            &failure_line(sha.as_deref(), jobs, url.as_deref()),
-        )),
+            sha,
+            url,
+            jobs,
+            logs,
+            ..
+        } => {
+            let mut line = failure_line(sha.as_deref(), jobs, url.as_deref());
+            for log in logs {
+                line.push_str(&format!(
+                    "\n  log tail of {}:{}",
+                    oneline(&log.name),
+                    quoted_tail(&log.tail, TAIL_MAX)
+                ));
+            }
+            Some(frame(mr, &line))
+        }
         Event::Comment {
             forge,
             mr,
@@ -277,6 +362,7 @@ fn render(e: &Event) -> Option<String> {
             path,
             line,
             review_state,
+            thread,
             ..
         } => {
             if !trusted(forge, association.as_deref()) {
@@ -300,11 +386,19 @@ fn render(e: &Event) -> Option<String> {
                 }
             }
             let link = url.as_deref().map_or(String::new(), |u| format!(" ({u})"));
-            let line = format!(
-                "- {what} by @{}{place}{link}{}",
-                oneline(author),
-                quoted_body(body)
-            );
+            let mut line = format!("- {what} by @{}{place}{link}", oneline(author));
+            if !thread.is_empty() {
+                line.push_str("\n  in reply to:");
+                for entry in thread {
+                    line.push_str(&format!(
+                        "\n  - @{}:{}",
+                        oneline(&entry.author),
+                        quoted_head(&entry.body, THREAD_BODY_MAX)
+                    ));
+                }
+                line.push_str("\n  comment:");
+            }
+            line.push_str(&quoted_body(body));
             Some(frame(mr, &line))
         }
         Event::Merged { mrs, finished, .. } => {
@@ -374,15 +468,40 @@ pub fn cmd_forge_notice() -> Result<(), String> {
     Ok(())
 }
 
-/// The JSON `forge args` prints; None if it fails or takes too long.
-fn forge_json<T: DeserializeOwned>(args: &[&str]) -> Option<T> {
+/// What `forge args` prints; None if it fails or takes too long.
+fn forge_stdout(args: &[&str]) -> Option<Vec<u8>> {
     let mut cmd = Command::new("forge");
     cmd.args(args);
     let out = output_timeout(&mut cmd, None, FORGE_TIMEOUT).ok()??;
-    if !out.status.success() {
-        return None;
-    }
-    serde_json::from_slice(&out.stdout).ok()
+    out.status.success().then_some(out.stdout)
+}
+
+/// The JSON `forge args` prints; None if it fails or takes too long.
+fn forge_json<T: DeserializeOwned>(args: &[&str]) -> Option<T> {
+    serde_json::from_slice(&forge_stdout(args)?).ok()
+}
+
+/// The tails of the logs of the first failed jobs; a job whose log can't be read is left out.
+fn job_logs(mr: &str, failed: &[FailedJob]) -> Vec<JobLog> {
+    failed
+        .iter()
+        .filter_map(|j| Some((j, j.id?)))
+        .take(LOGGED_JOBS)
+        .filter_map(|(j, id)| {
+            let id = id.to_string();
+            let args = ["pr", "job-log", mr, id.as_str(), "--tail", LOG_LINES];
+            let out = forge_stdout(&args)?;
+            let log = String::from_utf8_lossy(&out);
+            if log.trim().is_empty() {
+                return None;
+            }
+            let skip = log.chars().count().saturating_sub(TAIL_MAX);
+            Some(JobLog {
+                name: j.name.clone(),
+                tail: log.chars().skip(skip).collect(),
+            })
+        })
+        .collect()
 }
 
 struct Polled {
@@ -412,7 +531,7 @@ fn check_mrs(name: &str, r: &Record) -> Option<Polled> {
             "open" => {
                 let checks: Checks = forge_json(&["pr", "checks", url])?;
                 let comments: Vec<Comment> = forge_json(&["pr", "comments", url])?;
-                let (events, mark) = mr_events(
+                let (mut events, mark) = mr_events(
                     name,
                     &pr.forge,
                     url,
@@ -420,6 +539,11 @@ fn check_mrs(name: &str, r: &Record) -> Option<Polled> {
                     &checks,
                     &comments,
                 );
+                for event in &mut events {
+                    if let Event::PipelineFailed { logs, .. } = event {
+                        *logs = job_logs(url, &checks.failed);
+                    }
+                }
                 polled.marks.insert(url.to_string(), mark);
                 polled.events.extend(events);
             }
