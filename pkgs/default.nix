@@ -58,6 +58,7 @@
   agent-inbox = pkgs.callPackage ./agent-inbox {};
   matrix-inbox = pkgs.callPackage ./matrix-inbox {};
   agent-task = pkgs.callPackage ./agent-task {};
+  stay-awake = pkgs.callPackage ./stay-awake {};
   event-bus = pkgs.callPackage ./event-bus {};
   matrix-gateway = pkgs.callPackage ./matrix-gateway {};
   tm = pkgs.callPackage ./tm {};
