@@ -1212,3 +1212,94 @@ fn p4_forge_notice_cli() {
     out.fail("jw: invalid forge event");
     assert_eq!(out.stdout, "");
 }
+
+#[test]
+fn a7_agent_reports_to_recorded() {
+    let e = Env::new();
+    e.repo();
+    e.write_record("parent", r#"{"kind":"task"}"#);
+
+    let out = e.jw(
+        &e.root,
+        &["agent", "-d", "--reports-to", "parent", "repo", "--", "hi"],
+    );
+    out.ok();
+    let name = started(&out);
+    let r = e.record(&name);
+    assert_eq!(r["reports_to"], "parent");
+    assert_eq!(r["kind"], "task");
+    assert_eq!(r["title"], "hi");
+    assert_eq!(r["description"], "hi");
+    assert!(r["workspace"].is_string());
+}
+
+#[test]
+fn a8_agent_without_reports_to_has_no_key() {
+    let e = Env::new();
+    e.repo();
+
+    let out = e.jw(&e.root, &["agent", "-d", "repo", "hi"]);
+    out.ok();
+    let name = started(&out);
+    assert!(e.record(&name).get("reports_to").is_none());
+}
+
+#[test]
+fn a9_agent_reports_to_missing_record() {
+    let e = Env::new();
+    e.repo();
+
+    e.jw(
+        &e.root,
+        &["agent", "-d", "--reports-to", "ghost", "repo", "--", "hi"],
+    )
+    .fail("jw: no session record ghost");
+    assert!(!e.logs.join("shpool.log").exists());
+    assert!(!e.root.join("repo.agents").exists());
+}
+
+#[test]
+fn a10_agent_reports_to_invalid_name() {
+    let e = Env::new();
+    e.repo();
+
+    e.jw(
+        &e.root,
+        &["agent", "-d", "--reports-to", "a b", "repo", "--", "hi"],
+    )
+    .fail("jw: invalid session name: 'a b'");
+    e.jw(
+        &e.root,
+        &["agent", "-d", "--reports-to", "", "repo", "--", "hi"],
+    )
+    .fail("jw: invalid session name: ''");
+    assert!(!e.logs.join("shpool.log").exists());
+    assert!(!e.root.join("repo.agents").exists());
+}
+
+#[test]
+fn a11_agent_reports_to_after_repo_fails() {
+    let e = Env::new();
+    e.repo();
+    e.write_record("parent", r#"{"kind":"task"}"#);
+
+    e.jw(
+        &e.root,
+        &["agent", "-d", "repo", "--reports-to", "parent", "--", "x"],
+    )
+    .fail("jw: options go before the repo");
+    assert!(!e.logs.join("shpool.log").exists());
+}
+
+#[test]
+fn s3_session_set_keeps_reports_to() {
+    let e = Env::new();
+    e.write_record("c", r#"{"kind":"task","reports_to":"p"}"#);
+
+    e.jw(&e.home, &["session", "set", "-s", "c", "--workspace", "/w"])
+        .ok();
+    assert_eq!(e.record("c")["reports_to"], "p");
+    assert_eq!(e.record("c")["workspace"], "/w");
+    let got = e.jw(&e.home, &["session", "get", "-s", "c"]).ok().json();
+    assert_eq!(got["reports_to"], "p");
+}

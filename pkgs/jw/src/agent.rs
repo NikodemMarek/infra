@@ -60,10 +60,11 @@ pub fn runtime_dir() -> String {
         .unwrap_or_else(|| format!("/run/user/{}", unsafe { libc::getuid() }))
 }
 
-fn task_record(prompt: &str, workspace: &str) -> Record {
+fn task_record(prompt: &str, workspace: &str, reports_to: Option<&str>) -> Record {
     let mut record = Record {
         kind: Some("task".to_string()),
         workspace: Some(workspace.to_string()),
+        reports_to: reports_to.map(str::to_string),
         ..Record::default()
     };
     if let Some(first) = prompt.lines().map(str::trim).find(|l| !l.is_empty()) {
@@ -77,6 +78,16 @@ pub fn cmd_agent(a: AgentArgs) -> Result<(), String> {
     if in_event_session() {
         return Err("event sessions cannot start agents".to_string());
     }
+    let reports_to = a
+        .reports_to
+        .map(|name| {
+            let name = session_name(Some(&name))?;
+            match Records::new().read(&name) {
+                Some(_) => Ok(name),
+                None => Err(format!("no session record {name}")),
+            }
+        })
+        .transpose()?;
     // clap drops a leading `--`; after it everything is the prompt, even a first word naming a repo
     let argv: Vec<String> = env::args().collect();
     let literal = argv
@@ -90,7 +101,13 @@ pub fn cmd_agent(a: AgentArgs) -> Result<(), String> {
             let mut prompt = &args[1..];
             match prompt.first().map(String::as_str) {
                 Some("--") => prompt = &prompt[1..],
-                Some("-r" | "--revision" | "-d" | "--detach") => {
+                Some(opt)
+                    if matches!(
+                        opt,
+                        "-r" | "--revision" | "-d" | "--detach" | "--reports-to"
+                    ) || opt.starts_with("--revision=")
+                        || opt.starts_with("--reports-to=") =>
+                {
                     return Err("options go before the repo".to_string());
                 }
                 _ => {}
@@ -130,12 +147,12 @@ pub fn cmd_agent(a: AgentArgs) -> Result<(), String> {
         a.detach,
         claude,
         &text,
+        reports_to.as_deref(),
         |name| {
             let revision = revision.as_deref().unwrap_or("trunk()");
             add_workspace(&home, revision, name, resolve_in.as_deref())
         },
         None,
-        false,
     )
 }
 
@@ -155,18 +172,19 @@ fn pick_for(task: &str) -> Result<String, String> {
 }
 
 /// Runs argv in a new shpool session of the repo at home, with a record titled after text, and attaches to it unless
-/// detach. The session is called preferred if no shpool session has that name, else s-<time>. make_dir(name) returns the
-/// directory to run in; it is called under the lock, once the name is chosen. With resume an existing record of the
-/// name only gets its workspace updated. The name is the session's identity: AGENT_SESSION, the record name and the
-/// shpool session name are equal, and jw finds a live Claude's shpool session by its AGENT_SESSION.
+/// detach. With resume the session is called that name if no shpool session has it, else s-<time>, and an existing
+/// record of the name only gets its workspace updated. make_dir(name) returns the directory to run in; it is called
+/// under the lock, once the name is chosen. The name is the session's identity: AGENT_SESSION, the record name and the
+/// shpool session name are equal, and jw finds a live Claude's shpool session by its AGENT_SESSION. reports_to is the
+/// session the new record names as its supervisor.
 fn launch(
     home: &str,
     detach: bool,
     argv: Vec<String>,
     text: &str,
+    reports_to: Option<&str>,
     make_dir: impl FnOnce(&str) -> Result<String, String>,
-    preferred: Option<&str>,
-    resume: bool,
+    resume: Option<&str>,
 ) -> Result<(), String> {
     let rundir = runtime_dir();
     let name = {
@@ -180,7 +198,7 @@ fn launch(
             .map_err(|e| format!("{lock_path}: {e}"))?;
         lock.lock().map_err(|e| format!("{lock_path}: {e}"))?;
         let taken = Shpool.list()?;
-        let name = match preferred {
+        let name = match resume {
             Some(name) if valid_name(name) && !taken.contains_key(name) => name.to_string(),
             _ => {
                 let base = Local::now().format("s-%m%d-%H%M%S").to_string();
@@ -197,13 +215,13 @@ fn launch(
         };
         let dir = make_dir(&name)?;
         let records = Records::new();
-        let fields = if resume && records.read(&name).is_some() {
+        let fields = if resume.is_some() && records.read(&name).is_some() {
             Record {
                 workspace: Some(dir.clone()),
                 ..Record::default()
             }
         } else {
-            task_record(text, &dir)
+            task_record(text, &dir, reports_to)
         };
         // the inbox shows the session from its record; a failure must not stop the session
         let recorded = records.update(&name, |r| {
@@ -531,7 +549,7 @@ pub fn cmd_resume(a: ResumeArgs) -> Result<(), String> {
         Ok(dir)
     };
     let claude = vec!["claude".to_string(), "--resume".to_string(), id];
-    launch(&home, a.detach, claude, &title, make_dir, Some(&name), true)
+    launch(&home, a.detach, claude, &title, None, make_dir, Some(&name))
 }
 
 /// The session called prefix, else the only one starting with it.

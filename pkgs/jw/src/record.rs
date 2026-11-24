@@ -38,6 +38,9 @@ pub struct Record {
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The session this one reports to; none: the user.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reports_to: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -117,6 +120,7 @@ impl Record {
             workspace: text("workspace"),
             title: text("title"),
             description: text("description"),
+            reports_to: text("reports_to"),
             url: text("url"),
             mrs: texts("mrs"),
             merged_mrs: texts("merged_mrs"),
@@ -137,6 +141,7 @@ impl Record {
         self.workspace = other.workspace.or(self.workspace.take());
         self.title = other.title.or(self.title.take());
         self.description = other.description.or(self.description.take());
+        self.reports_to = other.reports_to.or(self.reports_to.take());
         self.url = other.url.or(self.url.take());
     }
 

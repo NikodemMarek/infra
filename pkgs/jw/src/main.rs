@@ -135,6 +135,9 @@ struct AgentArgs {
     /// revision, bookmark or bookmark@origin to start the new workspace from (default: trunk()); when given in this repo, it is resolved in the current workspace
     #[arg(short, long)]
     revision: Option<String>,
+    /// the session this one reports to: its turn ends reach NAME as messages (default: it reports to the user)
+    #[arg(long, value_name = "NAME")]
+    reports_to: Option<String>,
     /// [repo under the projects root] [prompt...]; after a leading -- everything is the prompt
     #[arg(allow_hyphen_values = true)]
     args: Vec<String>,

@@ -21,6 +21,7 @@ complete -c jw -n '__fish_seen_subcommand_from new n' -s r -l revision -r -d 're
 complete -c jw -n '__fish_seen_subcommand_from new n' -a '(__jw_repos)'
 complete -c jw -n '__fish_seen_subcommand_from agent a' -s r -l revision -r -d 'revision to start from (default: trunk())'
 complete -c jw -n '__fish_seen_subcommand_from agent a' -s d -l detach -d 'start the session in the background'
+complete -c jw -n '__fish_seen_subcommand_from agent a' -l reports-to -r -d 'the session this one reports to'
 complete -c jw -n '__fish_seen_subcommand_from agent a' -a '(__jw_repos)'
 complete -c jw -n '__fish_seen_subcommand_from resume r' -s d -l detach -d 'start the session in the background'
 complete -c jw -n '__fish_seen_subcommand_from resume r' -l session -r -d 'resume the last session of the agent session NAME'
