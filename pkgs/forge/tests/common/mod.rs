@@ -192,6 +192,36 @@ impl Env {
         }
     }
 
+    pub fn forge_stdin(&self, args: &[&str], input: &str) -> Out {
+        use std::io::Write;
+        use std::process::Stdio;
+        let mut child = self
+            .cmd(env!("CARGO_BIN_EXE_forge"))
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let data = input.as_bytes().to_vec();
+        let t = std::thread::spawn(move || {
+            let _ = stdin.write_all(&data);
+        });
+        let o = child.wait_with_output().unwrap();
+        let _ = t.join();
+        Out {
+            code: o.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+        }
+    }
+
+    // Sequenced responses for one route key: the n-th call gets the n-th item, the last repeats.
+    pub fn route_seq(&mut self, key: &str, items: Vec<Value>) {
+        self.route(key, serde_json::json!({ "__seq": items }));
+    }
+
     fn log(&self, name: &str) -> Vec<Value> {
         fs::read_to_string(self.dir.join("fake").join(name))
             .unwrap_or_default()

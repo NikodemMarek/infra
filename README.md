@@ -159,7 +159,7 @@ Own programs (`nix build .#<name>`):
 | Package | What it is |
 |---------|------------|
 | `secrets-build`, `bws-project`, `bws`, `infra-tofu` | Bitwarden Secrets Manager tooling: host sops files, a project as JSON, the `bws` CLI, OpenTofu with the profile `tofu` |
-| `jj-upload`, `forge` | stacked merge/pull requests from a jj stack; the forge (GitLab, GitHub) client |
+| `jj-upload`, `forge` | stacked merge/pull requests from a jj stack; the forge (GitLab, GitHub) client, incl. draft reviews (`forge pr review`: GitLab draft notes, GitHub pending review; the user publishes) |
 | `jw` | jj workspaces at `<repo>.agents/<name>` under `projectsRoot` (default `~/projects`); `jw agent` runs Claude in a new workspace and shpool session (with `--reports-to` a headless worker: a user unit per turn), `jw mate` starts a first mate in `<projectsRoot>/mate` (`jw --help`) |
 | `event-bus` | events over plain NATS (`$NATS_URL`): `event-pub TYPE` publishes JSON from stdin on `events.TYPE`; `event-subscribe HANDLER SUBJECT...` runs HANDLER per event |
 | `event-handlers` | user service, one `event-subscribe` per line of `pkgs/event-handlers/handlers` (subjects stay under `events.`) |

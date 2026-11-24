@@ -5,8 +5,8 @@ use crate::api::Api;
 use crate::cmd::Result;
 use crate::target::{Kind, Target};
 
-mod github;
-mod gitlab;
+pub(crate) mod github;
+pub(crate) mod gitlab;
 
 #[derive(Serialize)]
 pub struct Pr {
