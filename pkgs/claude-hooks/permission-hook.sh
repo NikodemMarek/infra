@@ -4,12 +4,18 @@
 # Waits by default (up to CLAUDE_INBOX_WAIT seconds, default and max 600; 0 = notification only) for an
 # answer from agent-inbox on a reply FIFO and returns it as the permission decision. The local dialog is
 # shown meanwhile and whichever answer comes first wins; no answer in time = no output = local dialog.
+# Does nothing in headless workers (AGENT_HEADLESS).
 # stdout carries only a decision; never exits 2 (blocking code).
 # Deliberately no errexit (the package sets only nounset + pipefail): every failure maps to exit 0.
 [ -n "${AGENT_SESSION:-}" ] || {
 	cat >/dev/null
 	exit 0
 }
+# headless workers run with --permission-prompts none: nobody answers
+if [ -n "${AGENT_HEADLESS:-}" ]; then
+	cat >/dev/null
+	exit 0
+fi
 w="${CLAUDE_INBOX_WAIT:-600}"
 if ! [[ "$w" =~ ^[1-9][0-9]{0,5}$ ]]; then
 	exec claude-route-event

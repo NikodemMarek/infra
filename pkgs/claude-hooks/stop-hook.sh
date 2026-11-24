@@ -21,6 +21,8 @@ if [ -n "$pointer" ]; then
 fi
 [ -n "${AGENT_SESSION:-}" ] || exit 0
 claude-status-hook idle <<<"$input"
+# a headless worker's turn ends with its result (session.result), not a claude.waiting item
+[ -z "${AGENT_HEADLESS:-}" ] || exit 0
 jq -c '([.last_assistant_message | strings | split("\n")[] | select(startswith("```") | not)
       | sub("^[#>*\\s-]+"; "") | gsub("\\*\\*|`"; "") | select(. != "")]
     | first // "waiting for you")[0:120] as $title

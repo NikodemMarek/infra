@@ -10,6 +10,8 @@
 input=$(cat)
 [ -n "${AGENT_SESSION:-}" ] || exit 0
 state="${1:-}"
+# headless workers never wait on a person
+[ "$state" = waiting ] && [ -n "${AGENT_HEADLESS:-}" ] && exit 0
 args=()
 if [ "$state" = waiting ]; then
 	tool=$(jq -r '.tool_name | strings' <<<"$input" 2>/dev/null)

@@ -62,7 +62,7 @@ enum Command {
     Info,
     /// pick a repo (the current one first) and print its name
     Pick,
-    /// run Claude in a shpool session in a new workspace of a repo (default: this one; outside a repo the one the prompt starts with, else pick one)
+    /// run Claude in a new workspace of a repo (default: this one; outside a repo the one the prompt starts with, else pick one): in a shpool session, or with --reports-to as a headless worker that needs a prompt
     #[command(visible_alias = "a")]
     Agent(AgentArgs),
     /// resume a Claude session of a repo (any of its workspaces; default: this one) in a shpool session, in its workspace (recreated on trunk() if it is gone)
@@ -72,7 +72,7 @@ enum Command {
     Mate,
     /// attach to a Claude shpool session (default: pick one, this repo's first); a unique prefix of the name is enough
     Attach(AttachArgs),
-    /// send a message to a running Claude session: delivered right away, between the tool calls of a busy session or as a new turn of an idle one; fails if the session is not running
+    /// send a message to a Claude session: delivered right away, between the tool calls of a busy session or as a new turn of an idle one; fails if an interactive session is not running (a headless worker queues it for its next turn or starts one)
     Msg(MsgArgs),
     /// read, list or update the records of agent sessions (kind, title, description, url, workspace, mrs, worktrees), a JSON file in $XDG_STATE_HOME/agent-sessions that agent-inbox and the notifications show
     Session {
@@ -158,6 +158,9 @@ struct AgentArgs {
     /// the session this one reports to: its turn ends reach NAME as messages (default: it reports to the user)
     #[arg(long, value_name = "NAME")]
     reports_to: Option<String>,
+    /// run interactively in shpool even with --reports-to
+    #[arg(long)]
+    interactive: bool,
     /// [repo under the projects root] [prompt...]; after a leading -- everything is the prompt
     #[arg(allow_hyphen_values = true)]
     args: Vec<String>,

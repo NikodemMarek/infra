@@ -110,6 +110,7 @@ Cluster:
 Sessions:
 
 - The jw job script runs `exec direnv exec . claude ...`, so sessions already have the dev shell env (`KUBECONFIG`): don't export it by hand. `<repo>.agents/*` needs no `direnv allow`; `devenv.nix` edits need a session restart.
+- A `jw agent --reports-to` worker is headless: a jw session (record, workspace) run as transient `jw-worker-NAME` user units, one `claude -p` per turn, not in shpool. agent-inbox sees it only mid-turn; `jw msg` queues for it, `--interactive` gives the shpool session instead.
 - Claude `/resume` filters by cwd and shows nothing in `<repo>.agents/s-*`: use `jw resume [repo]`.
 - SendMessage cannot reach a just-started session: use `jw msg` or the event router.
 - An event's `type` is its NATS subject and agent-inbox keys on it: route an event to a new consumer with a line in `pkgs/event-handlers/handlers` (exactly `<subject> <handler>`, no arguments), never by republishing it on another subject.
