@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 use crate::cmd::{event_pub, output_timeout};
 use crate::jj::Jj;
 use crate::procs::live_claudes;
-use crate::record::{now, write_error, MrMark, Record, Records};
+use crate::record::{now, valid_name, write_error, MrMark, Record, Records, ResultKind};
+use crate::shpool::Shpool;
+use crate::systemd::Systemd;
+use crate::worker;
 use crate::workspace::{agent_workspace, is_gitlab};
 
 const HEADER: &str = "New activity on this session's merge requests:";
@@ -605,9 +608,103 @@ fn poll_record(name: &str, r: &Record) {
     }
 }
 
-/// Publishes failed pipelines, new comments and reviews, and merges of the MRs of agent sessions as forge.* events.
+/// Records that session name died: a `died` result if it reports to a session, else only the record; guard re-checks
+/// under the records lock what was read and changes the record. Whether it was recorded.
+fn record_died(
+    name: &str,
+    r: &Record,
+    text: &str,
+    guard: impl FnOnce(&mut Record) -> bool,
+) -> Result<bool, String> {
+    let supervised = r
+        .reports_to
+        .as_deref()
+        .is_some_and(|to| valid_name(to) && to != name);
+    if supervised {
+        return Ok(worker::finish(name, ResultKind::Died, text, guard)?.is_some());
+    }
+    let mut changed = false;
+    Records::new().update(name, |rec| {
+        changed = guard(rec);
+        changed
+    })?;
+    Ok(changed)
+}
+
+fn interactive_died(name: &str, r: &Record) -> Result<bool, String> {
+    let status_at = r.status_at;
+    let text = format!(
+        "Session {name} stopped before ending its turn (crash, kill, timeout or restart; a kill by the user looks the same). To continue it: jw resume -d --session {name}, then jw msg {name} -- <what to continue>."
+    );
+    record_died(name, r, &text, |rec| {
+        if rec.status.as_deref() != Some("busy") || rec.status_at != status_at {
+            return false;
+        }
+        rec.status = Some("died".to_string());
+        rec.status_at = Some(now());
+        rec.waiting_for = None;
+        rec.cache_expires_at = None;
+        true
+    })
+}
+
+fn headless_died(name: &str, r: &Record) -> Result<bool, String> {
+    let (turn_base, result_seq) = (r.turn_base, r.result_seq);
+    let text = format!(
+        "The turn of worker {name} ended without a result (crash, kill, timeout or restart; a kill by the user looks the same). Its transcript and queued messages are intact: jw msg {name} -- <what to continue> runs its next turn."
+    );
+    record_died(name, r, &text, |rec| {
+        if rec.turn_base != turn_base
+            || rec.result_seq != result_seq
+            || Systemd.is_active(&worker::unit(name)) != Some(false)
+        {
+            return false;
+        }
+        if rec.status.as_deref() != Some("done") {
+            rec.status = Some("died".to_string());
+            rec.status_at = Some(now());
+        }
+        rec.turn_base = None;
+        true
+    })
+}
+
+/// Records the sessions that died mid-turn: interactive ones busy without a shpool session, headless workers with an
+/// open turn and no running unit.
+fn report_died(records: &[(String, Record)]) {
+    let listed = Shpool.list();
+    if let Err(e) = &listed {
+        eprintln!("jw: poll: {e}");
+    }
+    for (name, r) in records.iter().filter(|(_, r)| r.reaped.is_none()) {
+        let candidate = if r.headless {
+            r.turn_base == Some(r.result_seq)
+                && Systemd.is_active(&worker::unit(name)) == Some(false)
+        } else {
+            r.status.as_deref() == Some("busy")
+                && listed.as_ref().is_ok_and(|list| !list.contains_key(name))
+        };
+        if !candidate {
+            continue;
+        }
+        let died = if r.headless {
+            headless_died(name, r)
+        } else {
+            interactive_died(name, r)
+        };
+        match died {
+            Ok(true) => println!("died {name}"),
+            Ok(false) => {}
+            Err(e) => eprintln!("jw: {name}: {e}"),
+        }
+    }
+}
+
+/// Publishes failed pipelines, new comments and reviews, and merges of the MRs of agent sessions as forge.* events, and
+/// records the sessions that died mid-turn.
 pub fn cmd_poll() -> Result<(), String> {
     let records = Records::new().load_all();
+    report_died(&records);
     let deadline = Instant::now() + POLL_DEADLINE;
     for (i, (name, record)) in records.iter().enumerate() {
         if Instant::now() > deadline {

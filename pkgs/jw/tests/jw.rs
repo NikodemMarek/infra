@@ -3201,3 +3201,190 @@ fn h3_8_headless_start_failure_marks_record_done() {
     assert_eq!(r["status"], "done");
     assert_eq!(r["reports_to"], "M");
 }
+
+fn l2_env(rec: Value, shpool: Option<&str>, reports: bool) -> Env {
+    let e = Env::new();
+    e.repo();
+    let mut rec = rec;
+    rec["kind"] = json!("task");
+    if reports {
+        rec["reports_to"] = json!("P");
+    }
+    e.write_record("C", &rec.to_string());
+    e.write_record("P", r#"{"kind":"mate"}"#);
+    if let Some(s) = shpool {
+        fs::write(e.dir.join("shpool-state"), s).unwrap();
+    }
+    e
+}
+
+fn l2_nothing(e: &Env, status: &str) {
+    let out = e.jw(&e.root, &["poll"]);
+    out.ok();
+    assert!(!out.stdout.contains("died C"), "{}", out.stdout);
+    assert!(!result_exists(e, "C", 1));
+    assert!(event_seqs(e).is_empty());
+    assert_eq!(e.record("C")["status"], status);
+}
+
+#[test]
+fn l2_1_interactive_busy_gone_reports_died() {
+    let e = l2_env(json!({"status": "busy"}), None, true);
+    let out = e.jw(&e.root, &["poll"]);
+    out.ok();
+    stdout_has(&out, "died C");
+    let r = read_result(&e, "C", 1);
+    assert_eq!(r["kind"], "died");
+    let text = r["text"].as_str().unwrap();
+    assert!(text.contains("stopped before ending its turn"), "{text}");
+    assert!(text.contains("jw resume -d --session C"), "{text}");
+    let rec = e.record("C");
+    assert_eq!(rec["status"], "died");
+    assert_eq!(rec["result_seq"], 1);
+    assert_eq!(event_seqs(&e), vec![1]);
+}
+
+#[test]
+fn l2_2_interactive_busy_still_in_shpool_is_left_alone() {
+    let e = l2_env(json!({"status": "busy"}), Some("C attached\n"), true);
+    l2_nothing(&e, "busy");
+}
+
+#[test]
+fn l2_3_interactive_idle_or_waiting_gone_is_left_alone() {
+    for st in ["idle", "waiting"] {
+        let e = l2_env(json!({"status": st}), None, true);
+        l2_nothing(&e, st);
+    }
+}
+
+#[test]
+fn l2_4_interactive_busy_gone_without_reports_to_only_marks_died() {
+    let e = l2_env(json!({"status": "busy"}), None, false);
+    e.jw(&e.root, &["poll"]).ok();
+    assert_eq!(e.record("C")["status"], "died");
+    assert!(!result_exists(&e, "C", 1));
+    assert!(event_seqs(&e).is_empty());
+}
+
+#[test]
+fn l2_5_headless_open_turn_unit_inactive_reports_died() {
+    let e = l2_env(
+        json!({"headless": true, "status": "busy", "turn_base": 0}),
+        None,
+        true,
+    );
+    let out = e.jw(&e.root, &["poll"]);
+    out.ok();
+    let r = read_result(&e, "C", 1);
+    assert_eq!(r["kind"], "died");
+    let text = r["text"].as_str().unwrap();
+    assert!(text.contains("ended without a result"), "{text}");
+    assert!(text.contains("jw msg C --"), "{text}");
+    let rec = e.record("C");
+    assert!(rec.get("turn_base").is_none(), "{rec}");
+    assert_eq!(rec["status"], "died");
+    assert_eq!(rec["result_seq"], 1);
+    assert_eq!(event_seqs(&e), vec![1]);
+}
+
+#[test]
+fn l2_6_headless_open_turn_unit_active_is_left_alone() {
+    let e = l2_env(
+        json!({"headless": true, "status": "busy", "turn_base": 0}),
+        None,
+        true,
+    );
+    set_active(&e, "active\n");
+    l2_nothing(&e, "busy");
+    assert_eq!(e.record("C")["turn_base"], 0);
+}
+
+#[test]
+fn l2_7_headless_open_turn_garbage_unit_state_is_left_alone() {
+    let e = l2_env(
+        json!({"headless": true, "status": "busy", "turn_base": 0}),
+        None,
+        true,
+    );
+    set_active(&e, "garbage");
+    l2_nothing(&e, "busy");
+}
+
+#[test]
+fn l2_8_headless_without_open_turn_is_left_alone() {
+    let e = l2_env(json!({"headless": true, "status": "idle"}), None, true);
+    l2_nothing(&e, "idle");
+}
+
+#[test]
+fn l2_9_reaped_records_are_left_alone() {
+    let e = l2_env(json!({"status": "busy", "reaped": 1}), None, true);
+    l2_nothing(&e, "busy");
+    let e = l2_env(
+        json!({"headless": true, "status": "busy", "turn_base": 0, "reaped": 1}),
+        None,
+        true,
+    );
+    l2_nothing(&e, "busy");
+}
+
+#[test]
+fn l2_11_headless_dead_turn_reported_when_shpool_list_fails() {
+    let e = l2_env(
+        json!({"headless": true, "status": "busy", "turn_base": 0}),
+        None,
+        true,
+    );
+    fs::write(e.dir.join("shpool-state.fail"), "").unwrap();
+    e.jw(&e.root, &["poll"]).ok();
+    let r = read_result(&e, "C", 1);
+    assert_eq!(r["kind"], "died");
+    let rec = e.record("C");
+    assert_eq!(rec["status"], "died");
+    assert_eq!(rec["result_seq"], 1);
+    assert_eq!(event_seqs(&e), vec![1]);
+}
+
+#[test]
+fn l2_12_headless_stale_turn_base_is_left_alone() {
+    let e = l2_env(
+        json!({"headless": true, "status": "busy", "turn_base": 0, "result_seq": 1}),
+        None,
+        true,
+    );
+    let out = e.jw(&e.root, &["poll"]);
+    out.ok();
+    assert!(!out.stdout.contains("died C"), "{}", out.stdout);
+    assert!(!result_exists(&e, "C", 2));
+    assert!(event_seqs(&e).is_empty());
+    assert_eq!(e.record("C")["result_seq"], 1);
+}
+
+#[test]
+fn l2_13_headless_done_with_dead_open_turn_keeps_done() {
+    let e = l2_env(
+        json!({"headless": true, "status": "done", "turn_base": 0}),
+        None,
+        true,
+    );
+    e.jw(&e.root, &["poll"]).ok();
+    let r = read_result(&e, "C", 1);
+    assert_eq!(r["kind"], "died");
+    let rec = e.record("C");
+    assert_eq!(rec["status"], "done");
+    assert_eq!(rec["result_seq"], 1);
+    assert_eq!(event_seqs(&e), vec![1]);
+}
+
+#[test]
+fn l2_10_second_poll_writes_nothing_new() {
+    let e = l2_env(json!({"status": "busy"}), None, true);
+    e.jw(&e.root, &["poll"]).ok();
+    let out = e.jw(&e.root, &["poll"]);
+    out.ok();
+    assert!(!out.stdout.contains("died C"), "{}", out.stdout);
+    assert_eq!(e.record("C")["result_seq"], 1);
+    assert!(!result_exists(&e, "C", 2));
+    assert_eq!(event_seqs(&e), vec![1]);
+}
