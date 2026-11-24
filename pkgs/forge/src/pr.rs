@@ -35,6 +35,7 @@ pub struct Checks {
 
 #[derive(Serialize)]
 pub struct FailedJob {
+    id: u64,
     name: String,
     url: Option<String>,
 }
@@ -51,6 +52,7 @@ pub struct Comment {
     path: Option<String>,
     line: Option<u64>,
     review_state: Option<String>,
+    thread: Option<String>,
 }
 
 pub fn checks(target: &Target, number: u64) -> Result<Checks> {
@@ -67,6 +69,38 @@ pub fn comments(target: &Target, number: u64) -> Result<Vec<Comment>> {
         Kind::GitLab => gitlab::comments(&api, target, number),
         Kind::GitHub => github::comments(&api, &target.project, number),
     }
+}
+
+pub fn job_log(target: &Target, id: u64, tail: usize) -> Result<String> {
+    let api = Api::connect(target)?;
+    let path = match target.kind {
+        Kind::GitLab => gitlab::job_log_path(&target.project, id),
+        Kind::GitHub => github::job_log_path(&target.project, id),
+    };
+    let log = plain_text(&api.get_text(&path)?);
+    let lines: Vec<&str> = log.lines().collect();
+    Ok(lines[lines.len().saturating_sub(tail)..].join("\n"))
+}
+
+fn plain_text(log: &str) -> String {
+    let mut out = String::with_capacity(log.len());
+    let mut chars = log.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {}
+            '\x1b' => {
+                if chars.next() == Some('[') {
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 pub fn list(target: &Target, head: Option<&str>, limit: u8) -> Result<Vec<Pr>> {

@@ -7,8 +7,7 @@ const GL_URL: &str = "https://gitlab.example.com/g/p/-/merge_requests/7";
 const GH_URL: &str = "https://github.com/o/r/pull/3";
 const GL_MR: &str = "projects/g%2Fp/merge_requests/7";
 const GH_PULL: &str = "repos/o/r/pulls/3";
-const GL_NOTES: &str =
-    "projects/g%2Fp/merge_requests/7/notes?sort=desc&order_by=created_at&per_page=100";
+const GL_DISC: &str = "projects/g%2Fp/merge_requests/7/discussions?per_page=100";
 const GL_JOBS: &str = "projects/g%2Fp/pipelines/55/jobs?scope%5B%5D=failed&per_page=100";
 const GH_REVIEWS: &str = "repos/o/r/pulls/3/reviews?per_page=100";
 const GH_ISSUE: &str = "repos/o/r/issues/3/comments?per_page=100";
@@ -130,9 +129,9 @@ fn gitlab_checks_failed_lists_jobs_with_exact_request() {
     e.route(
         &get(GL_JOBS),
         json!([
-            {"name": "lint", "web_url": "https://gitlab.example.com/j/1", "allow_failure": false},
-            {"name": "flaky", "web_url": "https://gitlab.example.com/j/2", "allow_failure": true},
-            {"name": "test", "web_url": "https://gitlab.example.com/j/3", "allow_failure": false}
+            {"id": 101, "name": "lint", "web_url": "https://gitlab.example.com/j/1", "allow_failure": false},
+            {"id": 102, "name": "flaky", "web_url": "https://gitlab.example.com/j/2", "allow_failure": true},
+            {"id": 103, "name": "test", "web_url": "https://gitlab.example.com/j/3", "allow_failure": false}
         ]),
     );
     let v = e.forge(&["pr", "checks", GL_URL]).json();
@@ -142,8 +141,8 @@ fn gitlab_checks_failed_lists_jobs_with_exact_request() {
             "sha": "plsha1", "state": "failed",
             "url": "https://gitlab.example.com/g/p/-/pipelines/55",
             "failed": [
-                {"name": "lint", "url": "https://gitlab.example.com/j/1"},
-                {"name": "test", "url": "https://gitlab.example.com/j/3"}
+                {"name": "lint", "url": "https://gitlab.example.com/j/1", "id": 101},
+                {"name": "test", "url": "https://gitlab.example.com/j/3", "id": 103}
             ]
         })
     );
@@ -204,7 +203,7 @@ fn gh_checks(runs: Value) -> (Env, Value) {
 }
 
 fn run(name: &str, status: &str, conclusion: Value) -> Value {
-    json!({"name": name, "status": status, "conclusion": conclusion,
+    json!({"id": 900 + name.len(), "name": name, "status": status, "conclusion": conclusion,
            "html_url": format!("https://github.com/o/r/runs/{name}")})
 }
 
@@ -263,8 +262,8 @@ fn github_checks_failure_and_timed_out_listed_in_order() {
         json!({
             "sha": SHA, "state": "failed", "url": format!("{GH_URL}/checks"),
             "failed": [
-                {"name": "build", "url": "https://github.com/o/r/runs/build"},
-                {"name": "slow", "url": "https://github.com/o/r/runs/slow"}
+                {"name": "build", "url": "https://github.com/o/r/runs/build", "id": 905},
+                {"name": "slow", "url": "https://github.com/o/r/runs/slow", "id": 904}
             ]
         })
     );
@@ -326,11 +325,20 @@ fn note(id: u64, created: &str, body: Value) -> Value {
            "author": {"username": "alice"}, "body": body})
 }
 
-fn gl_comments(notes: Value) -> (Env, Value) {
+fn single(n: Value) -> Value {
+    json!({"id": format!("d{}", n["id"]), "individual_note": true, "notes": [n]})
+}
+
+fn gl_discussions(discussions: Value) -> (Env, Value) {
     let mut e = gl();
-    e.route(&get(GL_NOTES), notes);
+    e.route(&get(GL_DISC), discussions);
     let v = e.forge(&["pr", "comments", GL_URL]).json();
     (e, v)
+}
+
+fn gl_comments(notes: Value) -> (Env, Value) {
+    let ds: Vec<Value> = notes.as_array().unwrap().iter().cloned().map(single).collect();
+    gl_discussions(json!(ds))
 }
 
 fn gl_note_url(id: u64) -> String {
@@ -360,7 +368,8 @@ fn gitlab_comments_only_system_notes_is_empty() {
     s["system"] = json!(true);
     let (e, v) = gl_comments(json!([s]));
     assert_eq!(v, json!([]));
-    assert_eq!(calls(&e), vec![call("GET", GL_NOTES, false)]);
+    assert_eq!(calls(&e), vec![call("GET", GL_DISC, true)]);
+    assert_eq!(e.api_calls()[0]["output"], "ndjson");
 }
 
 #[test]
@@ -377,7 +386,7 @@ fn gitlab_comments_plain_note_mapping() {
         json!([{
             "id": 5, "kind": "comment", "author": "alice", "association": null,
             "created_at": "2026-01-01T10:00:00Z", "body": "hello", "url": gl_note_url(5),
-            "path": null, "line": null, "review_state": null
+            "path": null, "line": null, "review_state": null, "thread": null
         }])
     );
 }
@@ -470,7 +479,7 @@ fn gitlab_comments_ties_keep_fetch_order() {
 #[test]
 fn gitlab_comments_not_found_fails() {
     let mut e = gl();
-    e.route_error(&get(GL_NOTES), "404 Not Found");
+    e.route_error(&get(GL_DISC),"404 Not Found");
     let out = e.forge(&["pr", "comments", GL_URL]);
     out.fails();
     assert!(out.stderr.contains("404 Not Found"), "{}", out.stderr);
@@ -547,7 +556,7 @@ fn github_issue_comment_mapping() {
             "id": 11, "kind": "comment", "author": "carol", "association": "NONE",
             "created_at": "2026-01-01T10:00:00Z", "body": "hi",
             "url": "https://github.com/o/r/pull/3#issuecomment-11",
-            "path": null, "line": null, "review_state": null
+            "path": null, "line": null, "review_state": null, "thread": null
         }])
     );
 }
@@ -575,7 +584,7 @@ fn github_inline_mapping_and_line_fallback() {
             "id": 21, "kind": "inline", "author": "dave", "association": "COLLABORATOR",
             "created_at": "2026-01-01T10:00:00Z", "body": "inl",
             "url": "https://github.com/o/r/pull/3#discussion_r21",
-            "path": "src/x.rs", "line": 4, "review_state": null
+            "path": "src/x.rs", "line": 4, "review_state": null, "thread": "21"
         })
     );
     assert_eq!(v[1]["line"], 2);
@@ -599,7 +608,7 @@ fn github_review_mapping_state_lowercased() {
             "id": 31, "kind": "review", "author": "bob", "association": "MEMBER",
             "created_at": "2026-01-01T10:00:00Z", "body": "fix it",
             "url": "https://github.com/o/r/pull/3#pullrequestreview-31",
-            "path": null, "line": null, "review_state": "changes_requested"
+            "path": null, "line": null, "review_state": "changes_requested", "thread": null
         }])
     );
 }
@@ -787,4 +796,127 @@ fn github_comments_any_list_error_fails() {
         e.route_error(&get(bad), "HTTP 404: Not Found");
         e.forge(&["pr", "comments", GH_URL]).fails();
     }
+}
+
+// comments: threads
+
+#[test]
+fn gitlab_comments_thread_is_discussion_id_unless_individual_note() {
+    let mut reply = note(2, "2026-01-01T11:00:00Z", json!("reply"));
+    reply["type"] = json!("DiffNote");
+    reply["position"] =
+        json!({"new_path": "a.rs", "old_path": "a.rs", "new_line": 3, "old_line": null});
+    let mut root = reply.clone();
+    root["id"] = json!(1);
+    root["created_at"] = json!("2026-01-01T10:00:00Z");
+    let mut sys = note(3, "2026-01-01T12:00:00Z", json!("resolved"));
+    sys["system"] = json!(true);
+    let (e, v) = gl_discussions(json!([
+        {"id": "abc123", "individual_note": false, "notes": [root, reply, sys]},
+        single(note(4, "2026-01-01T13:00:00Z", json!("alone")))
+    ]));
+    let threads: Vec<(u64, Value)> = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c["id"].as_u64().unwrap(), c["thread"].clone()))
+        .collect();
+    assert_eq!(
+        threads,
+        vec![(1, json!("abc123")), (2, json!("abc123")), (4, Value::Null)]
+    );
+    assert_eq!(v[1]["kind"], "inline");
+    assert_eq!(v[1]["url"], gl_note_url(2));
+    assert_eq!(calls(&e), vec![call("GET", GL_DISC, true)]);
+}
+
+#[test]
+fn github_inline_thread_is_root_id_for_replies_and_own_id_for_roots() {
+    let root = inline(21, "2026-01-01T10:00:00Z", json!(5));
+    let mut reply = inline(22, "2026-01-01T10:01:00Z", json!(5));
+    reply["in_reply_to_id"] = json!(21);
+    let v = gh_comments(
+        json!([review(31, "COMMENTED", json!("r"), "2026-01-01T09:00:00Z")]),
+        json!([issue_comment(11, "2026-01-01T11:00:00Z", json!("i"))]),
+        json!([root, reply]),
+    );
+    let threads: Vec<(u64, Value)> = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c["id"].as_u64().unwrap(), c["thread"].clone()))
+        .collect();
+    assert_eq!(
+        threads,
+        vec![
+            (31, Value::Null),
+            (21, json!("21")),
+            (22, json!("21")),
+            (11, Value::Null)
+        ]
+    );
+}
+
+// job logs
+
+#[test]
+fn gitlab_job_log_prints_tail_stripped_from_trace() {
+    let mut e = gl();
+    e.route(
+        "GET projects/g%2Fp/jobs/9/trace",
+        json!({"__text": "l1\r\n\u{1b}[31;1mred\u{1b}[0m\r\nl3\r\nl4\r\n"}),
+    );
+    let out = e.forge(&["pr", "job-log", GL_URL, "9", "--tail", "3"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.stdout.trim_end_matches('\n'), "red\nl3\nl4");
+    assert_eq!(
+        calls(&e),
+        vec![call("GET", "projects/g%2Fp/jobs/9/trace", false)]
+    );
+    for c in e.api_calls() {
+        assert_eq!(c["escapes"], json!(false), "{c}");
+    }
+}
+
+#[test]
+fn github_job_log_default_tail_is_40_lines() {
+    let mut e = gh();
+    let text: String = (1..=50).map(|i| format!("line{i}\n")).collect();
+    e.route("GET repos/o/r/actions/jobs/9/logs", json!({"__text": text}));
+    let out = e.forge(&["pr", "job-log", GH_URL, "9"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let lines: Vec<&str> = out.stdout.lines().collect();
+    assert_eq!(lines.len(), 40, "{}", out.stdout);
+    assert_eq!(lines[0], "line11");
+    assert_eq!(lines[39], "line50");
+    assert_eq!(
+        calls(&e),
+        vec![call("GET", "repos/o/r/actions/jobs/9/logs", false)]
+    );
+}
+
+#[test]
+fn github_job_log_allows_escape_sequences_and_strips_them() {
+    let mut e = gh();
+    e.route(
+        "GET repos/o/r/actions/jobs/9/logs",
+        json!({"__text": "l1\n\u{1b}[31;1mred\u{1b}[0m\nl3\n"}),
+    );
+    let out = e.forge(&["pr", "job-log", GH_URL, "9", "--tail", "3"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.stdout.trim_end_matches('\n'), "l1\nred\nl3");
+    assert!(!out.stdout.contains('\u{1b}'), "{}", out.stdout);
+    let api = e.api_calls();
+    assert_eq!(api.len(), 1);
+    assert_eq!(api[0]["escapes"], json!(true), "{}", api[0]);
+}
+
+#[test]
+fn job_log_read_error_fails() {
+    let mut e = gl();
+    e.route_error("GET projects/g%2Fp/jobs/9/trace", "404 Not Found");
+    let out = e.forge(&["pr", "job-log", GL_URL, "9"]);
+    assert_ne!(out.code, 0);
+    assert!(out.stdout.is_empty(), "{}", out.stdout);
+    assert!(!out.stderr.is_empty());
 }

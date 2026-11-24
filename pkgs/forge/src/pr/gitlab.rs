@@ -112,6 +112,7 @@ struct MrPipeline {
 
 #[derive(Deserialize)]
 struct Job {
+    id: u64,
     name: String,
     web_url: Option<String>,
     #[serde(default)]
@@ -144,6 +145,7 @@ pub fn checks(api: &Api, project: &str, number: u64) -> Result<Checks> {
             .into_iter()
             .filter(|j| !j.allow_failure)
             .map(|j| FailedJob {
+                id: j.id,
                 name: j.name,
                 url: j.web_url,
             })
@@ -185,16 +187,31 @@ struct Note {
     position: Option<NotePosition>,
 }
 
+#[derive(Deserialize)]
+struct Discussion {
+    id: String,
+    #[serde(default)]
+    individual_note: bool,
+    notes: Vec<Note>,
+}
+
+pub fn job_log_path(project: &str, id: u64) -> String {
+    format!("projects/{}/jobs/{id}/trace", quote(project))
+}
+
 pub fn comments(api: &Api, target: &Target, number: u64) -> Result<Vec<Comment>> {
-    let path = format!(
-        "{}/notes?sort=desc&order_by=created_at&per_page=100",
-        view_path(&target.project, number)
-    );
+    let path = format!("{}/discussions?per_page=100", view_path(&target.project, number));
     let mut comments: Vec<Comment> = api
-        .get::<Vec<Note>>(&path)?
+        .get_ndjson::<Discussion>(&path)?
         .into_iter()
-        .filter(|n| !n.system)
-        .map(|n| {
+        .flat_map(|d| {
+            let thread = (!d.individual_note).then_some(d.id);
+            d.notes
+                .into_iter()
+                .filter(|n| !n.system)
+                .map(move |n| (thread.clone(), n))
+        })
+        .map(|(thread, n)| {
             let inline = n.kind.as_deref() == Some("DiffNote");
             let position = n.position.filter(|_| inline);
             Comment {
@@ -213,6 +230,7 @@ pub fn comments(api: &Api, target: &Target, number: u64) -> Result<Vec<Comment>>
                     .and_then(|p| p.new_path.clone().or_else(|| p.old_path.clone())),
                 line: position.as_ref().and_then(|p| p.new_line.or(p.old_line)),
                 review_state: None,
+                thread,
             }
         })
         .collect();

@@ -36,6 +36,37 @@ impl Api {
         self.decode(&out.stdout)
     }
 
+    pub fn get_text(&self, path: &str) -> Result<String> {
+        let mut args = vec![self.bin, "api", "--hostname", &self.host];
+        if self.bin == "gh" {
+            args.push("--allow-escape-sequences");
+        }
+        args.push(path);
+        Ok(run(&args, true)?.stdout)
+    }
+
+    /// glab only: `--paginate --output ndjson` prints one array element per line.
+    pub fn get_ndjson<T: DeserializeOwned>(&self, path: &str) -> Result<Vec<T>> {
+        let out = run(
+            &[
+                self.bin,
+                "api",
+                "--hostname",
+                &self.host,
+                "--paginate",
+                "--output",
+                "ndjson",
+                path,
+            ],
+            true,
+        )?;
+        out.stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| self.decode(line))
+            .collect()
+    }
+
     pub fn get_pages<T: DeserializeOwned>(&self, path: &str) -> Result<Vec<T>> {
         let out = run(
             &[
