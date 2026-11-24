@@ -5,7 +5,7 @@ metadata:
   namespace: navidrome
 spec:
   instances: 1
-  imageName: ghcr.io/cloudnative-pg/postgresql:18.6-system-trixie@sha256:5efb66993894055f0aa50bd94337c6c4ff2e2129f4d433c527151aebbf283fb0
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.6-system-trixie@sha256:48a0038fdd9672d12853d5300666b2592f97f9d34a993ea42e3ecb5a9a5e43e3
   bootstrap:
     initdb:
       database: audiomuse
