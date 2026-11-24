@@ -96,7 +96,6 @@ Cluster:
 - k3s `--vpn-auth=name=tailscale` runs `tailscale up --reset` on every start: use `joinKey=none` once logged in. To join: stop k3s, `tailscale up --auth-key=<single-use tagged key>`, start k3s.
 - Velero schedules accept `CRON_TZ=`. fs-backup copies only the volumes of running pods.
 - CNPG: the pre-backup `pg_dump -Fc` hook omits per-database `ALTER DATABASE ... SET` settings (Immich `vchordrq.probes`, `search_path`). Record them from `pg_db_role_setting` and re-apply them after a restore.
-- Traefik rejects an encoded `%23` in paths by default: the Synapse alias lookup needs `allowEncodedHash` on the entrypoint.
 - Helm v4: before disabling a chart's own Gateway/GatewayClass, ship `helm.sh/resource-policy: keep` in a separate change (adding it in the same change deletes the resource).
 - Matrix bridges (mautrix):
   - Wiping a bridge DB forgets the management room: use `!wa` or a fresh DM.
