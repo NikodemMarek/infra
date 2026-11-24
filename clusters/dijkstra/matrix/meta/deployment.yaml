@@ -34,7 +34,7 @@ spec:
             claimName: meta-data
       containers:
         - name: meta
-          image: dock.mau.dev/mautrix/meta:v0.2610.0@sha256:ddb17fb65f52e2166ed73643f47b95a4638521150f7434087f4e0423680b0b1e
+          image: dock.mau.dev/mautrix/meta:v0.2611.0@sha256:b8928aaec0ac37ddaf5e04cded685c2503dafc3bf084737147a4d9ad342c299b
           command: ["/usr/bin/mautrix-meta", "-c", "/config/config.yaml", "-n"]
           workingDir: /data
           env:
