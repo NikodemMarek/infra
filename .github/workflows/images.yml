@@ -1,0 +1,46 @@
+name: images
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  matrix-gateway:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          extra_nix_config: |
+            extra-trusted-public-keys = nix-cache-1:WFfV/XlLBXZdMcKtaAEB4MSIQlXf6FYa6rqGxxmUcw0=
+            connect-timeout = 5
+            fallback = true
+      - run: nix build --out-link "$RUNNER_TEMP/image" .#matrix-gateway-image
+      - name: push
+        if: github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          nix run --inputs-from . nixpkgs#skopeo -- --insecure-policy copy --quiet \
+            --dest-creds "$GITHUB_ACTOR:$GITHUB_TOKEN" \
+            "docker-archive:$RUNNER_TEMP/image" docker://ghcr.io/nikodemmarek/matrix-gateway:main
