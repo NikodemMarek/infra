@@ -861,15 +861,16 @@
         ]
       },
       "locked": {
-        "lastModified": 1794406953,
-        "narHash": "sha256-XwYkIxStIj40zohK2dYkrzL/37xjmik0zKIxZ8Qn6A0=",
-        "owner": "Papayah",
+        "lastModified": 1795285765,
+        "narHash": "sha256-eGbszhD/zJJkVGi0XwEa5ls7IAIooVFjxqLM9arKOgY=",
+        "owner": "NikodemMarek",
         "repo": "outlay",
-        "rev": "48cfde2e37aa1959a9960ab17984595843669116",
+        "rev": "f7b9513a964c06a7e579341108ab9a8478120ac5",
         "type": "github"
       },
       "original": {
-        "owner": "Papayah",
+        "owner": "NikodemMarek",
+        "ref": "nm/feat-nix-watch-module",
         "repo": "outlay",
         "type": "github"
       }
