@@ -9,7 +9,7 @@ use crate::agent::runtime_dir;
 use crate::cmd::which;
 use crate::jj::Jj;
 use crate::procs::{claude_sessions, in_use, live_claudes, session_procs, Claude};
-use crate::record::{now, write_error, Record, Records};
+use crate::record::{now, write_error, Record, Records, MATE_KIND};
 use crate::shpool::Shpool;
 use crate::workspace::{
     agent_workspace, ask_lost, basename, confirm, is_dir, is_gitlab, realpath, recent, remove,
@@ -216,12 +216,27 @@ fn killed_note(killed: &[Stopped]) -> String {
     )
 }
 
+/// The sessions reap and prune leave alone: first mates that are not done or reaped. A mate's repo has no work to
+/// merge, so its stack always reads as merged.
+fn kept_sessions(records: &[(String, Record)]) -> HashSet<String> {
+    records
+        .iter()
+        .filter(|(_, r)| {
+            r.kind.as_deref() == Some(MATE_KIND)
+                && r.reaped.is_none()
+                && r.status.as_deref() != Some("done")
+        })
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
 /// Removes the workspaces whose stack is merged into trunk and that hold nothing else (`jj stack status`), not
 /// modified within the last hour. Those in use go too if the only users are idle Claude sessions in detached shpool
 /// sessions, which are killed along with their background jobs. gitlab-context's (gl-*) are left to `gitlab-context gc`,
 /// which knows when they are reused. Directories jj cannot read (failing to load) are deleted only after asking once
 /// for all of them; with --yes they are kept, as they may hold unsnapshotted edits.
 pub fn cmd_prune(a: PruneArgs) -> Result<(), String> {
+    let kept = kept_sessions(&Records::new().load_all());
     let mut broken: Vec<(String, String, String, Vec<String>)> = vec![];
     for repo in repos() {
         let home = format!("{}/{repo}", root());
@@ -239,7 +254,11 @@ pub fn cmd_prune(a: PruneArgs) -> Result<(), String> {
         };
         for name in names {
             let d = format!("{home}.agents/{name}");
-            if is_gitlab(&name) || !is_dir(&format!("{d}/.jj")) || recent(&d) {
+            if kept.contains(&name)
+                || is_gitlab(&name)
+                || !is_dir(&format!("{d}/.jj"))
+                || recent(&d)
+            {
                 continue;
             }
             if !in_use(&d, &HashSet::new()) && !Jj::in_dir(&d).loads() {
@@ -413,10 +432,11 @@ fn stuck(c: &Claude) -> bool {
 }
 
 /// (shpool session, working directory, Claude session id) of the detached shpool sessions whose Claudes are all idle
-/// (or stuck on a permission prompt) for IDLE_LIMIT, sorted by name.
+/// (or stuck on a permission prompt) for IDLE_LIMIT, sorted by name; the sessions in kept are never listed.
 fn idle_sessions(
     claudes: &[Claude],
     state: &HashMap<String, String>,
+    kept: &HashSet<String>,
     now: f64,
 ) -> Vec<(String, String, String)> {
     let mut groups: BTreeMap<&str, Vec<&Claude>> = BTreeMap::new();
@@ -427,7 +447,7 @@ fn idle_sessions(
     }
     let mut found = vec![];
     for (name, members) in groups {
-        if state.get(name).map(String::as_str) != Some("disconnected") {
+        if kept.contains(name) || state.get(name).map(String::as_str) != Some("disconnected") {
             continue;
         }
         let all_idle = members.iter().all(|c| {
@@ -484,6 +504,7 @@ pub fn cmd_reap() -> Result<(), String> {
             Some((realpath(ws), name.clone()))
         })
         .collect();
+    let kept = kept_sessions(&records);
     let deadline = Instant::now() + REAP_DEADLINE;
     for (i, (name, record)) in records.iter().enumerate() {
         if Instant::now() > deadline {
@@ -493,10 +514,12 @@ pub fn cmd_reap() -> Result<(), String> {
             );
             break;
         }
-        reap_record(name, record, started, &workspaces, deadline, &mut seen);
+        if !kept.contains(name) {
+            reap_record(name, record, started, &workspaces, deadline, &mut seen);
+        }
     }
     let mut failed = false;
-    let idle = idle_sessions(&live_claudes(), &Shpool.list()?, now());
+    let idle = idle_sessions(&live_claudes(), &Shpool.list()?, &kept, now());
     for (name, cwd, id) in idle {
         if seen.contains(&name) {
             continue;

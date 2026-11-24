@@ -16,12 +16,16 @@ fn is_stamp(name: &str, prefix: &str) -> bool {
 }
 
 fn started(out: &Out) -> String {
+    started_in(out, "repo")
+}
+
+fn started_in(out: &Out, repo: &str) -> String {
     let lines = out.stderr_lines();
     let n = lines.len();
     assert!(n >= 2, "stderr: {}", out.stderr);
     let name = lines[n - 2]
         .strip_prefix("jw: started ")
-        .and_then(|s| s.strip_suffix(" in repo"))
+        .and_then(|s| s.strip_suffix(&format!(" in {repo}")))
         .unwrap_or_else(|| panic!("no started line in: {}", out.stderr))
         .to_string();
     assert_eq!(lines[n - 1], format!("jw attach {name}"));
@@ -1619,4 +1623,495 @@ fn rn9_hostile_body_stays_quoted() {
         assert!(line.starts_with("  > "), "{line:?}");
     }
     assert!(!quoted.contains("@~/.ssh"), "{quoted}");
+}
+
+fn mate_home(e: &Env) -> std::path::PathBuf {
+    e.root.join("mate")
+}
+
+fn mate_prompt(e: &Env) -> String {
+    e.dir.join("claude/mate.md").to_str().unwrap().to_string()
+}
+
+/// The mate repo with a commit on bookmark `main`, as Env::repo makes `repo`.
+fn mate_repo(e: &Env) -> std::path::PathBuf {
+    let home = mate_home(e);
+    e.jj(&e.root, &["git", "init", "mate"]);
+    fs::write(home.join("file"), "content\n").unwrap();
+    e.jj(&home, &["commit", "-m", "init"]);
+    e.jj(&home, &["bookmark", "create", "main", "-r", "@-"]);
+    home
+}
+
+/// A jj workspace `<home>.agents/<name>` on main.
+fn workspace_of(e: &Env, home: &Path, name: &str) -> std::path::PathBuf {
+    let agents = format!("{}.agents", home.display());
+    let d = Path::new(&agents).join(name);
+    fs::create_dir_all(&agents).unwrap();
+    e.jj(
+        home,
+        &[
+            "workspace",
+            "add",
+            "--name",
+            name,
+            "-r",
+            "main",
+            d.to_str().unwrap(),
+        ],
+    );
+    d
+}
+
+/// A transcript `id` of the repo at home whose cwd is ws.
+fn write_transcript(e: &Env, home: &Path, id: &str, ws: &Path) {
+    let key: String = home
+        .to_str()
+        .unwrap()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    assert!(key.len() <= 64, "test dir too long: {key}");
+    let d = e.dir.join("claude/projects").join(key);
+    fs::create_dir_all(&d).unwrap();
+    let line = json!({"type":"user","cwd":ws,"message":{"content":"hello"}});
+    fs::write(d.join(format!("{id}.jsonl")), format!("{line}\n")).unwrap();
+}
+
+fn shpool_lines(e: &Env) -> Vec<String> {
+    match fs::read_to_string(e.logs.join("shpool.log")) {
+        Ok(s) => s.lines().map(str::to_string).collect(),
+        Err(_) => vec![],
+    }
+}
+
+fn shpool_starts(e: &Env) -> Vec<String> {
+    shpool_lines(e)
+        .into_iter()
+        .filter(|l| l.contains(" -c "))
+        .collect()
+}
+
+/// The name of the one session started, checked to run in dir without a ttl.
+fn mate_start(e: &Env, dir: &Path) -> String {
+    let starts = shpool_starts(e);
+    assert_eq!(starts.len(), 1, "{:?}", shpool_lines(e));
+    let words: Vec<&str> = starts[0].split_whitespace().collect();
+    assert!(!words.contains(&"--ttl"), "{}", starts[0]);
+    assert!(words.contains(&"-b"), "{}", starts[0]);
+    assert!(words.contains(&dir.to_str().unwrap()), "{}", starts[0]);
+    words.last().unwrap().to_string()
+}
+
+#[test]
+fn m1_mate_fresh_start() {
+    let e = Env::new();
+    e.jw(&e.root, &["mate"]).ok();
+    assert!(mate_home(&e).join(".jj").is_dir());
+
+    let starts = shpool_starts(&e);
+    assert_eq!(starts.len(), 1, "{:?}", shpool_lines(&e));
+    let name = starts[0].split_whitespace().last().unwrap().to_string();
+    assert!(is_stamp(&name, "s-"), "session name: {name}");
+    let ws = e.root.join("mate.agents").join(&name);
+    assert!(ws.join(".jj").is_dir());
+    assert_eq!(mate_start(&e, &ws), name);
+    let lines = shpool_lines(&e);
+    assert!(
+        lines.last().unwrap().ends_with(&format!("attach {name}")),
+        "{lines:?}"
+    );
+
+    let log = e.log("claude.log");
+    assert_eq!(
+        claude_args(&log),
+        ["--append-system-prompt-file", mate_prompt(&e).as_str()]
+    );
+    assert_eq!(
+        log.lines().find_map(|l| l.strip_prefix("pwd=")),
+        Some(ws.to_str().unwrap())
+    );
+    let env = claude_env(&log);
+    assert!(
+        env.contains(&format!("AGENT_SESSION={name}").as_str()),
+        "{env:?}"
+    );
+
+    let r = e.record(&name);
+    assert_eq!(r["kind"], "mate");
+    assert_eq!(r["workspace"], ws.to_str().unwrap());
+}
+
+#[test]
+fn m2_mate_uses_existing_repo() {
+    let e = Env::new();
+    let home = mate_repo(&e);
+    e.jw(&e.root, &["mate"]).ok();
+    let starts = shpool_starts(&e);
+    assert_eq!(starts.len(), 1, "{:?}", shpool_lines(&e));
+    let name = starts[0].split_whitespace().last().unwrap().to_string();
+    let ws = e.root.join("mate.agents").join(&name);
+    assert!(ws.join("file").is_file(), "workspace not on main");
+    let listed = e.jj(&home, &["workspace", "list", "-T", "name ++ \"\\n\""]);
+    assert!(listed.lines().any(|l| l == name), "workspaces: {listed}");
+    assert_eq!(e.record(&name)["kind"], "mate");
+}
+
+#[test]
+fn m3_mate_refused_in_event_session() {
+    let e = Env::new();
+    let out = e.jw_env(
+        &e.root,
+        &[
+            ("AGENT_ORIGIN", "event:gitlab-note"),
+            ("AGENT_SESSION", "s1"),
+        ],
+        &["mate"],
+    );
+    assert_eq!(out.code, 1, "{}", out.stderr);
+    assert!(out.stderr.contains("event sessions"), "{}", out.stderr);
+    assert!(shpool_lines(&e).is_empty());
+    assert!(!mate_home(&e).exists());
+    assert!(!e.root.join("mate.agents").exists());
+    assert!(!e.logs.join("claude.log").exists());
+    assert!(!e.state.join("agent-sessions").exists());
+}
+
+#[test]
+fn m4_several_mates() {
+    let e = Env::new();
+    e.jw(&e.root, &["mate"]).ok();
+    e.jw(&e.root, &["mate"]).ok();
+    let starts = shpool_starts(&e);
+    assert_eq!(starts.len(), 2, "{:?}", shpool_lines(&e));
+    let names: Vec<&str> = starts
+        .iter()
+        .map(|s| s.split_whitespace().last().unwrap())
+        .collect();
+    assert_ne!(names[0], names[1]);
+    for (s, name) in starts.iter().zip(&names) {
+        assert!(!s.contains("--ttl"), "{s}");
+        let r = e.record(name);
+        assert_eq!(r["kind"], "mate");
+        assert_eq!(
+            r["workspace"],
+            e.root.join("mate.agents").join(name).to_str().unwrap()
+        );
+    }
+}
+
+#[test]
+fn m5_agent_still_uses_ttl() {
+    let e = Env::new();
+    e.repo();
+    let out = e.jw(&e.root, &["agent", "-d", "repo", "hi"]);
+    out.ok();
+    let name = started(&out);
+    let starts = shpool_starts(&e);
+    assert_eq!(starts.len(), 1, "{starts:?}");
+    assert!(starts[0].contains("--ttl 1d"), "{}", starts[0]);
+    assert_eq!(e.record(&name)["kind"], "task");
+    assert!(!claude_args(&e.log("claude.log")).contains(&"--append-system-prompt-file"));
+}
+
+#[test]
+fn m6_resume_session_mate() {
+    let e = Env::new();
+    let home = mate_repo(&e);
+    let name = "s-1124-000001";
+    let ws = workspace_of(&e, &home, name);
+    e.write_record(
+        name,
+        &format!(r#"{{"kind":"mate","workspace":"{}"}}"#, ws.display()),
+    );
+    write_transcript(&e, &home, "mate-id", &ws);
+
+    let out = e.jw(&e.root, &["resume", "-d", "--session", name]);
+    out.ok();
+    assert_eq!(started_in(&out, "mate"), name);
+    assert_eq!(mate_start(&e, &ws), name);
+    let log = e.log("claude.log");
+    assert_eq!(
+        claude_args(&log),
+        [
+            "--append-system-prompt-file",
+            mate_prompt(&e).as_str(),
+            "--resume",
+            "mate-id"
+        ]
+    );
+    assert!(claude_env(&log).contains(&format!("AGENT_SESSION={name}").as_str()));
+    let r = e.record(name);
+    assert_eq!(r["kind"], "mate");
+    assert_eq!(r["workspace"], ws.to_str().unwrap());
+}
+
+#[test]
+fn m7_resume_session_task() {
+    let e = Env::new();
+    let home = e.repo();
+    let name = "s-1124-000002";
+    let ws = e.workspace(name);
+    e.write_record(
+        name,
+        &format!(r#"{{"kind":"task","workspace":"{}"}}"#, ws.display()),
+    );
+    write_transcript(&e, &home, "task-id", &ws);
+
+    let out = e.jw(&e.root, &["resume", "-d", "--session", name]);
+    out.ok();
+    assert_eq!(started(&out), name);
+    let starts = shpool_starts(&e);
+    assert_eq!(starts.len(), 1, "{:?}", shpool_lines(&e));
+    assert!(starts[0].contains("--ttl 1d"), "{}", starts[0]);
+    assert_eq!(claude_args(&e.log("claude.log")), ["--resume", "task-id"]);
+    assert_eq!(e.record(name)["kind"], "task");
+}
+
+#[test]
+fn m8_picker_resume_mate_workspace() {
+    let e = Env::new();
+    let home = mate_repo(&e);
+    let name = "s-1124-000003";
+    let ws = workspace_of(&e, &home, name);
+    e.write_record(
+        name,
+        &format!(r#"{{"kind":"mate","workspace":"{}"}}"#, ws.display()),
+    );
+    write_transcript(&e, &home, "mate-id", &ws);
+
+    let out = e.jw(&e.root, &["resume", "-d", "mate"]);
+    out.ok();
+    assert_eq!(started_in(&out, "mate"), name);
+    assert_eq!(mate_start(&e, &ws), name);
+    assert_eq!(
+        claude_args(&e.log("claude.log")),
+        [
+            "--append-system-prompt-file",
+            mate_prompt(&e).as_str(),
+            "--resume",
+            "mate-id"
+        ]
+    );
+    assert_eq!(e.record(name)["kind"], "mate");
+}
+
+#[test]
+fn m9_prune_keeps_unreaped_mate_records() {
+    let e = Env::new();
+    e.write_record("mate-old", r#"{"kind":"mate"}"#);
+    e.write_record("mate-reaped", r#"{"kind":"mate","reaped":1700000000}"#);
+    e.write_record("stale", r#"{"kind":"task"}"#);
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(8 * 86400);
+    for n in ["mate-old", "mate-reaped", "stale"] {
+        fs::File::open(e.record_path(n))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+    }
+    e.jw_env(
+        &e.home,
+        &[("AGENT_SESSION", "fresh")],
+        &["session", "status", "busy"],
+    )
+    .ok();
+    assert!(e.record_path("fresh").exists());
+    assert!(!e.record_path("stale").exists(), "control: prune ran");
+    assert!(!e.record_path("mate-reaped").exists());
+    assert!(e.record_path("mate-old").exists());
+}
+
+#[test]
+fn m10_done_in_mate() {
+    let e = Env::new();
+    let name = "s-1124-000004";
+    e.write_record(name, r#"{"kind":"mate","status":"busy"}"#);
+    let out = e.jw_env(&e.home, &[("AGENT_SESSION", name)], &["done"]);
+    out.ok();
+    assert!(
+        out.stderr.contains(&format!("jw: {name} is done")),
+        "{}",
+        out.stderr
+    );
+    let r = e.record(name);
+    assert_eq!(r["status"], "done");
+    assert_eq!(r["kind"], "mate");
+}
+
+/// Resumes through the picker the session of kind whose shpool name is taken (live); returns the output and the workspace.
+fn resume_taken(e: &Env, kind: &str) -> (Out, std::path::PathBuf) {
+    let name = "s-1124-000005";
+    let (home, ws) = if kind == "mate" {
+        let home = mate_repo(e);
+        let ws = workspace_of(e, &home, name);
+        (home, ws)
+    } else {
+        (e.repo(), e.workspace(name))
+    };
+    e.write_record(
+        name,
+        &format!(r#"{{"kind":"{kind}","workspace":"{}"}}"#, ws.display()),
+    );
+    write_transcript(e, &home, "old-id", &ws);
+    fs::write(e.dir.join("shpool-state"), format!("{name} disconnected\n")).unwrap();
+
+    let repo = home.file_name().unwrap().to_str().unwrap();
+    let out = e.jw(&e.root, &["resume", "-d", repo]);
+    out.ok();
+    let new = started_in(&out, repo);
+    assert_ne!(new, name);
+    assert!(is_stamp(&new, "s-"), "session name: {new}");
+    assert!(
+        !shpool_lines(e).iter().any(|l| l.contains("kill")),
+        "{:?}",
+        shpool_lines(e)
+    );
+    let r = e.record(&new);
+    assert_eq!(r["kind"], kind);
+    assert_eq!(e.record(name)["kind"], kind);
+    (out, ws)
+}
+
+#[test]
+fn m11_resume_taken_mate_gets_new_name() {
+    let e = Env::new();
+    let (out, ws) = resume_taken(&e, "mate");
+    let new = started_in(&out, "mate");
+    assert_eq!(mate_start(&e, &ws), new);
+    assert_eq!(
+        claude_args(&e.log("claude.log")),
+        [
+            "--append-system-prompt-file",
+            mate_prompt(&e).as_str(),
+            "--resume",
+            "old-id"
+        ]
+    );
+}
+
+#[test]
+fn m12_resume_taken_task_gets_new_name() {
+    let e = Env::new();
+    let (out, _) = resume_taken(&e, "task");
+    let new = started(&out);
+    let starts = shpool_starts(&e);
+    assert_eq!(starts.len(), 1, "{:?}", shpool_lines(&e));
+    assert!(starts[0].contains("--ttl 1d"), "{}", starts[0]);
+    assert!(starts[0].ends_with(&new), "{}", starts[0]);
+    assert_eq!(claude_args(&e.log("claude.log")), ["--resume", "old-id"]);
+}
+
+#[test]
+fn m13_resume_mate_with_gone_workspace() {
+    let e = Env::new();
+    e.jw(&e.root, &["mate"]).ok();
+    let home = mate_home(&e);
+    let alias = e.jj(&home, &["config", "list", "--repo", "revset-aliases"]);
+    assert!(
+        alias.contains("trunk()") && alias.contains("main"),
+        "{alias}"
+    );
+    let starts = shpool_starts(&e);
+    let name = starts[0].split_whitespace().last().unwrap().to_string();
+    let ws = e.root.join("mate.agents").join(&name);
+    write_transcript(&e, &home, "mate-id", &ws);
+    e.jj(&home, &["workspace", "forget", &name]);
+    fs::remove_dir_all(&ws).unwrap();
+    fs::remove_file(e.dir.join("shpool-state")).unwrap();
+    fs::remove_file(e.logs.join("shpool.log")).unwrap();
+
+    let out = e.jw(&e.root, &["resume", "-d", "--session", &name]);
+    out.ok();
+    assert_eq!(started_in(&out, "mate"), name);
+    assert!(ws.join(".jj").is_dir(), "workspace not recreated");
+    assert_eq!(mate_start(&e, &ws), name);
+    assert_eq!(
+        claude_args(&e.log("claude.log")),
+        [
+            "--append-system-prompt-file",
+            mate_prompt(&e).as_str(),
+            "--resume",
+            "mate-id"
+        ]
+    );
+    assert_eq!(e.record(&name)["kind"], "mate");
+}
+
+#[test]
+fn m14_mate_without_remote_has_no_fetch_error() {
+    let e = Env::new();
+    let out = e.jw(&e.root, &["mate"]);
+    out.ok();
+    assert!(!out.stderr.contains("fetch failed"), "{}", out.stderr);
+    let out = e.jw(&e.root, &["mate"]);
+    out.ok();
+    assert!(!out.stderr.contains("fetch failed"), "{}", out.stderr);
+}
+
+#[test]
+fn m15_prune_leaves_mate_workspace() {
+    let e = Env::new();
+    e.repo();
+    let merged = e.workspace("merged");
+    age(&merged);
+    let home = mate_repo(&e);
+    e.jj(
+        &home,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"trunk()\"",
+            "main",
+        ],
+    );
+    let name = "s-1124-000006";
+    let ws = workspace_of(&e, &home, name);
+    age(&ws);
+    e.write_record(
+        name,
+        &format!(r#"{{"kind":"mate","workspace":"{}"}}"#, ws.display()),
+    );
+    fs::write(e.dir.join("shpool-state"), format!("{name} disconnected\n")).unwrap();
+
+    let out = e.jw(&e.root, &["prune", "--yes"]);
+    out.ok();
+    assert!(
+        out.stderr.contains("jw: removed repo.agents/merged"),
+        "{}",
+        out.stderr
+    );
+    assert!(!merged.exists());
+    assert!(ws.join(".jj").is_dir(), "{}", out.stderr);
+    let listed = e.jj(&home, &["workspace", "list", "-T", "name ++ \"\\n\""]);
+    assert!(listed.lines().any(|l| l == name), "workspaces: {listed}");
+    assert!(
+        !shpool_lines(&e).iter().any(|l| l.contains("kill")),
+        "{:?}",
+        shpool_lines(&e)
+    );
+    assert_eq!(
+        fs::read_to_string(e.dir.join("shpool-state")).unwrap(),
+        format!("{name} disconnected\n")
+    );
+}
+
+#[test]
+fn m16_mate_init_without_main() {
+    let e = Env::new();
+    e.jj(&e.root, &["git", "init", "mate"]);
+    let home = mate_home(&e);
+    e.jw(&e.root, &["mate"]).ok();
+    let starts = shpool_starts(&e);
+    assert_eq!(starts.len(), 1, "{:?}", shpool_lines(&e));
+    let name = starts[0].split_whitespace().last().unwrap().to_string();
+    let ws = e.root.join("mate.agents").join(&name);
+    assert_eq!(mate_start(&e, &ws), name);
+    let main = e.jj(
+        &home,
+        &["log", "--no-graph", "-r", "main", "-T", "commit_id"],
+    );
+    let parent = e.jj(&ws, &["log", "--no-graph", "-r", "@-", "-T", "commit_id"]);
+    assert_eq!(parent, main);
+    assert_eq!(e.record(&name)["kind"], "mate");
 }

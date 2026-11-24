@@ -226,7 +226,12 @@ pub fn repo_home(arg: Option<&str>) -> Result<String, String> {
 }
 
 pub fn fetch(home: &str) {
-    if Jj::in_dir(home).fetch().is_err() {
+    let jj = Jj::in_dir(home);
+    // a repo without a remote (the mate's) has nothing to fetch
+    if jj.has_remotes() == Ok(false) {
+        return;
+    }
+    if jj.fetch().is_err() {
         eprintln!("jw: fetch failed, continuing");
     }
 }

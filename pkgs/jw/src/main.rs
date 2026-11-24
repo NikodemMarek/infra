@@ -66,6 +66,8 @@ enum Command {
     /// resume a Claude session of a repo (any of its workspaces; default: this one) in a shpool session, in its workspace (recreated on trunk() if it is gone)
     #[command(visible_alias = "r")]
     Resume(ResumeArgs),
+    /// start a new first mate, a session that supervises the others
+    Mate,
     /// attach to a Claude shpool session (default: pick one, this repo's first); a unique prefix of the name is enough
     Attach(AttachArgs),
     /// send a message to a running Claude session: delivered right away, between the tool calls of a busy session or as a new turn of an idle one; fails if the session is not running
@@ -262,6 +264,7 @@ fn main() {
         Command::Pick => workspace::cmd_pick(),
         Command::Agent(a) => agent::cmd_agent(a),
         Command::Resume(a) => agent::cmd_resume(a),
+        Command::Mate => agent::cmd_mate(),
         Command::Attach(a) => agent::cmd_attach(a),
         Command::Msg(a) => msg::cmd_msg(a),
         Command::Session { action } => match action {
