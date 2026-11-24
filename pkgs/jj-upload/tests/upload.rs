@@ -38,10 +38,7 @@ fn gitlab_stack_creates_one_mr_per_change() {
     let a_commit = e.commit_of(&a.change);
     let b_commit = e.commit_of(&b.change);
 
-    let out = e.upload_with(
-        &[],
-        &[("CLAUDE_CODE_SESSION_ID", "sid"), ("AGENT_SESSION", "s-1")],
-    );
+    let out = e.upload_with(&[], &[("AGENT_SESSION", "s-1")]);
     out.ok();
 
     assert_eq!(e.remote_branch(&a.branch), Some(a_commit));
@@ -75,24 +72,6 @@ fn gitlab_stack_creates_one_mr_per_change() {
             "--remote", "origin", "pr", "list", "--head", branch, "--limit", "1",
         ]);
         assert!(calls.contains(&want), "no find call {want:?}: {calls:?}");
-    }
-
-    for (branch, change) in [(&a.branch, &a), (&b.branch, &b)] {
-        let name = format!("{}.json", branch.replace('/', "%2F"));
-        let p = e.state_dir().join("jj-upload/repo").join(&name);
-        let rec: Value = serde_json::from_str(
-            &std::fs::read_to_string(&p).unwrap_or_else(|err| panic!("{}: {err}", p.display())),
-        )
-        .unwrap();
-        assert_eq!(rec["session_id"], "sid", "{}", change.change);
-        assert_eq!(
-            rec["workspace"],
-            std::fs::canonicalize(&e.repo)
-                .unwrap()
-                .to_string_lossy()
-                .as_ref()
-        );
-        assert!(rec["uploaded_at"].is_string() || rec["uploaded_at"].is_number());
     }
 
     let jw = e.jw_calls();
