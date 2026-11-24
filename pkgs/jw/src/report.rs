@@ -6,6 +6,9 @@ use crate::poll::quoted_body;
 use crate::record::{valid_name, Records};
 use crate::shpool::Shpool;
 
+/// A turn end whose whole message is this only waits on the session's own background work: not relayed.
+const WAITING: &str = "waiting";
+
 /// The JSON line `{"to", "text"}` that `jw msg` delivers for the claude event in input; None for an event that
 /// reaches no supervisor.
 fn notice(input: &str) -> Result<Option<String>, String> {
@@ -50,9 +53,13 @@ fn notice(input: &str) -> Result<Option<String>, String> {
         .get("body")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let done = record.status.as_deref() == Some("done");
+    if !done && body.trim() == WAITING {
+        return Ok(None);
+    }
     let quoted = quoted_body(body);
     let quoted = quoted.strip_prefix('\n').unwrap_or("  > (no message)");
-    let text = if record.status.as_deref() == Some("done") {
+    let text = if done {
         format!(
             "Session {child}, which reports to you, is done (jw done); its last message:\n\n{quoted}\n\nIt is stopped once it is idle and nobody is attached."
         )

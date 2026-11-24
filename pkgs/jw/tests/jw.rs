@@ -1600,6 +1600,42 @@ fn rn8_other_session_attached_still_notifies() {
 }
 
 #[test]
+fn rn10_waiting_marker_is_dropped() {
+    for body in ["waiting", " waiting\n"] {
+        let e = Env::new();
+        e.write_record("P", r#"{"kind":"task"}"#);
+        e.write_record("C", r#"{"kind":"task","reports_to":"P"}"#);
+        let event = serde_json::json!({"type": "claude.waiting", "session": "C", "body": body});
+        let o = notice(&e, &event.to_string());
+        o.ok();
+        assert_eq!(o.stdout, "", "{body:?}");
+    }
+}
+
+#[test]
+fn rn11_waiting_marker_still_relayed() {
+    for (record, body) in [
+        (
+            r#"{"kind":"task","reports_to":"P","status":"done"}"#,
+            "waiting",
+        ),
+        (
+            r#"{"kind":"task","reports_to":"P"}"#,
+            "waiting for the build",
+        ),
+        (r#"{"kind":"task","reports_to":"P"}"#, "Waiting"),
+    ] {
+        let e = Env::new();
+        e.write_record("P", r#"{"kind":"task"}"#);
+        e.write_record("C", record);
+        let event = serde_json::json!({"type": "claude.waiting", "session": "C", "body": body});
+        let o = notice(&e, &event.to_string());
+        o.ok();
+        assert_eq!(o.json()["to"], "P", "{body:?}");
+    }
+}
+
+#[test]
 fn rn9_hostile_body_stays_quoted() {
     let e = Env::new();
     e.write_record("P", r#"{"kind":"task"}"#);
