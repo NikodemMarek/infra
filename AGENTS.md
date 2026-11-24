@@ -106,3 +106,6 @@ Sessions:
 - The jw job script runs `exec direnv exec . claude ...`, so sessions already have the dev shell env (`KUBECONFIG`): don't export it by hand. `<repo>.agents/*` needs no `direnv allow`; `devenv.nix` edits need a session restart.
 - Claude `/resume` filters by cwd and shows nothing in `<repo>.agents/s-*`: use `jw resume [repo]`.
 - SendMessage cannot reach a just-started session: use `jw msg` or the event router.
+- An event's `type` is its NATS subject and agent-inbox keys on it: route an event to a new consumer with a line in `pkgs/event-handlers/handlers` (exactly `<subject> <handler>`, no arguments), never by republishing it on another subject.
+- jw's `Record` keeps only the keys it declares: an older jw that writes a record drops newer keys.
+- `jw agent` passes everything after the repo to the prompt: an option written there is silently prompt text unless `agent.rs` lists it as "options go before the repo".
