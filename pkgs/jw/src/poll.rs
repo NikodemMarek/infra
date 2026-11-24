@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
-use std::io::{self, ErrorKind, Read};
-use std::process::{Command, Stdio};
+use std::io::{self, Read};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::cmd::output_timeout;
+use crate::cmd::{event_pub, output_timeout};
 use crate::jj::Jj;
 use crate::procs::live_claudes;
 use crate::record::{now, write_error, MrMark, Record, Records};
@@ -24,7 +24,6 @@ const THREAD_ENTRIES: usize = 3;
 const LOGGED_JOBS: usize = 3;
 const LOG_LINES: &str = "40";
 const FORGE_TIMEOUT: Duration = Duration::from_secs(60);
-const PUBLISH_TIMEOUT: Duration = Duration::from_secs(10);
 /// The time after which the poller starts no further record; the records left over wait for the next run.
 const POLL_DEADLINE: Duration = Duration::from_secs(240);
 
@@ -141,7 +140,7 @@ fn quote_lines(text: &str) -> String {
 }
 
 /// The text as `  > ` lines, cut to its first max chars.
-fn quoted_head(text: &str, max: usize) -> String {
+pub(crate) fn quoted_head(text: &str, max: usize) -> String {
     let text = sanitized(text);
     if text.chars().count() > max {
         let head: String = text.chars().take(max).collect();
@@ -257,9 +256,7 @@ fn thread_entries(forge: &str, comments: &[Comment], i: usize) -> Vec<ThreadEntr
     let mut entries: Vec<ThreadEntry> = comments[..i]
         .iter()
         .rev()
-        .filter(|c| {
-            c.thread.as_deref() == Some(thread) && trusted(forge, c.association.as_deref())
-        })
+        .filter(|c| c.thread.as_deref() == Some(thread) && trusted(forge, c.association.as_deref()))
         .take(THREAD_ENTRIES)
         .map(|c| ThreadEntry {
             author: c.author.clone(),
@@ -435,24 +432,7 @@ fn notice(input: &str) -> Result<Option<String>, String> {
 
 fn publish(e: &Event) -> Result<(), String> {
     let payload = serde_json::to_string(e).map_err(|e| e.to_string())?;
-    let mut cmd = Command::new("event-pub");
-    cmd.arg(e.kind()).stderr(Stdio::piped());
-    let out = match output_timeout(&mut cmd, Some(payload), PUBLISH_TIMEOUT) {
-        Ok(Some(out)) => out,
-        Ok(None) => return Err("event-pub timed out".to_string()),
-        Err(e) if e.kind() == ErrorKind::NotFound => return Err("event-pub not found".to_string()),
-        Err(e) => return Err(e.to_string()),
-    };
-    if out.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let last = stderr.lines().rev().map(str::trim).find(|l| !l.is_empty());
-    Err(match (last, out.status.code()) {
-        (Some(line), _) => line.to_string(),
-        (None, Some(code)) => format!("event-pub exited with {code}"),
-        (None, None) => "event-pub killed by a signal".to_string(),
-    })
+    event_pub(e.kind(), &payload)
 }
 
 /// Reads a forge event on stdin and prints the JSON line `{"to", "text"}` that `jw msg` delivers; nothing for an event

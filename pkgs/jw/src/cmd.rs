@@ -6,6 +6,8 @@ use std::process::{Command, Output, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+const PUBLISH_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Runs cmd with input on stdin (null if none) and its stdout captured; None if it did not finish within limit.
 /// stderr is captured only if the caller made it a pipe.
 pub fn output_timeout(
@@ -62,6 +64,30 @@ pub fn output_with_input(cmd: &mut Command, input: &str) -> io::Result<Output> {
         let _ = stdin.write_all(input.as_bytes());
     }
     child.wait_with_output()
+}
+
+/// Publishes an event of kind with payload (a JSON object) through `event-pub`.
+pub fn event_pub(kind: &str, payload: &str) -> Result<(), String> {
+    let mut cmd = Command::new("event-pub");
+    cmd.arg(kind).stderr(Stdio::piped());
+    let out = match output_timeout(&mut cmd, Some(payload.to_string()), PUBLISH_TIMEOUT) {
+        Ok(Some(out)) => out,
+        Ok(None) => return Err("event-pub timed out".to_string()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err("event-pub not found".to_string())
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let last = stderr.lines().rev().map(str::trim).find(|l| !l.is_empty());
+    Err(match (last, out.status.code()) {
+        (Some(line), _) => line.to_string(),
+        (None, Some(code)) => format!("event-pub exited with {code}"),
+        (None, None) => "event-pub killed by a signal".to_string(),
+    })
 }
 
 pub fn stdin_is_tty() -> bool {

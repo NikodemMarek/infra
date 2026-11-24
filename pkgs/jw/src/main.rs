@@ -10,6 +10,8 @@ mod record;
 mod report;
 mod session;
 mod shpool;
+mod systemd;
+mod worker;
 mod workspace;
 mod worktree;
 
@@ -189,8 +191,25 @@ enum SessionAction {
     Status(SessionStatusArgs),
     /// record a workspace this session created, so `jw reap` drops it after jw done if it holds no work (hooks run this); allowed in GitLab event sessions
     Worktree(SessionWorktreeArgs),
-    /// print the records as JSON lines sorted by name, each with its name and whether its shpool session is running
+    /// print the records as JSON lines sorted by name, each with its name, whether it is running (its shpool session; a headless worker's unit) and the numbers of its unacked results
     List(SessionListArgs),
+    /// print the results of a headless worker's finished turns that are not acked, as JSON lines by number
+    Results(SessionResultsArgs),
+    /// delete the results of session NAME up to SEQ
+    Ack(SessionAckArgs),
+}
+
+#[derive(Args)]
+struct SessionResultsArgs {
+    /// session name (default: $AGENT_SESSION)
+    #[arg(short, long)]
+    session: Option<String>,
+}
+
+#[derive(Args)]
+struct SessionAckArgs {
+    name: String,
+    seq: u64,
 }
 
 #[derive(Args)]
@@ -273,6 +292,8 @@ fn main() {
             SessionAction::Status(a) => session::cmd_session_status(a),
             SessionAction::Worktree(a) => session::cmd_session_worktree(a),
             SessionAction::List(a) => session::cmd_session_list(a),
+            SessionAction::Results(a) => session::cmd_session_results(a),
+            SessionAction::Ack(a) => session::cmd_session_ack(a),
         },
         Command::Done => session::cmd_done(),
         Command::Hook { action } => hook::cmd_hook(action),
