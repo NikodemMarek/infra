@@ -84,8 +84,17 @@ jobs:
       - name: deploy
         if: steps.reachable.outputs.online == 'true'
         run: |
-          exec >/dev/null 2>&1
+          exec 3>&1 >/dev/null 2>&1
           nix eval --raw .#knownHosts > "$RUNNER_TEMP/known_hosts"
-          nix run --inputs-from . deploy-rs -- --skip-checks \
-            --ssh-opts "-o UserKnownHostsFile=$RUNNER_TEMP/known_hosts -o StrictHostKeyChecking=yes" \
-            --targets ".#$HOST" -- --override-input secrets "path:$RUNNER_TEMP/secrets"
+          ssh_opts="-o UserKnownHostsFile=$RUNNER_TEMP/known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=15"
+          override=(--override-input secrets "path:$RUNNER_TEMP/secrets")
+          nix run --inputs-from . deploy-rs -- --skip-checks --ssh-opts "$ssh_opts" \
+            --targets ".#$HOST" -- "${override[@]}"
+          # deploy-rs exits 0 after a magic rollback when the late confirm still succeeds
+          want=$(nix eval --raw ".#deploy.nodes.$HOST.profiles.system.path" "${override[@]}")
+          # shellcheck disable=SC2086
+          got=$(ssh $ssh_opts "maintenance@$HOST" readlink -f /nix/var/nix/profiles/system) || true
+          if [ "$got" != "$want" ]; then
+            echo "::error::$HOST runs ${got:-unknown}, not $want (rolled back?)" >&3
+            exit 1
+          fi
