@@ -2,8 +2,13 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
+use serde::Serialize;
+
 use crate::record::{now, valid_name, Record, Records};
-use crate::{SessionGetArgs, SessionSetArgs, SessionStatusArgs, SessionWorktreeArgs};
+use crate::shpool::Shpool;
+use crate::{
+    SessionGetArgs, SessionListArgs, SessionSetArgs, SessionStatusArgs, SessionWorktreeArgs,
+};
 
 const URL_MAX: usize = 2048;
 
@@ -52,6 +57,36 @@ pub fn cmd_session_get(a: SessionGetArgs) -> Result<(), String> {
         "{}",
         serde_json::to_string(&record).map_err(|e| e.to_string())?
     );
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct Listed<'a> {
+    name: &'a str,
+    running: bool,
+    #[serde(flatten)]
+    record: &'a Record,
+}
+
+pub fn cmd_session_list(a: SessionListArgs) -> Result<(), String> {
+    if let Some(name) = a.reports_to.as_deref().filter(|name| !valid_name(name)) {
+        return Err(format!("invalid session name: '{name}'"));
+    }
+    let running = Shpool.list()?;
+    for (name, record) in Records::new().load_all() {
+        if a.reports_to.is_some() && record.reports_to != a.reports_to {
+            continue;
+        }
+        let listed = Listed {
+            name: &name,
+            running: running.contains_key(&name),
+            record: &record,
+        };
+        println!(
+            "{}",
+            serde_json::to_string(&listed).map_err(|e| e.to_string())?
+        );
+    }
     Ok(())
 }
 

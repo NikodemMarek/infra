@@ -70,7 +70,7 @@ enum Command {
     Attach(AttachArgs),
     /// send a message to a running Claude session: delivered right away, between the tool calls of a busy session or as a new turn of an idle one; fails if the session is not running
     Msg(MsgArgs),
-    /// read or update the record of an agent session (kind, title, description, url, workspace, mrs, worktrees), a JSON file in $XDG_STATE_HOME/agent-sessions that agent-inbox and the notifications show
+    /// read, list or update the records of agent sessions (kind, title, description, url, workspace, mrs, worktrees), a JSON file in $XDG_STATE_HOME/agent-sessions that agent-inbox and the notifications show
     Session {
         #[command(subcommand)]
         action: SessionAction,
@@ -187,6 +187,15 @@ enum SessionAction {
     Status(SessionStatusArgs),
     /// record a workspace this session created, so `jw reap` drops it after jw done if it holds no work (hooks run this); allowed in GitLab event sessions
     Worktree(SessionWorktreeArgs),
+    /// print the records as JSON lines sorted by name, each with its name and whether its shpool session is running
+    List(SessionListArgs),
+}
+
+#[derive(Args)]
+struct SessionListArgs {
+    /// only the sessions that report to the session NAME
+    #[arg(long, value_name = "NAME")]
+    reports_to: Option<String>,
 }
 
 #[derive(Args)]
@@ -260,6 +269,7 @@ fn main() {
             SessionAction::Set(a) => session::cmd_session_set(a),
             SessionAction::Status(a) => session::cmd_session_status(a),
             SessionAction::Worktree(a) => session::cmd_session_worktree(a),
+            SessionAction::List(a) => session::cmd_session_list(a),
         },
         Command::Done => session::cmd_done(),
         Command::Hook { action } => hook::cmd_hook(action),

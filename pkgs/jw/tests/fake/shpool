@@ -5,6 +5,7 @@ cmd=$1
 shift
 case "$cmd" in
 list)
+	[ -e "$SHPOOL_STATE.fail" ] && exit 1
 	echo "NAME CREATED_AT STATUS"
 	if [ -f "$SHPOOL_STATE" ]; then
 		while read -r n s; do
