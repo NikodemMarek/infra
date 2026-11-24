@@ -1,8 +1,4 @@
-{
-  lib,
-  pkgs,
-  ...
-}: {
+{lib, ...}: {
   imports = [
     ./hardware-configuration.nix
 
@@ -56,7 +52,6 @@
 
     k3s = {
       role = "server";
-      images = [pkgs.matrix-gateway-image];
       extraFlags = [
         "--disable=traefik"
         "--disable-cloud-controller"
