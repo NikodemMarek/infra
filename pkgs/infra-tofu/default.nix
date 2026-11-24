@@ -5,14 +5,13 @@
   opentofu,
   bws-project,
 }: let
-  tofu = opentofu.withPlugins (p: [p.cloudflare_cloudflare p.tailscale_tailscale p.oracle_oci]);
   keys = builtins.attrNames (builtins.fromTOML (builtins.readFile ../../secretspec.toml)).profiles.tofu;
 in
   # OpenTofu in the current directory with the secrets of the Bitwarden Secrets
   # Manager project `tofu` (the keys of the secretspec profile `tofu`) in its environment.
   writeShellApplication {
     name = "infra-tofu";
-    runtimeInputs = [bws-project jq tofu];
+    runtimeInputs = [bws-project jq opentofu];
     text = ''
       direct=false
       case "''${1:-}" in

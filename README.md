@@ -176,7 +176,7 @@ OpenTofu in `tofu/` manages what lives outside the repo. State is in the private
 Merging to `main` plans and applies (GitHub environment `tofu`, `BWS_ACCESS_TOKEN` of a read-only machine account). A plan that deletes or replaces anything fails the job: apply it locally after reading the plan, not while the workflow runs.
 
 - To stop managing a resource use `removed { from = ... lifecycle { destroy = false } }`, never just delete the block.
-- Drift: `tofu plan -detailed-exitcode` (exit 2 means changes). After a `flake.lock` update that bumps providers (they come from nixpkgs): `tofu init -upgrade`.
+- Drift: `tofu plan -detailed-exitcode` (exit 2 means changes). Providers come from the OpenTofu registry, pinned in the committed `tofu/.terraform.lock.hcl` (Renovate bumps it); to upgrade by hand: `tofu init -upgrade -backend=false`, commit the lock file.
 - Importing: `import` blocks in `tofu/imports-<provider>.tf`, `tofu plan -generate-config-out=generated.tf` (git-ignored), move the resources into `tofu/<provider>.tf`, apply, delete the imports file.
 - Tailscale: edit the policy only in `tofu/tailscale-policy.json` (console edits are reverted; its `tests` block rejects a policy that breaks server connectivity). Break-glass if an apply locks the cluster out: the console's JSON editor (Access controls).
 - Oracle Cloud: the public IP of `triss` is ephemeral and not managed. `oci.tf` holds every rule of the default security list and route table (console-added ones are removed); keep TCP 22, UDP 51820 (WireGuard hostPort) and the default route. The budget mails as soon as the tenancy spends anything.
