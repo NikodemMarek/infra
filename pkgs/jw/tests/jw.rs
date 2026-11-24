@@ -1225,7 +1225,16 @@ fn a7_agent_reports_to_recorded() {
 
     let out = e.jw(
         &e.root,
-        &["agent", "-d", "--reports-to", "parent", "repo", "--", "hi"],
+        &[
+            "agent",
+            "-d",
+            "--reports-to",
+            "parent",
+            "--interactive",
+            "repo",
+            "--",
+            "hi",
+        ],
     );
     out.ok();
     let name = started(&out);
@@ -3022,4 +3031,173 @@ fn ev1_agent_env_drops_agent_headless() {
         !env.iter().any(|l| l.starts_with("AGENT_HEADLESS")),
         "{env:?}"
     );
+}
+
+/// The name from the last stderr line, which must be `jw: started NAME in repo` (jj noise may precede it).
+fn headless_started(out: &Out) -> String {
+    let lines = out.stderr_lines();
+    lines
+        .last()
+        .unwrap_or_else(|| panic!("empty stderr"))
+        .strip_prefix("jw: started ")
+        .and_then(|s| s.strip_suffix(" in repo"))
+        .unwrap_or_else(|| panic!("no started line in: {}", out.stderr))
+        .to_string()
+}
+
+fn check_headless_start(e: &Env, out: &Out) {
+    out.ok();
+    let name = headless_started(out);
+    assert!(!out.stderr.contains("jw attach"), "{}", out.stderr);
+    let r = e.record(&name);
+    assert_eq!(r["headless"], true);
+    assert_eq!(r["reports_to"], "M");
+    assert_eq!(r["kind"], "task");
+    assert_eq!(r["title"], "brief");
+    assert_eq!(queue_texts(e, &name), ["brief"]);
+    assert!(!e.logs.join("shpool.log").exists());
+    let run = e.log("systemd-run.log");
+    assert!(
+        run.contains(&format!("jw-worker-{name}")),
+        "systemd-run log: {run}"
+    );
+}
+
+#[test]
+fn h3_1_reports_to_detached_is_headless() {
+    let e = Env::new();
+    e.repo();
+    e.write_record("M", r#"{"kind":"mate"}"#);
+    let out = e.jw(
+        &e.root,
+        &["agent", "-d", "--reports-to", "M", "repo", "--", "brief"],
+    );
+    check_headless_start(&e, &out);
+}
+
+#[test]
+fn h3_2_reports_to_without_d_is_headless_without_attach() {
+    let e = Env::new();
+    e.repo();
+    e.write_record("M", r#"{"kind":"mate"}"#);
+    let out = e.jw(
+        &e.root,
+        &["agent", "--reports-to", "M", "repo", "--", "brief"],
+    );
+    check_headless_start(&e, &out);
+}
+
+#[test]
+fn h3_3_interactive_overrides_headless() {
+    let e = Env::new();
+    e.repo();
+    e.write_record("M", r#"{"kind":"mate"}"#);
+    let out = e.jw(
+        &e.root,
+        &[
+            "agent",
+            "-d",
+            "--reports-to",
+            "M",
+            "--interactive",
+            "repo",
+            "--",
+            "x",
+        ],
+    );
+    out.ok();
+    let name = started(&out);
+    assert!(e.record(&name).get("headless").is_none());
+    assert_eq!(e.record(&name)["reports_to"], "M");
+    assert_eq!(shpool_starts(&e).len(), 1, "{:?}", shpool_lines(&e));
+    assert!(!e.logs.join("systemd-run.log").exists());
+}
+
+#[test]
+fn h3_4_headless_needs_a_prompt() {
+    let e = Env::new();
+    e.repo();
+    e.write_record("M", r#"{"kind":"mate"}"#);
+    e.jw(&e.root, &["agent", "-d", "--reports-to", "M", "repo"])
+        .fail("a headless session needs a prompt");
+    assert!(!e.logs.join("shpool.log").exists());
+    assert!(!e.logs.join("systemd-run.log").exists());
+}
+
+#[test]
+fn h3_5_interactive_after_repo_fails() {
+    let e = Env::new();
+    e.repo();
+    e.jw(
+        &e.root,
+        &["agent", "-d", "repo", "--interactive", "--", "x"],
+    )
+    .fail("options go before the repo");
+    assert!(!e.logs.join("shpool.log").exists());
+}
+
+#[test]
+fn h3_6_without_reports_to_stays_interactive() {
+    let e = Env::new();
+    e.repo();
+    let out = e.jw(&e.root, &["agent", "-d", "repo", "--", "x"]);
+    out.ok();
+    let name = started(&out);
+    assert!(e.record(&name).get("headless").is_none());
+    assert_eq!(shpool_starts(&e).len(), 1);
+    assert!(!e.logs.join("systemd-run.log").exists());
+}
+
+#[test]
+fn h3_7_interactive_name_avoids_existing_records() {
+    let e = Env::new();
+    e.repo();
+    let now = chrono::Local::now();
+    let mut taken = Vec::new();
+    for s in -1..=4 {
+        let t = now + chrono::Duration::seconds(s);
+        let name = t.format("s-%m%d-%H%M%S").to_string();
+        e.write_record(&name, r#"{"kind":"task","headless":true}"#);
+        taken.push(name);
+    }
+    let out = e.jw(&e.root, &["agent", "-d", "repo", "--", "x"]);
+    out.ok();
+    let name = started(&out);
+    assert!(!taken.contains(&name), "reused {name}");
+    for t in &taken {
+        assert_eq!(e.record(t)["headless"], true, "record {t} overwritten");
+    }
+    assert!(e.record(&name).get("headless").is_none());
+}
+
+#[test]
+fn h3_8_headless_start_failure_marks_record_done() {
+    let e = Env::new();
+    e.repo();
+    e.write_record("M", r#"{"kind":"mate"}"#);
+    fs::write(
+        e.logs.join("systemd-run.fail"),
+        "Failed to connect to bus\n",
+    )
+    .unwrap();
+    let out = e.jw(
+        &e.root,
+        &["agent", "-d", "--reports-to", "M", "repo", "--", "brief"],
+    );
+    assert_ne!(
+        out.code, 0,
+        "stdout: {}\nstderr: {}",
+        out.stdout, out.stderr
+    );
+    assert!(out.stderr.contains("done"), "{}", out.stderr);
+    let created: Vec<String> = fs::read_dir(e.state.join("agent-sessions"))
+        .unwrap()
+        .map(|d| d.unwrap().file_name().to_string_lossy().into_owned())
+        .filter_map(|f| f.strip_suffix(".json").map(String::from))
+        .filter(|n| n != "M")
+        .collect();
+    assert_eq!(created.len(), 1, "{created:?}");
+    let r = e.record(&created[0]);
+    assert_eq!(r["status"], "done");
+    assert_eq!(r["reports_to"], "M");
 }

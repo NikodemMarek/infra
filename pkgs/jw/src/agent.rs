@@ -14,9 +14,10 @@ use serde_json::{Map, Value};
 use crate::cmd::{output_with_input, stdin_is_tty};
 use crate::jj::Jj;
 use crate::procs::{claude_dir, live_claudes};
-use crate::record::{valid_name, write_error, Record, Records, MATE_KIND};
+use crate::record::{now, valid_name, write_error, Record, Records, MATE_KIND};
 use crate::session::{in_event_session, session_name};
 use crate::shpool::Shpool;
+use crate::worker;
 use crate::workspace::{
     add_workspace, agent_workspace, basename, dirname, fetch, is_dir, is_gitlab, layout, locate,
     pick, realpath, repo_home, repos, resolve_dir, root,
@@ -80,6 +81,7 @@ pub fn cmd_agent(a: AgentArgs) -> Result<(), String> {
     if in_event_session() {
         return Err("event sessions cannot start agents".to_string());
     }
+    let interactive = a.interactive;
     let reports_to = a
         .reports_to
         .map(|name| {
@@ -106,7 +108,7 @@ pub fn cmd_agent(a: AgentArgs) -> Result<(), String> {
                 Some(opt)
                     if matches!(
                         opt,
-                        "-r" | "--revision" | "-d" | "--detach" | "--reports-to"
+                        "-r" | "--revision" | "-d" | "--detach" | "--reports-to" | "--interactive"
                     ) || opt.starts_with("--revision=")
                         || opt.starts_with("--reports-to=") =>
                 {
@@ -133,14 +135,65 @@ pub fn cmd_agent(a: AgentArgs) -> Result<(), String> {
             (home, args)
         }
     };
-    start_agent(
-        &home,
-        a.detach,
-        a.revision,
-        prompt,
-        reports_to.as_deref(),
-        false,
-    )
+    match reports_to.as_deref().filter(|_| !interactive) {
+        Some(supervisor) => start_headless(&home, a.revision, prompt, supervisor),
+        None => start_agent(
+            &home,
+            a.detach,
+            a.revision,
+            prompt,
+            reports_to.as_deref(),
+            false,
+        ),
+    }
+}
+
+/// Starts a headless worker on the prompt in a new workspace of the repo at home: no shpool session, its turns run as
+/// a unit (see worker.rs). The prompt is its first message.
+fn start_headless(
+    home: &str,
+    revision: Option<String>,
+    prompt: &[String],
+    reports_to: &str,
+) -> Result<(), String> {
+    let text = prompt.join(" ");
+    if text.trim().is_empty() {
+        return Err("a headless session needs a prompt".to_string());
+    }
+    let revision = revision.filter(|r| !r.is_empty());
+    let resolve_in = revision.as_ref().and_then(|_| resolve_dir(home));
+    fetch(home);
+    let name = {
+        let _lock = naming_lock(&runtime_dir())?;
+        let records = Records::new();
+        let name = fresh_name(home, |name| records.read(name).is_some());
+        let revision = revision.as_deref().unwrap_or("trunk()");
+        let dir = add_workspace(home, revision, &name, resolve_in.as_deref())?;
+        records
+            .update(&name, |r| {
+                r.merge(task_record(&text, &dir, Some(reports_to)));
+                r.clear_marks();
+                r.headless = true;
+                true
+            })
+            .map_err(|e| write_error(&e))?;
+        name
+    };
+    if let Err(e) = worker::deliver(&name, &text) {
+        // reap retires the workspace of a done record
+        let marked = Records::new().update(&name, |r| {
+            r.status = Some("done".to_string());
+            r.status_at = Some(now());
+            r.waiting_for = None;
+            true
+        });
+        return Err(match marked {
+            Ok(_) => format!("{e}; record {name} marked done"),
+            Err(m) => format!("{e}; record {name} not marked done: {m}"),
+        });
+    }
+    eprintln!("jw: started {name} in {}", basename(home));
+    Ok(())
 }
 
 /// Starts Claude on the prompt in a new workspace of the repo at home (a first mate if mate).
@@ -203,6 +256,31 @@ enum Naming<'a> {
     Resume(&'a str),
 }
 
+/// The lock under which names are picked and taken (session started or record written); held until dropped.
+fn naming_lock(rundir: &str) -> Result<fs::File, String> {
+    let lock_path = format!("{rundir}/jw-agent.lock");
+    let lock = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&lock_path)
+        .map_err(|e| format!("{lock_path}: {e}"))?;
+    lock.lock().map_err(|e| format!("{lock_path}: {e}"))?;
+    Ok(lock)
+}
+
+/// s-<time>, with a suffix while the name is in use or the repo at home has a workspace of it.
+fn fresh_name(home: &str, in_use: impl Fn(&str) -> bool) -> String {
+    let base = Local::now().format("s-%m%d-%H%M%S").to_string();
+    let mut name = base.clone();
+    let mut i = 2;
+    while in_use(&name) || Path::new(&format!("{home}.agents/{name}")).exists() {
+        name = format!("{base}-{i}");
+        i += 1;
+    }
+    name
+}
+
 /// The words of a claude command line: the first mate also gets its role prompt.
 fn claude_argv(mate: bool, args: &[&str]) -> Vec<String> {
     let mut argv = vec!["claude".to_string()];
@@ -234,35 +312,18 @@ fn launch(
 ) -> Result<(), String> {
     let rundir = runtime_dir();
     let name = {
-        // names are picked and taken (session started) under it
-        let lock_path = format!("{rundir}/jw-agent.lock");
-        let lock = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&lock_path)
-            .map_err(|e| format!("{lock_path}: {e}"))?;
-        lock.lock().map_err(|e| format!("{lock_path}: {e}"))?;
+        let _lock = naming_lock(&rundir)?;
         let taken = Shpool.list()?;
+        let records = Records::new();
         let name = match naming {
             Naming::Resume(name) if valid_name(name) && !taken.contains_key(name) => {
                 name.to_string()
             }
-            _ => {
-                let base = Local::now().format("s-%m%d-%H%M%S").to_string();
-                let mut name = base.clone();
-                let mut i = 2;
-                while taken.contains_key(&name)
-                    || Path::new(&format!("{home}.agents/{name}")).exists()
-                {
-                    name = format!("{base}-{i}");
-                    i += 1;
-                }
-                name
-            }
+            _ => fresh_name(home, |name| {
+                taken.contains_key(name) || records.read(name).is_some()
+            }),
         };
         let dir = make_dir(&name)?;
-        let records = Records::new();
         let mut fields = match naming {
             Naming::Resume(_) if records.read(&name).is_some() => Record {
                 workspace: Some(dir.clone()),
