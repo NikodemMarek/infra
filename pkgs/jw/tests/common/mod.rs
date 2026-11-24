@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -11,20 +10,10 @@ use serde_json::Value;
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-const FAKES: &[(&str, &str)] = &[
-    ("shpool", include_str!("../fake/shpool")),
-    ("direnv", include_str!("../fake/direnv")),
-    ("claude", include_str!("../fake/claude")),
-    ("knowledge", include_str!("../fake/knowledge")),
-    ("jj-stack", include_str!("../fake/jj-stack")),
-    ("forge", include_str!("../fake/forge")),
-    ("event-pub", include_str!("../fake/event-pub")),
-    ("gitlab-context", include_str!("../fake/gitlab-context")),
-    (
-        "claude-mcp-defaults",
-        include_str!("../fake/claude-mcp-defaults"),
-    ),
-];
+// Checked in as executables: writing them at runtime races other threads' fork+exec (ETXTBSY).
+pub fn fake_bin() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake")
+}
 
 pub struct Env {
     pub dir: PathBuf,
@@ -55,20 +44,15 @@ impl Env {
             state: dir.join("state"),
             runtime: dir.join("runtime"),
             logs: dir.join("logs"),
-            bin: dir.join("bin"),
+            bin: fake_bin(),
             jj_config: dir.join("jj-config.toml"),
             dir,
         };
-        for d in [&e.root, &e.state, &e.runtime, &e.logs, &e.bin] {
+        for d in [&e.root, &e.state, &e.runtime, &e.logs] {
             fs::create_dir_all(d).unwrap();
         }
         fs::create_dir_all(e.dir.join("config")).unwrap();
         fs::create_dir_all(e.dir.join("claude")).unwrap();
-        for (name, body) in FAKES {
-            let p = e.bin.join(name);
-            fs::write(&p, body).unwrap();
-            fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
-        }
         fs::write(
             &e.jj_config,
             format!(

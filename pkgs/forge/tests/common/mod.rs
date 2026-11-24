@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -89,24 +88,10 @@ impl Env {
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("forge-test-{}-{}", std::process::id(), n));
         let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("bin")).unwrap();
         fs::create_dir_all(dir.join("home")).unwrap();
         fs::create_dir_all(dir.join("fake")).unwrap();
         fs::create_dir_all(dir.join("cwd")).unwrap();
         fs::write(dir.join("jj-config.toml"), JJ_USER).unwrap();
-        let fake = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake/forge");
-        for name in ["gh", "glab"] {
-            let to = dir.join("bin").join(name);
-            fs::write(
-                &to,
-                format!(
-                    "#!/bin/sh\nFAKE_TOOL={name} exec bash {} \"$@\"\n",
-                    fake.display()
-                ),
-            )
-            .unwrap();
-            fs::set_permissions(&to, fs::Permissions::from_mode(0o755)).unwrap();
-        }
         let e = Env {
             cwd: dir.join("cwd"),
             dir,
@@ -173,7 +158,9 @@ impl Env {
         let mut c = Command::new(prog);
         let path = format!(
             "{}:{}",
-            self.dir.join("bin").display(),
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fake/bin")
+                .display(),
             std::env::var("PATH").unwrap_or_default()
         );
         c.current_dir(&self.cwd)

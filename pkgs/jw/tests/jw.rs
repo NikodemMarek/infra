@@ -3,7 +3,7 @@ mod common;
 use std::fs;
 use std::path::Path;
 
-use common::{age, Env, Out};
+use common::{age, fake_bin, Env, Out};
 use serde_json::{json, Value};
 
 fn is_stamp(name: &str, prefix: &str) -> bool {
@@ -978,7 +978,7 @@ fn r8_reap_missing_tools_on_path() {
     fs::create_dir_all(&tools).unwrap();
     let git = which("git").expect("git on PATH");
     std::os::unix::fs::symlink(git, tools.join("git")).unwrap();
-    let path = format!("{}:{}", e.dir.join("bin").display(), tools.display());
+    let path = format!("{}:{}", fake_bin().display(), tools.display());
 
     let out = e.jw_env(&e.root, &[("PATH", &path)], &["reap"]);
     out.ok();
