@@ -335,7 +335,6 @@ fn upload(remote: &str, prefix: &str, revset: &str, draft: bool, dry_run: bool) 
                 let mr = fg.create(&e.branch, &e.target, &e.title, &body, draft)?;
                 eprintln!("  created {}  {}", mr.reference, mr.url);
                 record_session(&e.branch);
-                record_mr(&mr.url);
                 mr
             }
             Some(m) => {
@@ -349,6 +348,7 @@ fn upload(remote: &str, prefix: &str, revset: &str, draft: bool, dry_run: bool) 
                 mr
             }
         };
+        record_mr(&mr.url);
         mrs.push(mr);
     }
 
