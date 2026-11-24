@@ -54,7 +54,7 @@ spec:
               mountPath: /models
       containers:
         - name: llama-server
-          image: ghcr.io/ggml-org/llama.cpp:server-b11541
+          image: ghcr.io/ggml-org/llama.cpp:server-b12679
           args:
             - --host
             - "0.0.0.0"
