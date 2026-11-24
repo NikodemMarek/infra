@@ -11,7 +11,11 @@
 }: let
   notify = callPackage ./notify {};
   session-message = callPackage ./session-message {inherit notify;};
-  forge = callPackage ./forge {inherit session-message;};
+  forge = callPackage ./notice {
+    inherit session-message;
+    name = "forge";
+    subcommand = "forge-notice";
+  };
 
   set = {
     inherit notify session-message forge;
