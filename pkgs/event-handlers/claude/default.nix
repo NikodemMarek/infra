@@ -18,9 +18,7 @@
   # a package following the `gitlab-context prepare` protocol: reads the event
   # on stdin, takes `--checkout=<dir> --task=<text> [--profile=<p>] [--dry-run]`
   # and prints one JSON line: `{"action": "skip", "reason": ...}` or
-  # `{"action": "spawn", "cwd", "context_dir", "session_lock", "workspace"}` or
-  # `{"action": "message", "to": "<session name>", "text": "<text>"}` (the text is
-  # sent to the inbox of the running session `to` with `jw msg`; nothing is started)
+  # `{"action": "spawn", "cwd", "context_dir", "session_lock", "workspace"}`
   # (`context_dir/prompt.md` is the prompt). null: no preparation, claude starts
   # in the main checkout with a prompt built from the event alone.
   # A spawn may also carry `"session": {"id": "<uuid>", "dir": "<abs path>",
@@ -101,25 +99,6 @@
               fi
             else
               echo "context tool: incomplete spawn output: $out" >&2
-            fi
-            ;;
-          message)
-            # \z, not $: the regex of jq also matches before a trailing newline
-            if to=$(jq -er '.to | strings | select(test("^[A-Za-z0-9][A-Za-z0-9._-]*\\z"))' <<<"$out" 2>/dev/null) &&
-              text=$(jq -er '.text | strings | select(test("\\S"))' <<<"$out" 2>/dev/null); then
-              if [[ -n "$dry_run" ]]; then
-                echo "action: message"
-                echo "to: $to"
-                echo "text: $text"
-                exit 0
-              fi
-              if ! ${jw}/bin/jw msg --from gitlab "$to" <<<"$text"; then
-                echo "cannot send the message to session $to" >&2
-                exit 1
-              fi
-              exit 0
-            else
-              echo "context tool: invalid message output: $out" >&2
             fi
             ;;
           *) echo "context tool: unknown action '$action'" >&2 ;;

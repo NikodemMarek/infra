@@ -141,18 +141,12 @@ impl Env {
             .env("PATH", path)
             .env("HOME", self.dir.join("home"))
             .env("XDG_CONFIG_HOME", self.dir.join("home/config"))
-            .env("XDG_STATE_HOME", self.state_dir())
             .env("JJ_CONFIG", self.dir.join("jj-config.toml"))
             .env("JJ_EDITOR", "true")
             .env("FAKE_FORGE_DIR", self.forge_dir())
-            .env_remove("CLAUDE_CODE_SESSION_ID")
             .env_remove("AGENT_SESSION")
             .envs(self.git_env());
         c
-    }
-
-    pub fn state_dir(&self) -> PathBuf {
-        self.dir.join("state")
     }
 
     pub fn forge_dir(&self) -> PathBuf {

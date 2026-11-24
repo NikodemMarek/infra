@@ -12,7 +12,7 @@ mod sync;
 use cmd::{Output, Result};
 use forge::{stack_section, strip_stack, upload_media, Forge, Mr};
 use jj::{choose_bookmark, default_prefix, repr, Commit, Jj, DEFAULT_REVSET, REMOTE_TITLE};
-use record::{record_mr, record_session};
+use record::record_mr;
 use sync::{pull_descriptions, stack_status, sync};
 
 const CONFIG_HELP: &str = "\
@@ -49,11 +49,7 @@ TAB state TAB MR url (or -) TAB title, where state is no-mr, open, closed, chang
 or merged. The last line is `merged` (exit 0; every change is merged into trunk, or there are \
 none), `not merged` (exit 1) or `unknown` (exit 2; the error goes to stderr). It must run from \
 inside the workspace: jj's global flags such as `-R` don't reach it, because it goes through \
-`util exec`.
-
-In a Claude Code session (CLAUDE_CODE_SESSION_ID), the branch of a created MR is recorded at \
-${XDG_STATE_HOME:-~/.local/state}/jj-upload/<repo>/<branch>.json with the workspace and \
-session id.";
+`util exec`.";
 
 /// Push a stack of jj changes as stacked merge/pull requests.
 #[derive(Parser)]
@@ -334,7 +330,6 @@ fn upload(remote: &str, prefix: &str, revset: &str, draft: bool, dry_run: bool) 
                 let body = upload_media(&e.body, &fg)?;
                 let mr = fg.create(&e.branch, &e.target, &e.title, &body, draft)?;
                 eprintln!("  created {}  {}", mr.reference, mr.url);
-                record_session(&e.branch);
                 mr
             }
             Some(m) => {
