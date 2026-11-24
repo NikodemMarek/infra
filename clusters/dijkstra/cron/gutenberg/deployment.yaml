@@ -28,7 +28,7 @@ spec:
             defaultMode: 0755
       containers:
         - name: gutenberg
-          image: alpine:3.20
+          image: alpine:3.24
           command:
             - sh
             - -c
