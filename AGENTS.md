@@ -13,6 +13,13 @@ README.md is the reference (sections Layout, Hosts, Dev shell, Installing a new 
 - The default checkout can lag `trunk()`: read code from a `trunk()` workspace or `jj file show -r 'trunk()' <path>`.
 - Keep the README per-host hardware sections (`geralt`, `yenn`, `regis`: parts, slots, BIOS, MACs) complete when trimming the README.
 - Never run or plan `--privileged` containers or pods, not even to verify something (one damaged a host). Use a device plugin (Intel GPU) or explicit devices plus cgroup rules.
+- Industry standard over clever repo-local: tofu state lives in a remote backend (S3-compatible object storage), not encrypted in git; GitHub is out of tofu scope. Small cluster glue is a stock upstream image plus a ConfigMap (Redpanda Connect, as in `mail-hook`), not an own nix image that needs a deploy and tag pinning per change.
+- Tests use `example.com`, never the real domain; manifests take the real domain from one source (`${DOMAIN}`).
+- The projects root differs per host: take it as an option (jw `projectsRoot`, claude `projectsDir`), never hardcode `$HOME/projects`.
+- Every session starts through `jw agent` (agents and the GitLab event handler included), which always creates a fresh jj workspace on top of `jw new` (start point revision or bookmark, default `trunk()`); no raw shpool/claude launchers, agent-inbox shows only `jw agent` sessions. Session status has one source of truth: the jw session record written by the agent hooks, not Claude's registry.
+- Stack queries are `jj stack <verb>` (e.g. `jj stack status`), not new `jj upload` verbs; bare `jj stack` is the log alias (`pkgs/jujutsu/config.toml`).
+- The event router is the hub for agent/session communication (task dispatch, messages, notifications): producers (agent-inbox, quick-capture) only publish an event, the handler does the work.
+- agent-inbox is one app: new screens are tabs, not views (Tab cycles filter tabs, Shift-Tab goes back); the detail pane carries rich context (MR description) under readable titles. "Chat with Claude" means replying to a stopped agent session from the inbox. Quick-capture popups are a minimal launcher extension (rofi/fuzzel), not a TUI.
 
 ## Check
 
@@ -47,8 +54,7 @@ Agents prepare changes and stacked PRs. Deploying and merging is the user's call
 
 - Merging to `main` deploys `geralt`, `regis` and `triss` (CI); changes under `tofu/` are applied by CI, the cluster by Flux.
 - Hosts: `host-switch` (the current host, `yenn`) or `host-deploy <node>...` (deploy-rs as `maintenance`). A switch does not start or restart user units: `systemctl --user restart <unit>` (e.g. `matrix-inbox`).
-- Sessions have no `BWS_ACCESS_TOKEN`, so `host-deploy` cannot run from them. When asked to deploy servers, merge the PR after the checks and watch the run.
-- Deploying `geralt` while CI cannot reach it: copy the deployed sops file (`manifest.json`, found through `/run/current-system/activate`) into the override dir, then `deploy --skip-checks --hostname <geralt LAN IP> --ssh-opts "<the -J and -o options from the `geralt` gotchas>" .#geralt`.
+- Nothing is deployed by hand, neither by sessions nor by the user: every host, cluster and tofu change goes through the pipeline. When asked to deploy, merge the PR after the checks and watch the run.
 - Cluster: Flux applies merged changes (`flux reconcile kustomization flux-system -n flux-system --with-source` to hurry). The Kustomization has no health checks, so check the pods yourself.
 - Images built into triss (`services.k3s.images`, `imagePullPolicy: Never`, tag = the image's `imageTag`): put the new tag in the deployment, `host-deploy triss` from a checkout that contains every image-changing PR, then merge. Merging first leaves the pod in `ErrImageNeverPull`: `k3s ctr -n k8s.io images import <tar>`, then restart the pod (`buildLayeredImage`'s `imageTag` is the hash of the config derivation, not of the tarball). Changes to `pkgs/matrix-gateway` (its tests included) or nixpkgs change its tag. Remove old images by name; never `crictl rmi --prune`, it drops the imported ones.
 - Avoid `rollout restart` on Flux deployments: a second rollout follows about 30 s later.
@@ -91,3 +97,12 @@ Cluster:
   - mautrix-meta login: the messenger.com cookies from "Copy as cURL".
   - Backfill only covers portals created after it was enabled. WhatsApp history comes only at device link: relink and wipe `/data/whatsapp.db*`.
   - Bump the images about monthly.
+- DNS: kube-dns stays separate; edge/WireGuard clients use one dedicated CoreDNS (app `dns`: the home domain, `cluster.local`, Mullvad DoT upstream); `yenn` keeps its own systemd-resolved; MagicDNS serves only the tailnet hosts (`triss`, `regis`, `roach`, `geralt`).
+- In pods, `pgrep -f` inside `kubectl exec ... sh -c` matches the `sh` itself: anchor the pattern. Copy files in with `kubectl cp`, not a heredoc into `kubectl exec -i`.
+- beets: art jobs can hit the 1Gi memory limit (OOMKilled). ReplayGain runs only on import; backfill with `beet replaygain`.
+
+Sessions:
+
+- The jw job script runs `exec direnv exec . claude ...`, so sessions already have the dev shell env (`KUBECONFIG`): don't export it by hand. `<repo>.agents/*` needs no `direnv allow`; `devenv.nix` edits need a session restart.
+- Claude `/resume` filters by cwd and shows nothing in `<repo>.agents/s-*`: use `jw resume [repo]`.
+- SendMessage cannot reach a just-started session: use `jw msg` or the event router.
