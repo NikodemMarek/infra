@@ -1,5 +1,5 @@
 # infra
-
+smoke added line
 Nix flake monorepo: NixOS hosts, their packages, and the manifests of the k3s cluster `dijkstra` that some of those hosts form. Hosts are impermanent (root is wiped on boot). Secrets live in Bitwarden Secrets Manager: hosts get them as sops files built at deploy time, the cluster through External Secrets Operator. Flux reconciles the cluster. Agent rules are in `AGENTS.md`. Run the commands below from the repo root inside the dev shell.
 
 ## Layout
