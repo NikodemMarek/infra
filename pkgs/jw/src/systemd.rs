@@ -24,20 +24,30 @@ impl Systemd {
         properties: &[&str],
         argv: &[String],
     ) -> Result<(), String> {
-        let mut cmd = Command::new("systemd-run");
-        cmd.args([
-            "--user",
-            "--collect",
-            "--quiet",
-            "--unit",
-            unit,
-            "--working-directory",
-            workdir,
-        ]);
+        let mut cmd = Self::command(unit);
+        cmd.args(["--working-directory", workdir]);
         for &property in properties {
             cmd.args(["--property", property]);
         }
         cmd.arg("--").args(argv);
+        Self::exec(cmd)
+    }
+
+    /// Starts argv as the transient user unit `unit` once delay_secs have passed.
+    pub fn run_later(&self, unit: &str, delay_secs: u64, argv: &[String]) -> Result<(), String> {
+        let mut cmd = Self::command(unit);
+        cmd.arg(format!("--on-active={delay_secs}"));
+        cmd.arg("--").args(argv);
+        Self::exec(cmd)
+    }
+
+    fn command(unit: &str) -> Command {
+        let mut cmd = Command::new("systemd-run");
+        cmd.args(["--user", "--collect", "--quiet", "--unit", unit]);
+        cmd
+    }
+
+    fn exec(mut cmd: Command) -> Result<(), String> {
         let out = cmd
             .output()
             .map_err(|e| format!("cannot run systemd-run: {e}"))?;

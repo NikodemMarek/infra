@@ -3378,6 +3378,24 @@ fn l2_13_headless_done_with_dead_open_turn_keeps_done() {
 }
 
 #[test]
+fn l2_14_headless_idle_compaction_turn_dying_is_not_a_died_result() {
+    let e = l2_env(
+        json!({"headless": true, "status": "idle", "turn_base": 1, "result_seq": 1}),
+        None,
+        true,
+    );
+    let out = e.jw(&e.root, &["poll"]);
+    out.ok();
+    assert!(!out.stdout.contains("died C"), "{}", out.stdout);
+    assert!(!result_exists(&e, "C", 2));
+    assert!(event_seqs(&e).is_empty());
+    let rec = e.record("C");
+    assert_eq!(rec["status"], "idle");
+    assert_eq!(rec["result_seq"], 1);
+    assert!(rec.get("turn_base").is_none(), "{rec}");
+}
+
+#[test]
 fn l2_10_second_poll_writes_nothing_new() {
     let e = l2_env(json!({"status": "busy"}), None, true);
     e.jw(&e.root, &["poll"]).ok();
@@ -3387,4 +3405,308 @@ fn l2_10_second_poll_writes_nothing_new() {
     assert_eq!(e.record("C")["result_seq"], 1);
     assert!(!result_exists(&e, "C", 2));
     assert_eq!(event_seqs(&e), vec![1]);
+}
+
+fn usage_event(input: u64, read: u64, create: u64) -> Value {
+    json!({"type":"assistant","message":{"content":[],"usage":{
+        "input_tokens":input,"cache_read_input_tokens":read,"cache_creation_input_tokens":create,
+        "output_tokens":5}}})
+}
+
+fn systemd_run_log(e: &Env) -> String {
+    fs::read_to_string(e.logs.join("systemd-run.log")).unwrap_or_default()
+}
+
+fn compact_line(e: &Env) -> Option<String> {
+    let lines: Vec<String> = systemd_run_log(e)
+        .lines()
+        .filter(|l| l.contains("jw-compact-"))
+        .map(String::from)
+        .collect();
+    assert!(lines.len() <= 1, "{lines:?}");
+    lines.into_iter().next()
+}
+
+/// One queued message, a claude run whose last assistant event has the given usage, result_seq 1.
+fn ic_turn(extra: Value, last: (u64, u64, u64)) -> Env {
+    let e = Env::new();
+    let mut rec = json!({"status": "idle", "result_seq": 1, "mrs": ["https://example.com/mr/1"]});
+    for (k, v) in extra.as_object().unwrap() {
+        rec[k] = v.clone();
+    }
+    headless(&e, rec);
+    add_queue(&e, "C", "1-1.txt", "work");
+    claude_out(
+        &e,
+        &[
+            usage_event(1_000, 0, 0),
+            usage_event(last.0, last.1, last.2),
+            result_event("ok"),
+        ],
+    );
+    let jw = env!("CARGO_BIN_EXE_jw");
+    let mut c = e.command("timeout", &e.root);
+    c.args(["60", jw, "worker", "turn", "C"]).env("JW_BIN", jw);
+    let o = c.output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    e
+}
+
+#[test]
+fn ic1_big_context_schedules_a_compaction() {
+    let e = ic_turn(json!({}), (50_000, 150_000, 50_000));
+    assert_eq!(e.record("C")["result_seq"], 2);
+    let line = compact_line(&e).unwrap_or_else(|| panic!("{}", systemd_run_log(&e)));
+    let rest = line
+        .strip_prefix("--user --collect --quiet --unit jw-compact-C-2 --on-active=120 -- ")
+        .unwrap_or_else(|| panic!("argv: {line}"));
+    assert!(rest.ends_with("/jw worker compact C 2"), "{rest}");
+}
+
+#[test]
+fn ic2_small_context_does_not() {
+    let e = ic_turn(json!({}), (1_000, 30_000, 10_000));
+    assert_eq!(e.record("C")["result_seq"], 2);
+    assert!(compact_line(&e).is_none());
+}
+
+#[test]
+fn ic3_no_open_mrs_does_not_schedule() {
+    for extra in [
+        json!({"mrs": []}),
+        json!({"merged_mrs": ["https://example.com/mr/1"]}),
+    ] {
+        let e = ic_turn(extra, (50_000, 150_000, 50_000));
+        assert_eq!(e.record("C")["result_seq"], 2);
+        assert!(compact_line(&e).is_none());
+    }
+}
+
+#[test]
+fn ic5_done_status_does_not_schedule() {
+    let e = ic_turn(json!({"status": "done"}), (50_000, 150_000, 50_000));
+    assert!(compact_line(&e).is_none());
+}
+
+#[test]
+fn ic6_died_turn_does_not_schedule() {
+    let e = Env::new();
+    headless(
+        &e,
+        json!({"status": "idle", "result_seq": 1, "mrs": ["https://example.com/mr/1"]}),
+    );
+    add_queue(&e, "C", "1-1.txt", "work");
+    claude_out(&e, &[usage_event(50_000, 150_000, 50_000)]);
+    turn(&e).ok();
+    assert_eq!(read_result(&e, "C", 2)["kind"], "died");
+    assert!(compact_line(&e).is_none());
+}
+
+#[test]
+fn ic7_systemd_run_failure_does_not_fail_the_turn() {
+    let e = Env::new();
+    headless(
+        &e,
+        json!({"status": "idle", "result_seq": 1, "mrs": ["https://example.com/mr/1"]}),
+    );
+    add_queue(&e, "C", "1-1.txt", "work");
+    claude_out(
+        &e,
+        &[usage_event(50_000, 150_000, 50_000), result_event("ok")],
+    );
+    fs::write(e.logs.join("systemd-run.fail"), "nope\n").unwrap();
+    turn(&e).ok();
+    assert_eq!(read_result(&e, "C", 2)["kind"], "result");
+    assert!(compact_line(&e).is_some());
+}
+
+fn worker_compact(e: &Env, seq: &str) -> Out {
+    e.jw(&e.root, &["worker", "compact", "C", seq])
+}
+
+#[test]
+fn ic8_worker_compact_eligible_starts_the_unit() {
+    let e = Env::new();
+    let (_, ws) = headless(&e, json!({"status": "idle", "result_seq": 2}));
+    worker_compact(&e, "2").ok();
+    let log = systemd_run_log(&e);
+    assert_eq!(log.lines().count(), 1, "{log}");
+    let want = format!(
+        "--user --collect --quiet --unit jw-worker-C --working-directory {} --property RuntimeMaxSec=4h -- ",
+        ws.display()
+    );
+    let rest = log
+        .trim_end()
+        .strip_prefix(&want)
+        .unwrap_or_else(|| panic!("argv: {log}"));
+    assert!(rest.ends_with("/jw worker turn C --compact 2"), "{rest}");
+}
+
+#[test]
+fn ic9_worker_compact_ineligible_starts_nothing() {
+    for case in ["stale", "queue", "active", "done", "open-turn", "reaped"] {
+        let e = Env::new();
+        let mut rec = json!({"status": "idle", "result_seq": 2});
+        match case {
+            "done" => rec["status"] = json!("done"),
+            "open-turn" => rec["turn_base"] = json!(2),
+            "reaped" => rec["reaped"] = json!(1),
+            _ => {}
+        }
+        headless(&e, rec);
+        match case {
+            "queue" => add_queue(&e, "C", "1-1.txt", "pending"),
+            "active" => set_active(&e, "active"),
+            _ => {}
+        }
+        let seq = if case == "stale" { "1" } else { "2" };
+        let o = worker_compact(&e, seq);
+        assert_eq!(o.code, 0, "{case}: {}", o.stderr);
+        assert_eq!(systemd_run_log(&e), "", "{case}");
+    }
+}
+
+fn turn_compact(e: &Env, seq: &str) -> Out {
+    let jw = env!("CARGO_BIN_EXE_jw");
+    let o = e
+        .command("timeout", &e.root)
+        .args(["60", jw, "worker", "turn", "C", "--compact", seq])
+        .env("JW_BIN", jw)
+        .output()
+        .unwrap();
+    Out {
+        code: o.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+    }
+}
+
+#[test]
+fn ic10_turn_compact_runs_compact_and_writes_no_result() {
+    let e = Env::new();
+    headless(
+        &e,
+        json!({"status": "idle", "status_at": 111, "result_seq": 2}),
+    );
+    claude_out(
+        &e,
+        &[
+            usage_event(50_000, 150_000, 50_000),
+            result_event("compacted"),
+        ],
+    );
+    turn_compact(&e, "2").ok();
+    assert_eq!(run_logs(&e), 1);
+    assert!(
+        run_stdin(&e, 1).starts_with("/compact "),
+        "{}",
+        run_stdin(&e, 1)
+    );
+    let rec = e.record("C");
+    assert_eq!(rec["result_seq"], 2);
+    assert_eq!(rec["status"], "idle");
+    assert_eq!(num(&rec["status_at"]), 111.0);
+    assert!(rec.get("turn_base").is_none(), "{rec}");
+    assert!(!e.state.join("agent-sessions/results/C/3.json").exists());
+    assert!(event_seqs(&e).is_empty());
+    assert!(compact_line(&e).is_none());
+}
+
+#[test]
+fn ic11_turn_compact_without_result_event_is_quiet() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle", "result_seq": 2}));
+    claude_out(&e, &[usage_event(1, 1, 1)]);
+    let o = turn_compact(&e, "2");
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(run_logs(&e), 1);
+    assert_eq!(e.record("C")["result_seq"], 2);
+    assert!(!e.state.join("agent-sessions/results/C/3.json").exists());
+    assert!(event_seqs(&e).is_empty());
+}
+
+#[test]
+fn ic12_turn_compact_with_queued_message_runs_a_normal_turn() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle", "result_seq": 2}));
+    add_queue(&e, "C", "1-1.txt", "real work");
+    claude_out(&e, &[result_event("worked")]);
+    turn_compact(&e, "2").ok();
+    assert_eq!(run_logs(&e), 1);
+    assert!(
+        !run_stdin(&e, 1).starts_with("/compact"),
+        "{}",
+        run_stdin(&e, 1)
+    );
+    assert!(run_stdin(&e, 1).contains("real work"));
+    assert_eq!(read_result(&e, "C", 3)["text"], "worked");
+}
+
+#[test]
+fn ic13_turn_compact_with_stale_seq_does_not_compact() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle", "result_seq": 3}));
+    turn_compact(&e, "2").ok();
+    assert_eq!(run_logs(&e), 0);
+    assert_eq!(e.record("C")["result_seq"], 3);
+}
+
+#[test]
+fn ic14_worker_compact_stale_turn_base_does_not_block() {
+    let e = Env::new();
+    headless(
+        &e,
+        json!({"status": "idle", "result_seq": 2, "turn_base": 0}),
+    );
+    let o = worker_compact(&e, "2");
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let log = systemd_run_log(&e);
+    assert_eq!(log.lines().count(), 1, "{log}");
+    assert!(
+        log.trim_end().ends_with("/jw worker turn C --compact 2"),
+        "{log}"
+    );
+}
+
+#[test]
+fn ic15_message_during_compact_is_queued_and_runs_next() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle", "result_seq": 2}));
+    set_active(&e, "active");
+    fs::write(e.logs.join("claude.msg"), "x").unwrap();
+    claude_out(&e, &[result_event("ok")]);
+    let o = turn_compact(&e, "2");
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(run_logs(&e), 2, "{}", o.stderr);
+    assert!(
+        run_stdin(&e, 1).starts_with("/compact"),
+        "{}",
+        run_stdin(&e, 1)
+    );
+    assert!(run_stdin(&e, 2).contains("x"), "{}", run_stdin(&e, 2));
+    assert!(!run_stdin(&e, 2).starts_with("/compact"));
+    assert_eq!(e.record("C")["result_seq"], 3);
+    assert_eq!(read_result(&e, "C", 3)["kind"], "result");
+    assert_eq!(event_seqs(&e), [3]);
+    assert!(queue_texts(&e, "C").is_empty());
+}
+
+#[test]
+fn ic16_busy_during_compact_is_restored() {
+    let e = Env::new();
+    headless(
+        &e,
+        json!({"status": "idle", "status_at": 111, "result_seq": 2}),
+    );
+    fs::write(
+        e.logs.join("claude.cmd"),
+        "AGENT_SESSION=C \"$JW_BIN\" session status busy",
+    )
+    .unwrap();
+    claude_out(&e, &[result_event("compacted")]);
+    let o = turn_compact(&e, "2");
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let rec = e.record("C");
+    assert_eq!(rec["status"], "idle");
+    assert_eq!(num(&rec["status_at"]), 111.0);
 }
