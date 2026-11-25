@@ -162,13 +162,6 @@
     ];
   };
 
-  # Moves queued follow-up prompt files of an event session to read/ and prints their paths.
-  eventQueue = shellHook {
-    name = "claude-event-queue";
-    src = ./event-queue.sh;
-    runtimeInputs = [coreutils];
-  };
-
   # Sets the status of the session record (busy, idle, waiting); never fails.
   statusHook = shellHook {
     name = "claude-status-hook";
@@ -180,8 +173,7 @@
     ];
   };
 
-  # Stop hook: points an event-started session at queued follow-up prompts (blocks the stop), else tells
-  # the user it waits for them (claude.waiting) and sets the status to idle.
+  # Stop hook: tells the user the session waits for them (claude.waiting) and sets the status to idle.
   stopHook = shellHook {
     name = "claude-stop-hook";
     src = ./stop-hook.sh;
@@ -189,19 +181,7 @@
       jq
       coreutils
       routeEvent
-      eventQueue
       statusHook
-    ];
-  };
-
-  # UserPromptSubmit hook: adds the paths of queued follow-up prompts of an event session as context.
-  promptHook = shellHook {
-    name = "claude-prompt-hook";
-    src = ./prompt-hook.sh;
-    runtimeInputs = [
-      jq
-      coreutils
-      eventQueue
     ];
   };
 
@@ -226,15 +206,13 @@ in
       routeEvent
       askpass
       permissionHook
-      eventQueue
       statusHook
       stopHook
-      promptHook
       mcpDefaults
     ];
 
     meta = {
-      description = "Claude Code hook commands: write/bash guards, the event-session guard (no edits to AGENTS.md, CLAUDE.md or the knowledge file), architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop and UserPromptSubmit hooks (queued follow-up prompts of event-started sessions, waiting notification), the status hook (session record status), project MCP servers seeded as disabled";
+      description = "Claude Code hook commands: write/bash guards, the event-session guard (no edits to AGENTS.md, CLAUDE.md or the knowledge file), architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop hook (waiting notification), the status hook (session record status), project MCP servers seeded as disabled";
       platforms = lib.platforms.unix;
     };
   }

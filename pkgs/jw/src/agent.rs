@@ -34,16 +34,15 @@ pub fn sh_quote(word: &str) -> String {
     }
 }
 
-/// The environment without the variables that tie a session to the caller's own (repo key, event queue, nested-claude
+/// The environment without the variables that tie a session to the caller's own (repo key, nested-claude
 /// marker). CLAUDE_CODE_* from a calling Claude (session id, child marker, messaging socket) would make the new Claude
 /// a child of the caller: it writes into the caller's transcript and never registers, so jw msg cannot reach it.
 fn agent_env() -> BTreeMap<String, String> {
-    const DROP: [&str; 9] = [
+    const DROP: [&str; 8] = [
         "CLAUDECODE",
         "CLAUDE_PID",
         "CLAUDE_EFFORT",
         "AI_AGENT",
-        "CLAUDE_EVENT_SESSION_DIR",
         "AGENT_ORIGIN",
         "CLAUDE_WORKSPACE_BASE",
         "AGENT_SESSION",

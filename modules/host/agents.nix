@@ -7,8 +7,8 @@
   cfg = config.services.agents;
 
   # without this shpool types a prompt-setup command into the session's stdin,
-  # which for the event handler's sessions is Claude's input; it applies to the
-  # user's manual sessions too
+  # which for jw sessions is Claude's input; it applies to the user's manual
+  # sessions too
   shpoolConfig = pkgs.writeText "shpool.toml" ''
     prompt_prefix = ""
   '';
@@ -38,7 +38,7 @@ in {
       services.nats.wantedBy = ["multi-user.target"];
 
       user = {
-        # the event handler for claude sessions runs them in shpool sessions
+        # jw runs agent sessions in shpool sessions
         sockets.shpool = {
           description = "Shpool session daemon socket";
           wantedBy = ["sockets.target"];

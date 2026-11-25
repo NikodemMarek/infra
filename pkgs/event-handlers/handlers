@@ -4,7 +4,6 @@
 # any subject outside events. is reachable from the cluster.
 events.claude.question event-handler-notify-normal
 events.claude.permission_request event-handler-notify-normal
-events.claude.not_started event-handler-notify-normal
 events.sudo.> event-handler-notify-normal
 events.task.failed event-handler-notify-normal
 events.backup.> event-handler-notify-critical

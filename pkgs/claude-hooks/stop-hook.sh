@@ -1,24 +1,10 @@
-# Stop hook. If the per-MR session dir of an event-started session (CLAUDE_EVENT_SESSION_DIR) has new
-# follow-up prompt files, blocks the stop: the reason is a pointer to the files (paths only, never
-# contents: they hold untrusted GitLab comment text); stdout is used only for this decision. Otherwise, in sessions with a
-# session record (AGENT_SESSION: started by `jw agent` or an event), tells the user the session waits for them:
-# sets the record status to idle and posts claude.waiting (agent-inbox only), titled with the first line of the last message.
-# `key` = session id, so the inbox keeps one item per session (replaced every turn). Never blocks
-# otherwise: always exit 0.
+# Stop hook. In sessions with a session record (AGENT_SESSION: started by `jw agent`), tells the
+# user the session waits for them: sets the record status to idle and posts claude.waiting (agent-inbox only),
+# titled with the first line of the last message.
+# `key` = session id, so the inbox keeps one item per session (replaced every turn). Never blocks:
+# always exit 0.
 # always read all of stdin first, so Claude Code never gets EPIPE on a large input
 input=$(cat)
-pointer=""
-dir="${CLAUDE_EVENT_SESSION_DIR:-}"
-if [ -n "$dir" ] && [ -d "$dir" ]; then
-	paths="$(claude-event-queue take "$dir")"
-	if [ -n "$paths" ]; then
-		pointer="New GitLab activity on this MR, read: ${paths//$'\n'/ }"
-	fi
-fi
-if [ -n "$pointer" ]; then
-	jq -n --arg r "$pointer" '{decision:"block",reason:$r}'
-	exit 0
-fi
 [ -n "${AGENT_SESSION:-}" ] || exit 0
 claude-status-hook idle <<<"$input"
 # a headless worker's turn ends with its result (session.result), not a claude.waiting item
