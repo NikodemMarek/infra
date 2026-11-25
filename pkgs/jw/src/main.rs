@@ -168,6 +168,9 @@ struct AgentArgs {
     /// run interactively in shpool even with --reports-to
     #[arg(long)]
     interactive: bool,
+    /// run Claude without bypass mode: a headless session denies what needs a permission prompt and reports it, an interactive one asks
+    #[arg(long)]
+    ask_permissions: bool,
     /// [repo under the projects root] [prompt...]; after a leading -- everything is the prompt
     #[arg(allow_hyphen_values = true)]
     args: Vec<String>,

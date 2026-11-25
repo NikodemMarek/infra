@@ -77,6 +77,7 @@ fn task_record(prompt: &str, workspace: &str, reports_to: Option<&str>) -> Recor
 
 pub fn cmd_agent(a: AgentArgs) -> Result<(), String> {
     let interactive = a.interactive;
+    let ask_permissions = a.ask_permissions;
     let reports_to = a
         .reports_to
         .map(|name| {
@@ -103,7 +104,12 @@ pub fn cmd_agent(a: AgentArgs) -> Result<(), String> {
                 Some(opt)
                     if matches!(
                         opt,
-                        "-r" | "--revision" | "-d" | "--detach" | "--reports-to" | "--interactive"
+                        "-r" | "--revision"
+                            | "-d"
+                            | "--detach"
+                            | "--reports-to"
+                            | "--interactive"
+                            | "--ask-permissions"
                     ) || opt.starts_with("--revision=")
                         || opt.starts_with("--reports-to=") =>
                 {
@@ -131,7 +137,7 @@ pub fn cmd_agent(a: AgentArgs) -> Result<(), String> {
         }
     };
     match reports_to.as_deref().filter(|_| !interactive) {
-        Some(supervisor) => start_headless(&home, a.revision, prompt, supervisor),
+        Some(supervisor) => start_headless(&home, a.revision, prompt, supervisor, ask_permissions),
         None => start_agent(
             &home,
             a.detach,
@@ -139,6 +145,7 @@ pub fn cmd_agent(a: AgentArgs) -> Result<(), String> {
             prompt,
             reports_to.as_deref(),
             false,
+            ask_permissions,
         ),
     }
 }
@@ -150,6 +157,7 @@ fn start_headless(
     revision: Option<String>,
     prompt: &[String],
     reports_to: &str,
+    ask_permissions: bool,
 ) -> Result<(), String> {
     let text = prompt.join(" ");
     if text.trim().is_empty() {
@@ -169,6 +177,7 @@ fn start_headless(
                 r.merge(task_record(&text, &dir, Some(reports_to)));
                 r.clear_marks();
                 r.headless = true;
+                r.ask_permissions = ask_permissions;
                 true
             })
             .map_err(|e| write_error(&e))?;
@@ -199,6 +208,7 @@ fn start_agent(
     prompt: &[String],
     reports_to: Option<&str>,
     mate: bool,
+    ask_permissions: bool,
 ) -> Result<(), String> {
     let revision = revision.filter(|r| !r.is_empty());
     // the default trunk() is resolved in home without a snapshot
@@ -223,6 +233,7 @@ fn start_agent(
         },
         Naming::New,
         mate,
+        ask_permissions,
     )
 }
 
@@ -276,13 +287,19 @@ fn fresh_name(home: &str, in_use: impl Fn(&str) -> bool) -> String {
     name
 }
 
-/// The words of a claude command line: the first mate also gets its role prompt.
-fn claude_argv(mate: bool, args: &[&str]) -> Vec<String> {
+/// The words of a claude command line: the first mate also gets its role prompt; bypass mode unless ask_permissions.
+fn claude_argv(mate: bool, ask_permissions: bool, args: &[&str]) -> Vec<String> {
     let mut argv = vec!["claude".to_string()];
     if mate {
         argv.extend([
             "--append-system-prompt-file".to_string(),
             format!("{}/mate.md", claude_dir()),
+        ]);
+    }
+    if !ask_permissions {
+        argv.extend([
+            "--permission-mode".to_string(),
+            "bypassPermissions".to_string(),
         ]);
     }
     argv.extend(args.iter().map(|a| a.to_string()));
@@ -293,7 +310,8 @@ fn claude_argv(mate: bool, args: &[&str]) -> Vec<String> {
 /// it unless detach. make_dir(name) returns the directory to run in; it is called under the lock, once the name is
 /// chosen. The name is the session's identity: AGENT_SESSION, the record name and the shpool session name are equal,
 /// and jw finds a live Claude's shpool session by its AGENT_SESSION. reports_to is the session the new record names as
-/// its supervisor. A first mate (mate) has its role prompt, the record kind MATE_KIND and no shpool ttl.
+/// its supervisor. A first mate (mate) has its role prompt, the record kind MATE_KIND and no shpool ttl. Claude runs in
+/// bypass mode unless ask_permissions, which the record keeps.
 #[allow(clippy::too_many_arguments)]
 fn launch(
     home: &str,
@@ -304,6 +322,7 @@ fn launch(
     make_dir: impl FnOnce(&str) -> Result<String, String>,
     naming: Naming,
     mate: bool,
+    ask_permissions: bool,
 ) -> Result<(), String> {
     let rundir = runtime_dir();
     let name = {
@@ -334,12 +353,18 @@ fn launch(
             r.merge(fields);
             // a (re)started session is not finished
             r.clear_marks();
+            r.ask_permissions = ask_permissions;
             true
         });
         if let Err(e) = recorded {
             eprintln!("jw: {}", write_error(&e));
         }
-        let job = write_job(&rundir, &name, &dir, &claude_argv(mate, args))?;
+        let job = write_job(
+            &rundir,
+            &name,
+            &dir,
+            &claude_argv(mate, ask_permissions, args),
+        )?;
         let started = Shpool.start(&name, &dir, &job, (!mate).then_some("1d"));
         if !matches!(started, Ok(true)) {
             // the script removes the file when it starts; the empty workspace is left for `jw prune`
@@ -668,9 +693,11 @@ pub fn cmd_resume(a: ResumeArgs) -> Result<(), String> {
         eprintln!("jw: {root} is gone, recreated it as {dir} on trunk");
         Ok(dir)
     };
-    let mate = Records::new()
-        .read(&name)
+    let record = Records::new().read(&name);
+    let mate = record
+        .as_ref()
         .is_some_and(|r| r.kind.as_deref() == Some(MATE_KIND));
+    let ask_permissions = record.is_some_and(|r| r.ask_permissions);
     launch(
         &home,
         a.detach,
@@ -680,6 +707,7 @@ pub fn cmd_resume(a: ResumeArgs) -> Result<(), String> {
         make_dir,
         Naming::Resume(&name),
         mate,
+        ask_permissions,
     )
 }
 
@@ -691,7 +719,7 @@ pub fn cmd_mate() -> Result<(), String> {
         jj.git_init()?;
     }
     jj.ensure_main()?;
-    start_agent(&home, false, None, &[], None, true)
+    start_agent(&home, false, None, &[], None, true, false)
 }
 
 /// The session called prefix, else the only one starting with it.

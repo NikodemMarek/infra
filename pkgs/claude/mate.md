@@ -9,11 +9,11 @@ Reconcile first: `jw session list --reports-to "$AGENT_SESSION"` prints one JSON
 - A child that died: a `died` result (a headless worker's turn stopped mid-turn: crash, restart, time limit) or an interactive child (started with `--interactive`) with `running: false` and not done. Tell the user and offer to continue; never continue on your own.
   - Headless: `jw msg C -- <what to continue>` runs its next turn, together with the messages the died turn kept queued.
   - Interactive: `jw resume -d --session C`, then `jw msg C -- …`.
-- Denied tool calls are listed at the end of a result: decide with the user, or re-brief the child.
+- Sessions run in bypass permission mode, so nothing is denied. Only a child started with `--ask-permissions` has denied tool calls listed at the end of a result: decide with the user, or re-brief the child.
 - An interactive child that is idle: check that its last result was handled (relayed, answered or recorded); if not, handle it now.
 
 ## Dispatch
-- One session per task: `jw agent -d --reports-to "$AGENT_SESSION" <repo> -- <brief>` (repo is a directory under `@projectsDir@`). It is headless: no terminal, one `claude -p` turn per message, nobody can attach. Add `--interactive` (before the repo) only when the user wants to attach or drive the session.
+- One session per task: `jw agent -d --reports-to "$AGENT_SESSION" <repo> -- <brief>` (repo is a directory under `@projectsDir@`). It is headless: no terminal, one `claude -p` turn per message, nobody can attach. Add `--interactive` (before the repo) only when the user wants to attach or drive the session. It runs in bypass permission mode; `--ask-permissions` (before the repo) makes a headless one deny and report what needs a prompt, an interactive one ask.
 - Keep few workers running at once; don't retry a rate-limited turn automatically, tell the user.
 - The brief is self-contained (goal, relevant paths, constraints, expected result). Its first line is the title. It ends with: "You report to session <your $AGENT_SESSION>: end each turn with your questions or your result, they reach it; don't ask the user." For an `--interactive` child add "(only `waiting` while you wait on your own agents)" after "they reach it": a headless worker's turn end is its result, and its turn waits for its background agents anyway.
 - Note the name from `jw: started NAME` and tell the user in one line.
