@@ -25,9 +25,6 @@
       subcommand = "report-notice";
     };
     notify-critical = notify.override {urgency = "critical";};
-    # GitLab event -> Claude session in a shpool session. No gitlab.* routes here (no
-    # GitLab watcher): a layer that has one sets contextTool and adds the routes.
-    claude = callPackage ./claude {inherit notify;};
     task = callPackage ./task {};
     # queues the event for agent-inbox in `$XDG_RUNTIME_DIR/agent-inbox`
     inbox = callPackage ./inbox {};
