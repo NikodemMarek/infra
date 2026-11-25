@@ -650,14 +650,27 @@ fn interactive_died(name: &str, r: &Record) -> Result<bool, String> {
 
 fn headless_died(name: &str, r: &Record) -> Result<bool, String> {
     let (turn_base, result_seq) = (r.turn_base, r.result_seq);
+    let gone = |rec: &Record| {
+        rec.turn_base == turn_base
+            && rec.result_seq == result_seq
+            && Systemd.is_active(&worker::unit(name)) == Some(false)
+    };
+    // a message turn sets busy (or keeps done): an open turn of another status is a compaction, which writes no result
+    if !matches!(r.status.as_deref(), Some("busy" | "done")) {
+        Records::new().update(name, |rec| {
+            let close = gone(rec);
+            if close {
+                rec.turn_base = None;
+            }
+            close
+        })?;
+        return Ok(false);
+    }
     let text = format!(
         "The turn of worker {name} ended without a result (crash, kill, timeout or restart; a kill by the user looks the same). Its transcript and queued messages are intact: jw msg {name} -- <what to continue> runs its next turn."
     );
     record_died(name, r, &text, |rec| {
-        if rec.turn_base != turn_base
-            || rec.result_seq != result_seq
-            || Systemd.is_active(&worker::unit(name)) != Some(false)
-        {
+        if !gone(rec) {
             return false;
         }
         if rec.status.as_deref() != Some("done") {

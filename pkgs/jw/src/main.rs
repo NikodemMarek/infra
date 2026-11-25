@@ -98,7 +98,14 @@ enum Command {
 #[derive(Subcommand)]
 enum WorkerAction {
     /// run the queued messages of the headless session NAME as claude turns
-    Turn { name: String },
+    Turn {
+        name: String,
+        /// first compact the session if it is still idle at result SEQ (what `worker compact` starts)
+        #[arg(long, value_name = "SEQ")]
+        compact: Option<u64>,
+    },
+    /// start a compaction turn for the headless session NAME if it has been idle since result SEQ
+    Compact { name: String, seq: u64 },
 }
 
 #[derive(Subcommand)]
@@ -313,7 +320,8 @@ fn main() {
         Command::Done => session::cmd_done(),
         Command::Hook { action } => hook::cmd_hook(action),
         Command::Worker { action } => match action {
-            WorkerAction::Turn { name } => worker::cmd_worker_turn(&name),
+            WorkerAction::Turn { name, compact } => worker::cmd_worker_turn(&name, compact),
+            WorkerAction::Compact { name, seq } => worker::cmd_worker_compact(&name, seq),
         },
     });
     if let Err(e) = result {
