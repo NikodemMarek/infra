@@ -102,6 +102,7 @@ Cluster:
 - Velero schedules accept `CRON_TZ=`. fs-backup copies only the volumes of running pods.
 - CNPG: the pre-backup `pg_dump -Fc` hook omits per-database `ALTER DATABASE ... SET` settings (Immich `vchordrq.probes`, `search_path`). Record them from `pg_db_role_setting` and re-apply them after a restore.
 - Gateway API CRDs come from the upstream bundle in `gateway-api/`, not the Traefik chart: bump them before a Traefik release that needs newer ones. With a missing route CRD Traefik's Gateway provider hangs in cache sync while the pod stays Ready and the HelmRelease healthy, so curl a route after every Traefik bump.
+- Flux (server-side apply) cannot switch a live Deployment to `strategy.type: Recreate`: the defaulted `rollingUpdate` has no owner and stays, so the API rejects it and the whole Kustomization fails (`rollingUpdate: null` does not help). Use `RollingUpdate` with `maxSurge: 0`, `maxUnavailable: 1`, or delete the Deployment once.
 - Helm v4: before disabling a chart's own Gateway/GatewayClass, ship `helm.sh/resource-policy: keep` in a separate change (adding it in the same change deletes the resource).
 - Matrix bridges (mautrix):
   - Wiping a bridge DB forgets the management room: use `!wa` or a fresh DM.
