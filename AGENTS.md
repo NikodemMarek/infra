@@ -93,6 +93,7 @@ NixOS:
 
 - No zram or swap: zram was tried and dropped as unreliable. Memory is kept in check by `host/regis/memory.nix` (ZFS ARC cap 1 GiB, earlyoom, kubelet `system-reserved` 2Gi and `memory.available` eviction, watchdog and panic-reboot sysctls). Garage (~1 GiB) and k3s run outside the pod budget.
 - Keep heavy pods without node-pinned storage (audiomuse-ai) on `triss`. Check the sum of pod memory requests on regis before adding one: above the allocatable ~5.1 GiB new pods stay Pending.
+- A failed switch on regis restarts Garage, which breaks the nix cache for CI jobs running at the same time (other hosts' deploys): rerun those jobs.
 
 Cluster:
 
