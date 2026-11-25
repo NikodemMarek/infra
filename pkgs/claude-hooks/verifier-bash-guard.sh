@@ -15,7 +15,7 @@ grep -Eq 'git +(-C +[^ ]+ +)?(push|commit|reset|checkout|switch|restore|clean|re
 	deny "Mutating git commands are not allowed for verifier (read-only git only)."
 grep -Eq '(glab|gh) +[a-z-]+ +(create|merge|close|delete|approve|note|update|run|retry|cancel)' <<<"$c" &&
 	deny "Mutating GitLab/GitHub CLI calls are not allowed for verifier."
-grep -Eq '(^|[;&|( /])forge [^;&|]*(pr +(create|edit|close|reopen)|upload)( |$)' <<<"$c" &&
+grep -Eq '(^|[;&|( /])forge [^;&|]*(pr +(create|edit|close|reopen|review)|upload)( |$)' <<<"$c" &&
 	deny "Mutating forge commands are not allowed for verifier."
 grep -Eq '(^|[;&|( ])rm +(-[a-zA-Z]*[rRf]|--recursive|--force)' <<<"$c" && deny "rm -r/-f not allowed; use build tool clean targets instead."
 grep -Eq '(sed|perl|ruby) +(-[a-zA-Z]*i|--in-place)' <<<"$c" && deny "In-place file edits are not allowed for verifier."

@@ -61,6 +61,7 @@
     "Bash(forge pr view:*)"
     "Bash(forge pr checks:*)"
     "Bash(forge pr comments:*)"
+    "Bash(forge pr review:*)"
 
     "Bash(tm:*)"
 
@@ -75,9 +76,7 @@
 
     "Edit(~/.local/state/agent-sessions/**)"
 
-    # MR comments, replies and resolves go only through `gitlab-review` drafts.
-    # Threads are read with `glab mr note list` (allowed), so all `glab api`
-    # calls on notes/discussions can go.
+    # MR/PR comments, replies and resolves go only through `forge pr review` drafts.
     "Bash(glab mr note create:*)"
     "Bash(glab mr note update:*)"
     "Bash(glab mr note delete:*)"
@@ -89,6 +88,10 @@
     "Bash(glab mr note *--unresolve*)"
     "Bash(glab api *notes*)"
     "Bash(glab api *discussions*)"
+    "Bash(gh pr comment:*)"
+    "Bash(gh pr review:*)"
+    "Bash(gh api *comments*)"
+    "Bash(gh api *reviews*)"
   ];
   ask = ["Edit(@knowledgeFile@)"];
   additionalDirectories = ["@memoryDir@" "@projectsDir@"];
