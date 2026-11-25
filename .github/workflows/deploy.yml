@@ -67,7 +67,7 @@ jobs:
       - name: nix cache
         run: |
           echo "100.100.215.91 nix-cache" | sudo tee -a /etc/hosts >/dev/null
-          if curl -sf --max-time 5 http://nix-cache:3902/nix-cache-info >/dev/null; then
+          if curl -sf --max-time 5 --retry 5 --retry-all-errors --retry-delay 5 http://nix-cache:3902/nix-cache-info >/dev/null; then
             echo "NIX_CONFIG=extra-substituters = http://nix-cache:3902?priority=50" >> "$GITHUB_ENV"
           fi
       - name: reachability
