@@ -20,6 +20,7 @@ pkgs.symlinkJoin {
       pkgs.rofi
       pkgs.dunst
       pkgs.waybar
+      pkgs.quickshell
       pkgs.kanshi
 
       pkgs.yazi

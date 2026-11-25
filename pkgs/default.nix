@@ -18,6 +18,7 @@
   dunst = pkgs.callPackage ./dunst {inherit (prev) dunst;};
   jujutsu = pkgs.callPackage ./jujutsu {inherit (prev) jujutsu;};
   waybar = pkgs.callPackage ./waybar {inherit (prev) waybar;};
+  quickshell = pkgs.callPackage ./quickshell {inherit (prev) quickshell;};
   kanshi = pkgs.callPackage ./kanshi {inherit (prev) kanshi;};
   obsidian = pkgs.callPackage ./obsidian {inherit (prev) obsidian;};
   zen-browser = pkgs.callPackage ./zen-browser {inherit (prev) zen-browser;};
