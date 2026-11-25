@@ -14,6 +14,7 @@
   # both keys, so a wrong key name cannot leave it on.
   autoMemoryEnabled = false;
   disableClaudeAiConnectors = true;
+  switchModelsOnFlag = true;
   env = {
     CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
     CLAUDE_CODE_AUTO_COMPACT_WINDOW = "300000";
