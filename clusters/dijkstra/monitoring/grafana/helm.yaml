@@ -257,7 +257,7 @@ spec:
                 noDataState: OK
                 execErrState: OK
                 annotations:
-                  summary: "{{`{{ .Labels.host }}`}}:{{`{{ .Labels.mountpoint }}`}} has less than 10% space left"
+                  summary: "{{`{{ .Labels.host }}`}}:{{`{{ .Labels.mountpoint }}`}} is almost full"
                 data:
                   - refId: A
                     datasourceUid: vm
@@ -266,7 +266,7 @@ spec:
                       to: 0
                     model:
                       refId: A
-                      expr: node_filesystem_avail_bytes{host=~"triss|regis",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{host=~"triss|regis",fstype!~"tmpfs|overlay"} < 0.10
+                      expr: (node_filesystem_avail_bytes{host=~"triss|regis",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{host=~"triss|regis",fstype!~"tmpfs|overlay"} < 0.10) unless on(host, mountpoint) node_filesystem_avail_bytes{host="triss",mountpoint="/boot"} > 5 * 1024 * 1024
                       instant: true
                       range: false
                   - refId: B
