@@ -96,7 +96,7 @@ On launch the wrapper uses `CLAUDE_CONFIG_DIR` (default: the package's `dataDir`
   ...                sessions, credentials, etc. (claude's own state)
 ```
 
-`.claude.json` (claude's own state) gets `hasCompletedOnboarding`, `hasSeenAutoDefaultNotice` and `projects.<path>.hasTrustDialogAccepted` for `projectsDir` (default `$HOME/projects`) added when missing, so a fresh data dir skips the first-run screens (theme picker, security notes, terminal setup), the auto mode notice and the trust prompt there; existing values are kept. A repo below `projectsDir` is also trusted on its own when launched in (`--worktree` needs that). Log in with `/login`.
+`.claude.json` (claude's own state) gets `hasCompletedOnboarding`, `hasSeenAutoDefaultNotice` and `projects.<path>.hasTrustDialogAccepted` for `projectsDir` (default `$HOME/projects`) added when missing, so a fresh data dir skips the first-run screens (theme picker, security notes, terminal setup), the auto mode notice and the trust prompt there; existing values are kept. Claude stops the trust lookup at the git root, so the git repo claude is launched in (and the main repo of a `w-*` workspace) is trusted on its own when it is below `projectsDir`. Log in with `/login`.
 
 Managed entries are symlinks refreshed on every launch; stale ones from older builds are pruned. Real files or foreign symlinks are never overwritten (a warning is printed), except `settings.json`, which is moved to `backups/` first.
 
