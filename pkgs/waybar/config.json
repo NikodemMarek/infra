@@ -10,7 +10,8 @@
     "battery",
     "network",
     "bluetooth",
-    "custom/wireguard"
+    "custom/wireguard",
+    "custom/stay-awake"
   ],
   "clock": {
     "format": "{:%H\n%M}",
@@ -82,6 +83,13 @@
     "interval": 5,
     "tooltip": true,
     "on-click": "wireguard-toggle"
+  },
+  "custom/stay-awake": {
+    "exec": "stay-awake status > /dev/null && echo 󰅶 || echo 󰾪",
+    "interval": 5,
+    "signal": 8,
+    "tooltip": false,
+    "on-click": "stay-awake toggle; pkill -RTMIN+8 waybar"
   },
   "modules-center": ["hyprland/workspaces"],
   "hyprland/workspaces": {

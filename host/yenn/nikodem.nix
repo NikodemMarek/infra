@@ -38,6 +38,7 @@ in {
       })
       pkgs.agent-inbox
       pkgs.agent-task
+      pkgs.stay-awake
       pkgs.tm
       pkgs.jj-upload
       gh

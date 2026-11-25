@@ -72,6 +72,13 @@ window#waybar {
   color: @lavender;
 }
 
+#custom-stay-awake {
+  background-color: @mantle;
+  padding: 5px 0;
+  border-radius: 50px;
+  color: @peach;
+}
+
 #workspaces {
   background-color: @mantle;
   padding: 5px 0;
