@@ -1432,6 +1432,36 @@ fn rn6_child_detached_still_notifies() {
 }
 
 #[test]
+fn rn6b_long_message_relayed_whole() {
+    let e = Env::new();
+    e.write_record("P", r#"{"kind":"task"}"#);
+    e.write_record("C", r#"{"kind":"task","reports_to":"P"}"#);
+    let body = format!("{}END", "x".repeat(20000));
+    let event = serde_json::json!({"type": "claude.waiting", "session": "C", "body": body});
+    let o = notice(&e, &event.to_string());
+    o.ok();
+    let text = o.json()["text"].as_str().unwrap().to_string();
+    assert!(text.ends_with(&format!("  > {body}")), "{text}");
+}
+
+#[test]
+fn rn6c_too_long_message_points_to_the_rest() {
+    let e = Env::new();
+    e.write_record("P", r#"{"kind":"task"}"#);
+    e.write_record("C", r#"{"kind":"task","reports_to":"P"}"#);
+    let event =
+        serde_json::json!({"type": "claude.waiting", "session": "C", "body": "x".repeat(40000)});
+    let o = notice(&e, &event.to_string());
+    o.ok();
+    let text = o.json()["text"].as_str().unwrap().to_string();
+    assert!(text.contains(&"x".repeat(30000)));
+    assert!(text.ends_with(
+        "…\n\nThe message is cut at 31000 chars: ask C for the rest (`jw msg C -- …`)."
+    ));
+    assert!(text.chars().count() < 32000);
+}
+
+#[test]
 fn rn7_non_string_type() {
     let e = Env::new();
     notice(&e, r#"{"type":5,"session":"C"}"#).fail("jw: invalid claude event");

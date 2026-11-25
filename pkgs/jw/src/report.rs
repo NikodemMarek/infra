@@ -3,12 +3,15 @@ use std::io::{self, Read};
 use serde_json::{Map, Value};
 
 use crate::msg::MSG_MAX;
-use crate::poll::{quoted_body, quoted_head};
+use crate::poll::quoted_head;
 use crate::record::{valid_name, Record, Records, ResultKind};
 use crate::shpool::Shpool;
 
 /// A turn end whose whole message is this only waits on the session's own background work: not relayed.
 const WAITING: &str = "waiting";
+
+/// How much of a child's message is quoted: the rest of MSG_MAX leaves room for the framing.
+const QUOTE_MAX: usize = MSG_MAX - 1000;
 
 /// The message for a turn end of child, which is not done or attached: its last message as the event's body.
 fn waiting_text(child: &str, record: &Record, event: &Map<String, Value>) -> Option<String> {
@@ -26,8 +29,16 @@ fn waiting_text(child: &str, record: &Record, event: &Map<String, Value>) -> Opt
     if !done && body.trim() == WAITING {
         return None;
     }
-    let quoted = quoted_body(body);
-    let quoted = quoted.strip_prefix('\n').unwrap_or("  > (no message)");
+    let quoted = quoted_head(body, QUOTE_MAX);
+    let mut quoted = quoted
+        .strip_prefix('\n')
+        .unwrap_or("  > (no message)")
+        .to_string();
+    if body.trim().chars().count() > QUOTE_MAX {
+        quoted.push_str(&format!(
+            "\n\nThe message is cut at {QUOTE_MAX} chars: ask {child} for the rest (`jw msg {child} -- …`)."
+        ));
+    }
     Some(if done {
         format!(
             "Session {child}, which reports to you, is done (jw done); its last message:\n\n{quoted}\n\nIt is stopped once it is idle and nobody is attached."
@@ -43,7 +54,7 @@ fn waiting_text(child: &str, record: &Record, event: &Map<String, Value>) -> Opt
 fn result_text(records: &Records, child: &str, event: &Map<String, Value>) -> Option<String> {
     let seq = event.get("seq").and_then(Value::as_u64)?;
     let result = records.results(child).into_iter().find(|r| r.seq == seq)?;
-    let quoted = quoted_head(&result.text, MSG_MAX);
+    let quoted = quoted_head(&result.text, QUOTE_MAX);
     let quoted = quoted.strip_prefix('\n').unwrap_or("  > (no message)");
     let what = match result.kind {
         ResultKind::Result => "finished a turn",
