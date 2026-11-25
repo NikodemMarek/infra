@@ -2,6 +2,7 @@ name: tofu
 
 on:
   pull_request:
+    types: [opened, reopened, synchronize, closed]
     paths:
       - tofu/**
       - pkgs/infra-tofu/**
@@ -31,9 +32,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: tofu-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   validate:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
