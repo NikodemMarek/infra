@@ -74,7 +74,7 @@ pub struct Record {
     /// The MRs of mrs the session was told are merged.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub merged_mrs: Vec<String>,
-    /// Workspaces the session created (`jw session worktree`); `jw reap` drops them once it is done.
+    /// Workspaces the session created (`jw hook create`); `jw reap` drops them once it is done.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub worktrees: Vec<String>,
     /// The poller's mark per MR url.

@@ -582,111 +582,6 @@ fn dir_str(p: &Path) -> &str {
 }
 
 #[test]
-fn w1_worktree_refusals() {
-    let e = Env::new();
-    let plain = e.dir.join("plain");
-    fs::create_dir_all(&plain).unwrap();
-    fs::write(e.dir.join("afile"), "x").unwrap();
-
-    e.jw(&e.home, &["session", "worktree", dir_str(&plain)])
-        .fail("jw: not in an agent session");
-    e.jw_env(
-        &e.home,
-        &[("AGENT_SESSION", "")],
-        &["session", "worktree", dir_str(&plain)],
-    )
-    .fail("jw: not in an agent session");
-
-    e.jw_env(&e.home, &s1_env(), &["session", "worktree", "rel/dir"])
-        .fail("jw: not an absolute directory: rel/dir");
-    fs::create_dir_all(e.home.join("rel/dir")).unwrap();
-    e.jw_env(&e.home, &s1_env(), &["session", "worktree", "rel/dir"])
-        .fail("jw: not an absolute directory: rel/dir");
-
-    let missing = e.dir.join("missing");
-    e.jw_env(
-        &e.home,
-        &s1_env(),
-        &["session", "worktree", dir_str(&missing)],
-    )
-    .fail(&format!(
-        "jw: not an absolute directory: {}",
-        missing.display()
-    ));
-    let file = e.dir.join("afile");
-    e.jw_env(&e.home, &s1_env(), &["session", "worktree", dir_str(&file)])
-        .fail(&format!(
-            "jw: not an absolute directory: {}",
-            file.display()
-        ));
-
-    assert!(!e.record_path("s1").exists());
-}
-
-#[test]
-fn w2_worktree_in_event_session() {
-    let e = Env::new();
-    let d = e.dir.join("wt");
-    fs::create_dir_all(&d).unwrap();
-    let out = e.jw_env(
-        &e.home,
-        &[
-            ("AGENT_ORIGIN", "event:gitlab-note"),
-            ("AGENT_SESSION", "s1"),
-        ],
-        &["session", "worktree", dir_str(&d)],
-    );
-    out.ok();
-    assert_eq!(out.stdout, "");
-    assert_eq!(e.record("s1")["worktrees"], json!([dir_str(&d)]));
-}
-
-#[test]
-fn w3_worktree_dedupe_order_and_other_fields() {
-    let e = Env::new();
-    e.write_record(
-        "s1",
-        r#"{"kind": "task", "title": "Keep", "status": "busy", "workspace": "/ws"}"#,
-    );
-    let a = e.dir.join("wt/a");
-    let b = e.dir.join("wt/b");
-    fs::create_dir_all(&a).unwrap();
-    fs::create_dir_all(&b).unwrap();
-
-    for d in [&b, &a, &b, &a] {
-        let out = e.jw_env(&e.home, &s1_env(), &["session", "worktree", dir_str(d)]);
-        out.ok();
-        assert_eq!(out.stdout, "");
-    }
-    let r = e.record("s1");
-    assert_eq!(r["worktrees"], json!([dir_str(&b), dir_str(&a)]));
-    assert_eq!(r["title"], "Keep");
-    assert_eq!(r["status"], "busy");
-    assert_eq!(r["workspace"], "/ws");
-
-    let got = e
-        .jw_env(&e.home, &s1_env(), &["session", "get"])
-        .ok()
-        .json();
-    assert_eq!(got["worktrees"], json!([dir_str(&b), dir_str(&a)]));
-}
-
-#[test]
-fn w4_worktree_stores_canonical_path() {
-    let e = Env::new();
-    let real = e.dir.join("real");
-    fs::create_dir_all(&real).unwrap();
-    let link = e.dir.join("link");
-    std::os::unix::fs::symlink(&real, &link).unwrap();
-
-    e.jw_env(&e.home, &s1_env(), &["session", "worktree", dir_str(&link)])
-        .ok();
-    e.jw_env(&e.home, &s1_env(), &["session", "worktree", dir_str(&real)])
-        .ok();
-    assert_eq!(e.record("s1")["worktrees"], json!([dir_str(&real)]));
-}
-
-#[test]
 fn w5_wrong_typed_worktrees_ignored_record_kept() {
     let e = Env::new();
     e.write_record(
@@ -710,17 +605,19 @@ fn w5_wrong_typed_worktrees_ignored_record_kept() {
     assert_eq!(r["workspace"], "/ws");
     assert_eq!(r["description"], "d");
 
-    let d = e.dir.join("wt");
-    fs::create_dir_all(&d).unwrap();
-    e.jw_env(
-        &e.home,
+    let repo = e.repo();
+    let input = json!({"cwd": repo, "name": "agent-0123abcd"}).to_string();
+    let out = e.jw_stdin_env(
+        &repo,
         &[("AGENT_SESSION", "odd")],
-        &["session", "worktree", dir_str(&d)],
-    )
-    .ok();
+        &input,
+        &["hook", "create"],
+    );
+    out.ok();
+    let d = out.stdout.trim_end().to_string();
     let r = e.record("odd");
     assert_eq!(r["title"], "Keep");
-    assert_eq!(r["worktrees"], json!([dir_str(&d)]));
+    assert_eq!(r["worktrees"], json!([d]));
 }
 
 #[test]
@@ -1043,28 +940,6 @@ fn r7_reap_already_reaped_record_not_dropped_again() {
     );
     e.jw(&e.root, &["reap"]).ok();
     assert!(a1.exists());
-}
-
-#[test]
-fn w7_worktree_prunes_vanished_paths_on_append() {
-    let e = Env::new();
-    let a = e.dir.join("wt/a");
-    let b = e.dir.join("wt/b");
-    let c = e.dir.join("wt/c");
-    for d in [&a, &b, &c] {
-        fs::create_dir_all(d).unwrap();
-    }
-    for d in [&a, &b] {
-        e.jw_env(&e.home, &s1_env(), &["session", "worktree", dir_str(d)])
-            .ok();
-    }
-    fs::remove_dir_all(&a).unwrap();
-    e.jw_env(&e.home, &s1_env(), &["session", "worktree", dir_str(&c)])
-        .ok();
-    assert_eq!(
-        e.record("s1")["worktrees"],
-        json!([dir_str(&b), dir_str(&c)])
-    );
 }
 
 const MR: &str = "https://github.com/o/r/pull/1";

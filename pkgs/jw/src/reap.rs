@@ -467,7 +467,7 @@ fn idle_sessions(
 
 /// Stops the sessions whose work is finished (`jw done`, or their MRs are merged) once they are idle for
 /// FINISHED_IDLE and detached, and removes their merged workspaces; a session that ran `jw done` also loses the worktrees
-/// it created (`jw session worktree`) that hold no work. A session whose MRs got merged is
+/// it created (`jw hook create`) that hold no work. A session whose MRs got merged is
 /// first asked to wrap up by `jw poll`. Then stops the detached Claude shpool sessions idle for IDLE_LIMIT, whose
 /// workspaces stay.
 pub fn cmd_reap() -> Result<(), String> {
