@@ -9,8 +9,15 @@
     ../features/optional/k3s.nix
   ];
 
-  boot.loader.systemd-boot.configurationLimit = lib.mkForce 1;
-  boot.kernelModules = ["wireguard"];
+  boot = {
+    loader.systemd-boot.configurationLimit = lib.mkForce 1;
+    kernelModules = ["wireguard"];
+    initrd = {
+      compressor = "xz";
+      systemd.tpm2.enable = false;
+      services.lvm.enable = false;
+    };
+  };
   nix.settings = {
     extra-substituters = lib.mkForce [];
     extra-trusted-public-keys = lib.mkForce [];

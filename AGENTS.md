@@ -85,6 +85,10 @@ NixOS:
 - LAN IP `192.168.18.95` (DHCP, so confirm it with `ssh maintenance@regis ip neigh | grep b4:2e:99:a4:86:1c`). Tailnet down: `ssh -o HostKeyAlias=geralt -J maintenance@regis maintenance@192.168.18.95`.
 - `/etc/wolf/cfg/config.toml` is owned by Wolf (the original is kept as `.orig`): re-check it after Wolf upgrades. `WOLF_SKIP_WAYLAND_SOCKET_WAIT=TRUE` is required (wolf#462).
 
+`triss`:
+
+- `/boot` is 98 MB and holds one generation (uncompressed 68 MiB arm64 kernel + ~20 MB xz initrd). systemd-boot deletes the old files before copying the new ones, so a kernel or initrd that outgrows the free space fails the install and leaves no bootable entry: check `df /boot` before kernel bumps. The FilesystemFull alert for it fires below 5 MiB free.
+
 `regis` (8 GB, no swap, the k3s node with the ZFS volumes):
 
 - No zram or swap: zram was tried and dropped as unreliable. Memory is kept in check by `host/regis/memory.nix` (ZFS ARC cap 1 GiB, earlyoom, kubelet `system-reserved` 2Gi and `memory.available` eviction, watchdog and panic-reboot sysctls). Garage (~1 GiB) and k3s run outside the pod budget.
