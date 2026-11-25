@@ -74,7 +74,7 @@ enum Command {
     Attach(AttachArgs),
     /// send a message to a Claude session: delivered right away, between the tool calls of a busy session or as a new turn of an idle one; fails if an interactive session is not running (a headless worker queues it for its next turn or starts one)
     Msg(MsgArgs),
-    /// read, list or update the records of agent sessions (kind, title, description, url, workspace, mrs, worktrees), a JSON file in $XDG_STATE_HOME/agent-sessions that agent-inbox and the notifications show
+    /// read, list or update the records of agent sessions (kind, title, description, url, workspace, mrs, worktrees that jw hook create records), a JSON file in $XDG_STATE_HOME/agent-sessions that agent-inbox and the notifications show
     Session {
         #[command(subcommand)]
         action: SessionAction,
@@ -211,8 +211,6 @@ enum SessionAction {
     Set(SessionSetArgs),
     /// set the status of this session's record (hooks run this); not for done, see jw done; allowed in GitLab event sessions
     Status(SessionStatusArgs),
-    /// record a workspace this session created, so `jw reap` drops it after jw done if it holds no work (hooks run this); allowed in GitLab event sessions
-    Worktree(SessionWorktreeArgs),
     /// print the records as JSON lines sorted by name, each with its name, whether it is running (its shpool session; a headless worker's unit) and the numbers of its unacked results
     List(SessionListArgs),
     /// print the results of a headless worker's finished turns that are not acked, as JSON lines by number
@@ -283,12 +281,6 @@ struct SessionStatusArgs {
     cache_expires_at: Option<i64>,
 }
 
-#[derive(Args)]
-struct SessionWorktreeArgs {
-    /// absolute path of the workspace directory
-    dir: String,
-}
-
 fn main() {
     let cli = Cli::parse();
     let result = workspace::init_root().and_then(|()| match cli.command {
@@ -312,7 +304,6 @@ fn main() {
             SessionAction::Get(a) => session::cmd_session_get(a),
             SessionAction::Set(a) => session::cmd_session_set(a),
             SessionAction::Status(a) => session::cmd_session_status(a),
-            SessionAction::Worktree(a) => session::cmd_session_worktree(a),
             SessionAction::List(a) => session::cmd_session_list(a),
             SessionAction::Results(a) => session::cmd_session_results(a),
             SessionAction::Ack(a) => session::cmd_session_ack(a),

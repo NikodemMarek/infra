@@ -10,7 +10,7 @@ use crate::systemd::Systemd;
 use crate::worker;
 use crate::{
     SessionAckArgs, SessionGetArgs, SessionListArgs, SessionResultsArgs, SessionSetArgs,
-    SessionStatusArgs, SessionWorktreeArgs,
+    SessionStatusArgs,
 };
 
 const URL_MAX: usize = 2048;
@@ -175,10 +175,6 @@ pub fn cmd_session_status(a: SessionStatusArgs) -> Result<(), String> {
     )
 }
 
-pub fn cmd_session_worktree(a: SessionWorktreeArgs) -> Result<(), String> {
-    track_worktree(&a.dir)
-}
-
 /// Records dir in the worktrees of this agent session.
 pub fn track_worktree(dir: &str) -> Result<(), String> {
     let name = agent_session_name()?;
@@ -212,3 +208,7 @@ pub fn cmd_done() -> Result<(), String> {
     eprintln!("jw: {name} is done; it is stopped once it is idle and detached, and the worktrees it created are removed");
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/session.rs"]
+mod tests;
