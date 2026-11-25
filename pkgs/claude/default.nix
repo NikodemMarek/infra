@@ -244,6 +244,11 @@
           # skips the first-run screens and the trust prompt in projectsDir
           ${seedState} "$(${jq}/bin/jq -nc --arg p "${projectsDir}" \
             '{hasCompletedOnboarding: true, hasSeenAutoDefaultNotice: true, projects: {($p): {hasTrustDialogAccepted: true}}}')"
+          local top
+          top="$(${git}/bin/git rev-parse --show-toplevel 2>/dev/null)" || top=""
+          case "$top" in
+            "${projectsDir}/"*) ${seedState} "$(${jq}/bin/jq -nc --arg p "$top" '{projects: {($p): {hasTrustDialogAccepted: true}}}')" ;;
+          esac
           ${lib.concatMapStringsSep "\n" (
             e: ''__claude_link ${lib.escapeShellArg e} "${config}/${e}"''
           )
