@@ -42,5 +42,31 @@ spec:
             region: garage
             s3ForcePathStyle: "true"
             s3Url: http://100.100.215.91:3900
+      repositoryMaintenanceJob:
+        repositoryConfigData:
+          global:
+            keepLatestMaintenanceJobs: 3
+            podResources:
+              cpuRequest: "0"
+              cpuLimit: "0"
+              memoryRequest: 256Mi
+              memoryLimit: 1Gi
+            loadAffinity:
+              - nodeSelector:
+                  matchLabels:
+                    kubernetes.io/hostname: triss
+    nodeSelector:
+      kubernetes.io/hostname: triss
+    resources:
+      requests:
+        memory: 256Mi
+      limits:
+        memory: 1Gi
     snapshotsEnabled: false
     deployNodeAgent: true
+    nodeAgent:
+      resources:
+        requests:
+          memory: 64Mi
+        limits:
+          memory: 1Gi

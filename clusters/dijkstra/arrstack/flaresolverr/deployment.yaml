@@ -15,7 +15,7 @@ spec:
         app: flaresolverr
     spec:
       nodeSelector:
-        kubernetes.io/hostname: regis
+        kubernetes.io/hostname: triss
       containers:
         - name: flaresolverr
           image: ghcr.io/flaresolverr/flaresolverr:v3.5.2
@@ -30,7 +30,7 @@ spec:
           resources:
             requests:
               cpu: "50m"
-              memory: "256Mi"
+              memory: "768Mi"
             limits:
               cpu: "1000m"
-              memory: "1Gi"
+              memory: "1536Mi"

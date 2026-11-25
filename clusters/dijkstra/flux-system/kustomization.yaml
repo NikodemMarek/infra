@@ -15,3 +15,9 @@ patches:
         value:
           substitute:
             DOMAIN: nkmrk.com
+  - target:
+      kind: Deployment
+    patch: |
+      - op: add
+        path: /spec/template/spec/nodeSelector/kubernetes.io~1hostname
+        value: triss

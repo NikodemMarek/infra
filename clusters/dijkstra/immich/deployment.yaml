@@ -7,6 +7,8 @@ metadata:
     app: immich
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: immich
@@ -41,11 +43,11 @@ spec:
               mountPath: /data
           resources:
             requests:
-              memory: "256Mi"
+              memory: "768Mi"
               cpu: "50m"
             limits:
               # 768Mi got OOMKilled while ingesting a bulk upload (thumbnails + metadata in the same process)
-              memory: "1536Mi"
+              memory: "2Gi"
               cpu: "1000m"
               gpu.intel.com/i915: "1"
 ---
@@ -90,6 +92,8 @@ metadata:
     app: immich-machine-learning
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: immich-machine-learning
