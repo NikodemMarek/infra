@@ -51,6 +51,17 @@ window#waybar {
   color: @peach;
 }
 
+#custom-agents {
+  background-color: @mantle;
+  padding: 5px 0;
+  border-radius: 50px;
+  color: @green;
+}
+
+#custom-agents.idle {
+  color: @overlay1;
+}
+
 #network {
   background-color: @mantle;
   padding: 5px 0;

@@ -23,11 +23,23 @@ pkgs.symlinkJoin {
         sudo -n /run/current-system/sw/bin/networkctl up wg0
       fi
     '';
+    agent-status = pkgs.writeShellScriptBin "agent-status" ''
+      jw session list | jq -sc '
+        map(select(.running and .status != "done")) as $s
+        | ($s | map(select(.status == "busy")) | length) as $busy
+        | if $s == [] then {text: ""} else {
+            text: "\($busy)/\($s | length)",
+            alt: (if $busy > 0 then "busy" else "idle" end),
+            class: (if $busy > 0 then "busy" else "idle" end),
+            tooltip: ($s | map("\(.status)  \(.title // .name)") | join("\n") | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;"))
+          } end'
+    '';
     extraPkgs = [
       pkgs.iproute2
       pkgs.jq
       wireguard-status
       wireguard-toggle
+      agent-status
     ];
   in ''
     wrapProgram $out/bin/waybar \

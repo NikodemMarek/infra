@@ -11,7 +11,8 @@
     "network",
     "bluetooth",
     "custom/wireguard",
-    "custom/stay-awake"
+    "custom/stay-awake",
+    "custom/agents"
   ],
   "clock": {
     "format": "{:%H\n%M}",
@@ -90,6 +91,17 @@
     "signal": 8,
     "tooltip": false,
     "on-click": "stay-awake toggle; pkill -RTMIN+8 waybar"
+  },
+  "custom/agents": {
+    "format": "{icon}\n{}",
+    "format-icons": {
+      "busy": "󰚩",
+      "idle": "󱙺"
+    },
+    "exec": "agent-status",
+    "return-type": "json",
+    "interval": 5,
+    "tooltip": true
   },
   "modules-center": ["hyprland/workspaces"],
   "hyprland/workspaces": {
