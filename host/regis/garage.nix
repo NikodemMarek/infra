@@ -166,6 +166,8 @@ in {
       ExecStartPre = "${pkgs.util-linux}/bin/mountpoint -q /mnt/garage";
       Restart = "on-failure";
       RestartSec = "30s";
+      MemoryHigh = "1G";
+      MemoryMax = "1536M";
       DynamicUser = false;
       User = "garage";
       Group = "garage";
