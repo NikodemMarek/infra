@@ -84,7 +84,9 @@ jobs:
       - name: deploy
         if: steps.reachable.outputs.online == 'true'
         run: |
-          exec 3>&1 >/dev/null 2>&1
+          log="$RUNNER_TEMP/deploy.log"
+          exec 3>&1 >"$log" 2>&1
+          trap '[ $? -eq 0 ] || cat "$log" >&3' EXIT
           nix eval --raw .#knownHosts > "$RUNNER_TEMP/known_hosts"
           ssh_opts="-o UserKnownHostsFile=$RUNNER_TEMP/known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=15"
           override=(--override-input secrets "path:$RUNNER_TEMP/secrets")
