@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 
 use crate::procs::{live_claudes, Claude};
 use crate::record::Records;
-use crate::session::in_event_session;
 use crate::worker::{self, Delivery};
 use crate::workspace::{basename, dirname, has_agents_suffix};
 use crate::MsgArgs;
@@ -129,9 +128,6 @@ fn deliver(name: &str, text: &str, origin: &str, wait: Duration) -> Result<Strin
 }
 
 pub fn cmd_msg(a: MsgArgs) -> Result<(), String> {
-    if in_event_session() {
-        return Err("event sessions cannot send messages".to_string());
-    }
     let words = match a.text.first().map(String::as_str) {
         Some("--") => &a.text[1..],
         _ => &a.text[..],

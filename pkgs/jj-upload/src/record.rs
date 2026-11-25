@@ -10,9 +10,6 @@ pub fn record_mr(url: &str) {
     let Some(name) = env_nonempty("AGENT_SESSION") else {
         return;
     };
-    if env_nonempty("AGENT_ORIGIN").is_some_and(|o| o.starts_with("event:")) {
-        return;
-    }
     if let Err(e) = set_session_mr(url) {
         eprintln!("jj upload: cannot add {url} to session {name}: {e}");
     }

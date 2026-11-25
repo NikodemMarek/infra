@@ -38,4 +38,4 @@ Finish with:
 4. **To verify** — the exact commands/tests the verifier should run and what to look for.
 
 ## Learnings
-- Something about this repo a future agent would get wrong: add it to the repo's root AGENTS.md in this change (nothing sensitive: security weaknesses, accepted risks, credentials, personal data). If that edit is denied (event session), or the lesson is general, report it under **Learnings**.
+- Something about this repo a future agent would get wrong: add it to the repo's root AGENTS.md in this change (nothing sensitive: security weaknesses, accepted risks, credentials, personal data). If the lesson is general, report it under **Learnings**.

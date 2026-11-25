@@ -78,20 +78,6 @@
     ];
   };
 
-  eventGuard = shellHook {
-    bashOptions = [
-      "errexit"
-      "nounset"
-      "pipefail"
-    ];
-    name = "claude-event-guard";
-    src = ./event-guard.sh;
-    runtimeInputs = [
-      jq
-      coreutils
-    ];
-  };
-
   # Deliberately without errexit: a failing git call must never fail the hook.
   architectAutocommit = shellHook {
     name = "claude-architect-autocommit";
@@ -201,7 +187,6 @@ in
       guardWrites
       verifierGuard
       sudoGuard
-      eventGuard
       architectAutocommit
       routeEvent
       askpass
@@ -212,7 +197,7 @@ in
     ];
 
     meta = {
-      description = "Claude Code hook commands: write/bash guards, the event-session guard (no edits to AGENTS.md, CLAUDE.md or the knowledge file), architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop hook (waiting notification), the status hook (session record status), project MCP servers seeded as disabled";
+      description = "Claude Code hook commands: write/bash guards, architect memory autocommit, event routing, sudo askpass and the permission hook (answerable from agent-inbox), the Stop hook (waiting notification), the status hook (session record status), project MCP servers seeded as disabled";
       platforms = lib.platforms.unix;
     };
   }
