@@ -23,7 +23,7 @@ spec:
             claimName: immich-photos-pvc
       containers:
         - name: immich
-          image: ghcr.io/immich-app/immich-server:v2.7.5
+          image: ghcr.io/immich-app/immich-server:v3.4.2
           ports:
             - containerPort: 2283
           env:
@@ -106,7 +106,7 @@ spec:
             claimName: immich-ml-pvc
       containers:
         - name: immich-machine-learning
-          image: ghcr.io/immich-app/immich-machine-learning:v2.7.5-openvino
+          image: ghcr.io/immich-app/immich-machine-learning:v3.4.1-openvino
           ports:
             - containerPort: 3003
           env:
