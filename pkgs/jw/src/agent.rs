@@ -15,7 +15,7 @@ use crate::cmd::{output_with_input, stdin_is_tty};
 use crate::jj::Jj;
 use crate::procs::{claude_dir, live_claudes};
 use crate::record::{now, valid_name, write_error, Record, Records, MATE_KIND};
-use crate::session::{in_event_session, session_name};
+use crate::session::session_name;
 use crate::shpool::Shpool;
 use crate::worker;
 use crate::workspace::{
@@ -38,12 +38,11 @@ pub fn sh_quote(word: &str) -> String {
 /// marker). CLAUDE_CODE_* from a calling Claude (session id, child marker, messaging socket) would make the new Claude
 /// a child of the caller: it writes into the caller's transcript and never registers, so jw msg cannot reach it.
 fn agent_env() -> BTreeMap<String, String> {
-    const DROP: [&str; 8] = [
+    const DROP: [&str; 7] = [
         "CLAUDECODE",
         "CLAUDE_PID",
         "CLAUDE_EFFORT",
         "AI_AGENT",
-        "AGENT_ORIGIN",
         "CLAUDE_WORKSPACE_BASE",
         "AGENT_SESSION",
         "AGENT_HEADLESS",
@@ -77,9 +76,6 @@ fn task_record(prompt: &str, workspace: &str, reports_to: Option<&str>) -> Recor
 }
 
 pub fn cmd_agent(a: AgentArgs) -> Result<(), String> {
-    if in_event_session() {
-        return Err("event sessions cannot start agents".to_string());
-    }
     let interactive = a.interactive;
     let reports_to = a
         .reports_to
@@ -612,9 +608,6 @@ fn not_headless(name: &str) -> Result<(), String> {
 }
 
 pub fn cmd_resume(a: ResumeArgs) -> Result<(), String> {
-    if in_event_session() {
-        return Err("event sessions cannot resume sessions".to_string());
-    }
     let session = a.session.filter(|s| !s.is_empty());
     let repo = a.repo.filter(|r| !r.is_empty());
     if session.is_some() && repo.is_some() {
@@ -691,9 +684,6 @@ pub fn cmd_resume(a: ResumeArgs) -> Result<(), String> {
 }
 
 pub fn cmd_mate() -> Result<(), String> {
-    if in_event_session() {
-        return Err("event sessions cannot start a mate".to_string());
-    }
     let home = format!("{}/mate", root());
     let jj = Jj::in_dir(&home);
     if !is_dir(&format!("{home}/.jj")) {

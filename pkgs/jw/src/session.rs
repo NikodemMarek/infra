@@ -15,11 +15,6 @@ use crate::{
 
 const URL_MAX: usize = 2048;
 
-/// Event sessions run on untrusted text (GitLab); what they could hand off or write would become instructions elsewhere.
-pub fn in_event_session() -> bool {
-    env::var("AGENT_ORIGIN").is_ok_and(|origin| origin.starts_with("event:"))
-}
-
 /// name, else the session this process runs in.
 pub fn session_name(name: Option<&str>) -> Result<String, String> {
     let name = match name {
@@ -114,16 +109,10 @@ pub fn cmd_session_results(a: SessionResultsArgs) -> Result<(), String> {
 }
 
 pub fn cmd_session_ack(a: SessionAckArgs) -> Result<(), String> {
-    if in_event_session() {
-        return Err("event sessions cannot change session records".to_string());
-    }
     Records::new().ack(&a.name, a.seq)
 }
 
 pub fn cmd_session_set(a: SessionSetArgs) -> Result<(), String> {
-    if in_event_session() {
-        return Err("event sessions cannot change session records".to_string());
-    }
     let name = session_name(a.session.as_deref())?;
     for url in a.url.iter().chain(&a.mr) {
         if url.chars().count() > URL_MAX || !is_https(url) {
