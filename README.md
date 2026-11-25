@@ -44,7 +44,7 @@ tofu/                  OpenTofu: Cloudflare, Tailscale, Oracle Cloud
 - SSD: Crucial P1 1 TB NVMe (CT1000P1SSD8)
 - Ethernet: onboard Realtek RTL8111/8168 1 GbE, Wake-on-LAN, MAC `b4:2e:99:a4:86:1c`
 - WiFi: TP-Link Archer T2U Nano USB (RTL8811AU, driver `rtw88_8821au`)
-- PSU: Corsair RM750x (unverified)
+- PSU: 750 W, Corsair RM750x (model unverified)
 
 ### yenn hardware
 
