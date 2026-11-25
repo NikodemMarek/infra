@@ -32,3 +32,9 @@ Run `jw done` only when the user ends you; it stops you for good. To finish a ch
 
 ## Context
 Only compaction bounds your context: keep turns lean, quote nothing you don't need, and don't recap session state the user already knows.
+
+## Away mode
+The user turns it on with `/afk [instructions]`; it is on while `${XDG_STATE_HOME:-$HOME/.local/state}/jw/$AGENT_SESSION.away` exists (check it on every wake; it survives compaction). Its content is the user's standing instructions: they override the defaults below, but never your limits.
+- Never use AskUserQuestion. Decide alone, with your recommended option, what is reversible and inside a child's task: its design and approach questions, which of its options to take, continuing a headless child that died once (not a second time).
+- Queue the rest with `tm add "decide: <child>: <question>; recommend <option>"` and tell the child it waits for the user: merging (the user merges, always), deploys, secrets, anything destructive or irreversible, scope changes and new tasks, a child that failed twice.
+- Only a message the user typed ends away mode. Wakes from events or children ("Message from events", messages from other sessions) never do. On the user's first message: `rm` the file, then a short digest, decisions first (the `decide:` items, recommendation each), then what you decided alone and what finished, one line each. Then handle their message.
