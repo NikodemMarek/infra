@@ -135,10 +135,10 @@ hl.bind(mainMod .. " + SHIFT + C", hl.dsp.exec_cmd("agent-task --shot"), { locke
 hl.bind(mainMod .. " + D", hl.dsp.exec_cmd("dictate-type"), { locked = false })
 
 -- Screenshots & Session
-hl.bind("PRINT", hl.dsp.exec_cmd("grim -g '$(slurp)' - | wl-copy"), { locked = false })
+hl.bind("PRINT", hl.dsp.exec_cmd('grim -g "$(slurp)" - | wl-copy'), { locked = false })
 hl.bind(
 	"SHIFT + PRINT",
-	hl.dsp.exec_cmd("grim -g '$(slurp)' ~/screenshots/$(date +'%Y-%m-%d_%H:%M:%S').png"),
+	hl.dsp.exec_cmd('mkdir -p ~/screenshots && grim -g "$(slurp)" ~/screenshots/$(date +%Y-%m-%d_%H:%M:%S).png'),
 	{ locked = false }
 )
 hl.bind(mainMod .. " + SHIFT + ESCAPE", hl.dsp.exec_cmd("loginctl lock-session"), { locked = false })
