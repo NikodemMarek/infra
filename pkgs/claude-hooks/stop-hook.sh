@@ -14,6 +14,6 @@ jq -c '([.last_assistant_message | strings | split("\n")[] | select(startswith("
     | first // "waiting for you")[0:120] as $title
   | . + {title: $title, timeout: 86400}
   + (if (.session_id | type) == "string" and .session_id != "" then {key: .session_id} else {} end)
-  + (if (.last_assistant_message | type) == "string" then {body: .last_assistant_message[0:1000]} else {} end)' <<<"$input" |
+  + (if (.last_assistant_message | type) == "string" then {body: .last_assistant_message} else {} end)' <<<"$input" |
 	claude-route-event claude.waiting >&2
 exit 0
