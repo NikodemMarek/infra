@@ -118,6 +118,8 @@ spec:
             # default is one thread per CPU: CLIP and both face models then load at once and blow the 4Gi limit
             - name: MACHINE_LEARNING_REQUEST_THREADS
               value: "1"
+            - name: MACHINE_LEARNING_MODEL_TTL
+              value: "60"
           volumeMounts:
             - name: ml
               mountPath: /cache
