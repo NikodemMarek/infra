@@ -73,7 +73,7 @@ fn a1_agent_detached_start() {
 
     let out = e.jw_env(
         &e.root,
-        &[("CLAUDECODE", "1"), ("AGENT_ORIGIN", "other")],
+        &[("CLAUDECODE", "1")],
         &["agent", "-d", "repo", "hello", "world"],
     );
     out.ok();
@@ -106,7 +106,6 @@ fn a1_agent_detached_start() {
     );
     assert!(env.contains(&format!("SHPOOL_SESSION_NAME={name}").as_str()));
     assert!(!env.iter().any(|l| l.starts_with("CLAUDECODE=")));
-    assert!(!env.iter().any(|l| l.starts_with("AGENT_ORIGIN=")));
 
     let r = e.record(&name);
     assert_eq!(r["kind"], "task");
@@ -148,35 +147,6 @@ fn a3_agent_leading_dashdash_is_all_prompt() {
 }
 
 #[test]
-fn e2_knowledge_origin_alone_is_not_event_session() {
-    let e = Env::new();
-    let repo = e.repo();
-    e.jw_env(
-        &repo,
-        &[("KNOWLEDGE_ORIGIN", "event:x")],
-        &["agent", "-d", "repo", "hi"],
-    )
-    .ok();
-    assert!(e.logs.join("shpool.log").exists());
-}
-
-#[test]
-fn a4_agent_origin_not_passed_to_claude() {
-    let e = Env::new();
-    e.repo();
-    e.jw_env(
-        &e.root,
-        &[("AGENT_ORIGIN", "other")],
-        &["agent", "-d", "repo", "hi"],
-    )
-    .ok();
-    let log = e.log("claude.log");
-    assert!(!claude_env(&log)
-        .iter()
-        .any(|l| l.starts_with("AGENT_ORIGIN=")));
-}
-
-#[test]
 fn a5_agent_repo_from_first_word() {
     let e = Env::new();
     e.repo();
@@ -201,31 +171,6 @@ fn a6_agent_no_repo_fails() {
     assert!(!e.logs.join("shpool.log").exists());
     assert!(!e.root.join("repo.agents").exists());
     assert!(!e.logs.join("knowledge.log").exists());
-}
-
-#[test]
-fn e1_event_session_refusals() {
-    let e = Env::new();
-    let repo = e.repo();
-    let ev = [
-        ("AGENT_ORIGIN", "event:gitlab-note"),
-        ("AGENT_SESSION", "s1"),
-    ];
-
-    e.jw_env(&repo, &ev, &["agent", "-d", "repo", "hi"])
-        .fail("jw: event sessions cannot start agents");
-    assert!(!e.logs.join("shpool.log").exists());
-    assert!(!e.root.join("repo.agents").exists());
-
-    e.jw_env(&repo, &ev, &["session", "set", "--title", "x"])
-        .fail("jw: event sessions cannot change session records");
-    assert!(!e.record_path("s1").exists());
-
-    e.jw_env(&repo, &ev, &["session", "status", "busy"]).ok();
-    assert_eq!(e.record("s1")["status"], "busy");
-    e.jw_env(&repo, &ev, &["session", "get"]).ok();
-    e.jw_env(&repo, &ev, &["done"]).ok();
-    assert_eq!(e.record("s1")["status"], "done");
 }
 
 #[test]
@@ -1667,26 +1612,6 @@ fn m2_mate_uses_existing_repo() {
     let listed = e.jj(&home, &["workspace", "list", "-T", "name ++ \"\\n\""]);
     assert!(listed.lines().any(|l| l == name), "workspaces: {listed}");
     assert_eq!(e.record(&name)["kind"], "mate");
-}
-
-#[test]
-fn m3_mate_refused_in_event_session() {
-    let e = Env::new();
-    let out = e.jw_env(
-        &e.root,
-        &[
-            ("AGENT_ORIGIN", "event:gitlab-note"),
-            ("AGENT_SESSION", "s1"),
-        ],
-        &["mate"],
-    );
-    assert_eq!(out.code, 1, "{}", out.stderr);
-    assert!(out.stderr.contains("event sessions"), "{}", out.stderr);
-    assert!(shpool_lines(&e).is_empty());
-    assert!(!mate_home(&e).exists());
-    assert!(!e.root.join("mate.agents").exists());
-    assert!(!e.logs.join("claude.log").exists());
-    assert!(!e.state.join("agent-sessions").exists());
 }
 
 #[test]

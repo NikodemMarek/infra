@@ -207,9 +207,9 @@ struct MsgArgs {
 enum SessionAction {
     /// print the record as JSON; fails if there is none
     Get(SessionGetArgs),
-    /// set the given fields of the record, creating it; --mr adds to the list; refused in GitLab event sessions
+    /// set the given fields of the record, creating it; --mr adds to the list
     Set(SessionSetArgs),
-    /// set the status of this session's record (hooks run this); not for done, see jw done; allowed in GitLab event sessions
+    /// set the status of this session's record (hooks run this); not for done, see jw done
     Status(SessionStatusArgs),
     /// print the records as JSON lines sorted by name, each with its name, whether it is running (its shpool session; a headless worker's unit) and the numbers of its unacked results
     List(SessionListArgs),

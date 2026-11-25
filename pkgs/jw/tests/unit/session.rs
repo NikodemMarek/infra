@@ -10,7 +10,6 @@ fn track_worktree_behaviour() {
     fs::create_dir_all(&base).unwrap();
     env::set_var("XDG_STATE_HOME", base.join("state"));
     env::remove_var("AGENT_SESSION");
-    env::remove_var("AGENT_ORIGIN");
     let dir = |n: &str| {
         let d = base.join(n);
         fs::create_dir_all(&d).unwrap();
@@ -77,11 +76,6 @@ fn track_worktree_behaviour() {
     track_worktree(&s(&link)).unwrap();
     track_worktree(&s(&real)).unwrap();
     assert_eq!(wts(), vec![s(&b), s(&c), s(&real)]);
-
-    env::set_var("AGENT_ORIGIN", "event:gitlab-note");
-    let e = dir("ev");
-    track_worktree(&s(&e)).unwrap();
-    assert_eq!(wts().last(), Some(&s(&e)));
 
     let _ = fs::remove_dir_all(&base);
 }
