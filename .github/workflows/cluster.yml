@@ -2,7 +2,7 @@ name: cluster
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review, closed]
     paths:
       - clusters/**
       - .github/workflows/cluster.yml
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   build:
-    if: ${{ !github.event.pull_request.draft }}
+    if: ${{ !github.event.pull_request.draft && github.event.action != 'closed' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

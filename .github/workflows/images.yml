@@ -2,7 +2,7 @@ name: images
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review, closed]
   push:
     branches: [main]
   workflow_dispatch:
@@ -20,7 +20,7 @@ defaults:
 
 jobs:
   matrix-gateway:
-    if: ${{ !github.event.pull_request.draft }}
+    if: ${{ !github.event.pull_request.draft && github.event.action != 'closed' }}
     runs-on: ubuntu-26.04-arm
     permissions:
       contents: read
