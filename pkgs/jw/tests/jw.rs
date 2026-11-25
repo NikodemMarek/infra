@@ -36,8 +36,28 @@ fn claude_env(log: &str) -> Vec<&str> {
     log.lines().filter_map(|l| l.strip_prefix("env=")).collect()
 }
 
-fn claude_args(log: &str) -> Vec<&str> {
+fn claude_argv(log: &str) -> Vec<&str> {
     log.lines().filter_map(|l| l.strip_prefix("arg=")).collect()
+}
+
+/// Argv without the `--permission-mode bypassPermissions` pair, which every default session carries.
+fn claude_args(log: &str) -> Vec<&str> {
+    let all = claude_argv(log);
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < all.len() {
+        if all[i] == "--permission-mode" && all.get(i + 1) == Some(&"bypassPermissions") {
+            i += 2;
+        } else {
+            out.push(all[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn has_pair(args: &[&str], flag: &str, value: &str) -> bool {
+    args.windows(2).any(|w| w[0] == flag && w[1] == value)
 }
 
 fn num(v: &Value) -> f64 {
@@ -2383,8 +2403,6 @@ fn wt1_turn_runs_claude_and_writes_the_result() {
             "--output-format",
             "stream-json",
             "--verbose",
-            "--permission-prompts",
-            "none",
             "--disallowedTools",
             "AskUserQuestion"
         ]
@@ -3509,4 +3527,107 @@ fn ic16_busy_during_compact_is_restored() {
     let rec = e.record("C");
     assert_eq!(rec["status"], "idle");
     assert_eq!(num(&rec["status_at"]), 111.0);
+}
+
+#[test]
+fn pm1_interactive_agent_bypasses_permissions() {
+    let e = Env::new();
+    e.repo();
+    let out = e.jw(&e.root, &["agent", "-d", "repo", "--", "x"]);
+    out.ok();
+    let name = started(&out);
+    let log = e.log("claude.log");
+    let args = claude_argv(&log);
+    assert!(
+        has_pair(&args, "--permission-mode", "bypassPermissions"),
+        "{args:?}"
+    );
+    assert!(!args.contains(&"--permission-prompts"), "{args:?}");
+    assert!(e.record(&name).get("ask_permissions").is_none());
+}
+
+#[test]
+fn pm2_ask_permissions_drops_the_flag_and_is_recorded() {
+    let e = Env::new();
+    e.repo();
+    let out = e.jw(
+        &e.root,
+        &["agent", "-d", "--ask-permissions", "repo", "--", "x"],
+    );
+    out.ok();
+    let name = started(&out);
+    let log = e.log("claude.log");
+    let args = claude_argv(&log);
+    assert!(!args.contains(&"--permission-mode"), "{args:?}");
+    assert!(!args.contains(&"--permission-prompts"), "{args:?}");
+    assert_eq!(e.record(&name)["ask_permissions"], true);
+}
+
+#[test]
+fn pm3_headless_turn_bypasses_permissions_by_default() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    add_queue(&e, "C", "1-1.txt", "go");
+    claude_out(&e, &[result_event("ok")]);
+    turn(&e).ok();
+    let log = run_log(&e, 1);
+    let args = claude_argv(&log);
+    assert!(
+        has_pair(&args, "--permission-mode", "bypassPermissions"),
+        "{args:?}"
+    );
+    assert!(!args.contains(&"--permission-prompts"), "{args:?}");
+    assert!(
+        has_pair(&args, "--disallowedTools", "AskUserQuestion"),
+        "{args:?}"
+    );
+}
+
+#[test]
+fn pm4_headless_turn_with_ask_permissions_denies_prompts() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle", "ask_permissions": true}));
+    add_queue(&e, "C", "1-1.txt", "go");
+    claude_out(&e, &[result_event("ok")]);
+    turn(&e).ok();
+    let log = run_log(&e, 1);
+    let args = claude_argv(&log);
+    assert!(has_pair(&args, "--permission-prompts", "none"), "{args:?}");
+    assert!(!args.contains(&"--permission-mode"), "{args:?}");
+    assert!(!args.contains(&"bypassPermissions"), "{args:?}");
+    assert!(
+        has_pair(&args, "--disallowedTools", "AskUserQuestion"),
+        "{args:?}"
+    );
+}
+
+fn resume_task_log(e: &Env, extra: &str) -> String {
+    let name = "s-1124-000001";
+    let repo = e.repo();
+    let ws = e.workspace(name);
+    e.write_record(
+        name,
+        &format!(r#"{{"kind":"task","workspace":"{}"{extra}}}"#, ws.display()),
+    );
+    write_transcript(e, &repo, "task-id", &ws);
+    e.jw(&e.root, &["resume", "-d", "--session", name]).ok();
+    e.log("claude.log")
+}
+
+#[test]
+fn pm5_resume_takes_permissions_from_the_record() {
+    let e = Env::new();
+    let log = resume_task_log(&e, "");
+    let a = claude_argv(&log);
+    assert!(
+        has_pair(&a, "--permission-mode", "bypassPermissions"),
+        "{a:?}"
+    );
+
+    let e = Env::new();
+    let log = resume_task_log(&e, r#","ask_permissions":true"#);
+    let a = claude_argv(&log);
+    assert!(!a.contains(&"--permission-mode"), "{a:?}");
+    assert!(!a.contains(&"bypassPermissions"), "{a:?}");
+    assert!(a.contains(&"--resume"), "{a:?}");
 }

@@ -193,4 +193,5 @@
   effortLevel = "xhigh";
   theme = "dark";
   skipAutoPermissionPrompt = true;
+  skipDangerousModePermissionPrompt = true;
 }

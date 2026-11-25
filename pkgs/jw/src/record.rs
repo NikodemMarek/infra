@@ -95,6 +95,9 @@ pub struct Record {
     /// A headless worker: each turn is one `claude -p` run, ADR-083.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub headless: bool,
+    /// Claude runs without bypass mode: a headless turn denies what needs a prompt, an interactive session asks.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub ask_permissions: bool,
     /// result_seq when the open turn started; a turn is open iff this equals Some(result_seq).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_base: Option<u64>,
@@ -169,6 +172,10 @@ impl Record {
             reaped: number("reaped"),
             headless: map
                 .get("headless")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            ask_permissions: map
+                .get("ask_permissions")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
             turn_base: map.get("turn_base").and_then(Value::as_u64),

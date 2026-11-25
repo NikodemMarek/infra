@@ -288,6 +288,7 @@ fn run_claude(
     name: &str,
     workspace: &str,
     resume: Option<&str>,
+    ask_permissions: bool,
     input: String,
 ) -> Result<(Value, u64), String> {
     let mut cmd = Command::new("direnv");
@@ -295,22 +296,20 @@ fn run_claude(
     if let Some(id) = resume {
         cmd.args(["--resume", id]);
     }
-    cmd.args([
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--permission-prompts",
-        "none",
-        "--disallowedTools",
-        "AskUserQuestion",
-    ])
-    .current_dir(workspace)
-    .env("AGENT_SESSION", name)
-    .env("AGENT_HEADLESS", "1")
-    .env("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "0")
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
+    cmd.args(["--output-format", "stream-json", "--verbose"]);
+    if ask_permissions {
+        cmd.args(["--permission-prompts", "none"]);
+    } else {
+        cmd.args(["--permission-mode", "bypassPermissions"]);
+    }
+    cmd.args(["--disallowedTools", "AskUserQuestion"])
+        .current_dir(workspace)
+        .env("AGENT_SESSION", name)
+        .env("AGENT_HEADLESS", "1")
+        .env("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     // an ignored signal stays ignored across exec: claude must die on the unit's SIGTERM
     unsafe {
         cmd.pre_exec(|| {
@@ -428,10 +427,12 @@ fn idle_at(record: &Record, queue: &Path, seq: u64) -> bool {
 fn compact_session(records: &Records, name: &str, seq: u64) -> Result<(), String> {
     let queue = records.queue_dir(name);
     let mut idle = false;
+    let mut ask_permissions = false;
     let mut status = None;
     let mut status_at = None;
     records.update(name, |r| {
         idle = idle_at(r, &queue, seq);
+        ask_permissions = r.ask_permissions;
         if idle {
             r.turn_base = Some(seq);
             status = r.status.clone();
@@ -447,6 +448,7 @@ fn compact_session(records: &Records, name: &str, seq: u64) -> Result<(), String
             name,
             &workspace,
             resume.as_deref(),
+            ask_permissions,
             COMPACT_INSTRUCTIONS.to_string(),
         )
     });
@@ -466,9 +468,10 @@ fn compact_session(records: &Records, name: &str, seq: u64) -> Result<(), String
 /// With compact, first compacts the session if it is still idle at that result.
 pub fn cmd_worker_turn(name: &str, compact: Option<u64>) -> Result<(), String> {
     let records = Records::new();
-    if !records.read(name).is_some_and(|r| r.headless) {
+    let Some(record) = records.read(name).filter(|r| r.headless) else {
         return Err(format!("{name} is not a headless worker"));
-    }
+    };
+    let ask_permissions = record.ask_permissions;
     // a unit stop signals the whole cgroup: only claude dies, so the result is still written
     unsafe { libc::signal(libc::SIGTERM, libc::SIG_IGN) };
     if let Some(seq) = compact {
@@ -486,7 +489,7 @@ pub fn cmd_worker_turn(name: &str, compact: Option<u64>) -> Result<(), String> {
             .join("\n\n");
         let (kind, text, tokens) = match prepare(name) {
             Ok((workspace, resume)) => {
-                match run_claude(name, &workspace, resume.as_deref(), input) {
+                match run_claude(name, &workspace, resume.as_deref(), ask_permissions, input) {
                     Ok((event, tokens)) => (ResultKind::Result, result_text(&event), tokens),
                     Err(text) => (ResultKind::Died, text, 0),
                 }
