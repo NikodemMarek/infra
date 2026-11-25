@@ -13,6 +13,7 @@
   # Built-in auto-memory stays off (knowledge lives in AGENTS.md and the knowledge file);
   # both keys, so a wrong key name cannot leave it on.
   autoMemoryEnabled = false;
+  disableClaudeAiConnectors = true;
   env = {
     CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
     CLAUDE_CODE_AUTO_COMPACT_WINDOW = "300000";
