@@ -93,7 +93,8 @@
     "on-click": "stay-awake toggle; pkill -RTMIN+8 waybar"
   },
   "custom/agents": {
-    "format": "{icon}\n{}",
+    "format": "{icon}\n{text}",
+    "justify": "center",
     "format-icons": {
       "busy": "󰚩",
       "idle": "󱙺"

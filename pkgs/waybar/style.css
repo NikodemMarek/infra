@@ -143,3 +143,15 @@ window#waybar {
 #powermenu #custom-hibernate {
   color: @sapphire;
 }
+
+#custom-wireguard,
+#custom-stay-awake,
+#custom-agents,
+#custom-power,
+#custom-quit,
+#custom-lock,
+#custom-reboot,
+#custom-sleep,
+#custom-hibernate {
+  min-width: 34px;
+}
