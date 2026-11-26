@@ -30,11 +30,11 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
-    environment.systemPackages = [pkgs.shpool pkgs.natscli];
+    environment.systemPackages = [pkgs.shpool pkgs.natscli pkgs.plan-review];
 
     systemd = {
       # units ship with the packages; NixOS ignores their [Install]
-      packages = [pkgs.nats-server pkgs.event-handlers];
+      packages = [pkgs.nats-server pkgs.event-handlers pkgs.plan-review];
       services.nats.wantedBy = ["multi-user.target"];
 
       user = {
@@ -66,6 +66,8 @@ in {
               SSH_AUTH_SOCK = "%t/ssh-agent";
             };
           };
+
+          plan-review.wantedBy = ["default.target"];
 
           jw-reap = {
             description = "Publish MR activity of agent sessions, stop finished or long-idle ones and remove their merged workspaces";
