@@ -7,7 +7,7 @@
     awake=false
     stay-awake status > /dev/null && awake=true
     wg=$(wireguard-status | jq '.percentage >= 50')
-    wifi=$(networkctl list --json=short | jq -c 'first(.Interfaces[] | select(.Type == "wlan") | {ssid: (.SSID // ""), state: .OperationalState}) // {}')
+    wifi=$(networkctl list --json=short 2> /dev/null | jq -c 'first(.Interfaces[] | select(.Type == "wlan") | {ssid: (.SSID // ""), state: .OperationalState}) // {}')
     volume=$(pactl get-sink-volume @DEFAULT_SINK@ | grep -o '[0-9]*%' | head -1 | tr -d %)
     muted=false
     pactl get-sink-mute @DEFAULT_SINK@ | grep -q yes && muted=true
@@ -16,7 +16,7 @@
     agents=$(jw session list | jq -sc 'map(select(.running and .status != "done") | {status, title: (.title // .name)})')
     tasks=$(tm list --json | jq -c 'map(select(.status != "done") | {line, status, description})')
     jq -nc \
-      --argjson awake "$awake" --argjson wg "$wg" --argjson wifi "$wifi" \
+      --argjson awake "$awake" --argjson wg "$wg" --argjson wifi "''${wifi:-"{}"}" \
       --argjson volume "''${volume:-0}" --argjson muted "$muted" --argjson bluetooth "$bluetooth" --argjson brightness "''${brightness:-0}" \
       --argjson agents "''${agents:-[]}" --argjson tasks "''${tasks:-[]}" \
       '$ARGS.named'
