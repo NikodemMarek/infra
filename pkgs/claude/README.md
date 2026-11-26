@@ -10,13 +10,13 @@ nix build .#claude                                # build it (from the repo root
 ## Layout
 
 - `pkgs/claude/` - the wrapper (`default.nix`), `CLAUDE.md`, `mate.md` (the first mate's role prompt, appended with `--append-system-prompt-file` to the system prompt of every session `jw mate` starts or resumes), `agents/*.md`, `settings.nix` (rendered to `settings.json`), `permissions.nix` (imported by `settings.nix`) and this README
-- `pkgs/agent-skills/skills/` - `*/SKILL.md`, tool-agnostic skills shared by Claude and other tools (`jj`, `atomic-commits`, `commit`, `drill-me`, `afk` for the first mate); `claude` takes them from the `agent-skills` package
+- `pkgs/agent-skills/skills/` - `*/SKILL.md`, tool-agnostic skills shared by Claude and other tools (`jj`, `atomic-commits`, `commit`, `drill-me`, `visual-plan`, `afk` for the first mate); `claude` takes them from the `agent-skills` package
 - `pkgs/jj-upload`, `pkgs/claude-hooks`, `pkgs/claude-statusline`, `pkgs/agent-skills` - the other tools
 - `pkgs/default.nix` - registers `claude` and the tools; `overlays/default.nix` exposes them as the `additions` overlay and `flake.nix` exports them as `packages`
 
 `@memoryDir@`, `@dataDir@`, `@projectsDir@` and `@knowledgeFile@` in the markdown files and the settings are substituted at build time. `knowledgeFile` (default `$dataDir/knowledge.md`) is the cross-repo knowledge file `CLAUDE.md` imports: edits ask for confirmation.
 
-The wrapper takes `claude-hooks`, `claude-statusline`, `forge` and `jj-upload` from the package set (`callPackage`) and puts them on its `PATH`, so overriding any of them propagates into `claude`. `jw`, `jj` and `git`, which the workspace hooks (`jw hook`) need, go at the end of `PATH`, so the host's own win. Its default skills come from `agent-skills` the same way. `pkgs/default.nix` passes `null` for `instructions`, `agents`, `skills` and `settings` so that callPackage never injects a same-named package and the bundled defaults are used.
+The wrapper takes `claude-hooks`, `claude-statusline`, `forge` and `jj-upload` from the package set (`callPackage`) and puts them on its `PATH`, so overriding any of them propagates into `claude`. `jw`, `jj` and `git`, which the workspace hooks (`jw hook`) need, and `plan-review` (for the `visual-plan` skill) go at the end of `PATH`, so the host's own win. Its default skills come from `agent-skills` the same way. `pkgs/default.nix` passes `null` for `instructions`, `agents`, `skills` and `settings` so that callPackage never injects a same-named package and the bundled defaults are used.
 
 ## Using it in this flake
 

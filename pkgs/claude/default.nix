@@ -15,6 +15,7 @@
   jj-upload,
   agent-skills,
   jw,
+  plan-review,
   jujutsu,
   git,
   # CLAUDE.md (path). null -> ./CLAUDE.md
@@ -360,7 +361,7 @@
               ++ extraPackages
             )
           } \
-            --suffix PATH : ${lib.makeBinPath [jw jujutsu git]}
+            --suffix PATH : ${lib.makeBinPath [jw plan-review jujutsu git]}
         '';
 
         passthru = {
