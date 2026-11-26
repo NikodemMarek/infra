@@ -200,7 +200,10 @@ pub fn job_log_path(project: &str, id: u64) -> String {
 }
 
 pub fn comments(api: &Api, target: &Target, number: u64) -> Result<Vec<Comment>> {
-    let path = format!("{}/discussions?per_page=100", view_path(&target.project, number));
+    let path = format!(
+        "{}/discussions?per_page=100",
+        view_path(&target.project, number)
+    );
     let mut comments: Vec<Comment> = api
         .get_ndjson::<Discussion>(&path)?
         .into_iter()

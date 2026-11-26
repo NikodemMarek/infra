@@ -3,7 +3,16 @@ import json
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fakes import ALERTS_ROOM, MAIL_ROOM, OWNER, ROOM, USER, FakeBus, FakeMatrix, owner_message
+from fakes import (
+    ALERTS_ROOM,
+    MAIL_ROOM,
+    OWNER,
+    ROOM,
+    USER,
+    FakeBus,
+    FakeMatrix,
+    owner_message,
+)
 from matrix_gateway.data import Obj
 from matrix_gateway.gateway import DEVICE_ID, Fatal, Gateway, MatrixError
 from matrix_gateway.logic import ROUTE

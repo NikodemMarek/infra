@@ -80,6 +80,8 @@ in {
         "*.pub"
         "*.cred"
         "*.png"
+        "clusters/*/flux-system/gotk-*.yaml"
+        "clusters/*/monitoring/grafana/dashboards/*.json"
       ];
     };
   };

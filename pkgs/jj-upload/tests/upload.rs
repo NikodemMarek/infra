@@ -664,9 +664,7 @@ fn local_only_extra_bookmark_is_deleted_without_push() {
 
     assert_eq!(e.remote_branch("nm/extra"), None);
     assert!(e.remote_branch(&a.branch).is_some());
-    assert!(!e
-        .jj(&["bookmark", "list", "nm/extra"])
-        .contains("nm/extra"));
+    assert!(!e.jj(&["bookmark", "list", "nm/extra"]).contains("nm/extra"));
 }
 
 #[test]

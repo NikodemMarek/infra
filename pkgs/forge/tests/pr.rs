@@ -214,7 +214,10 @@ fn list_crlf_is_normalized() {
     let mut e = gh_repo();
     e.route(
         "GET repos/o/r/pulls?state=all&sort=updated&direction=desc&per_page=100",
-        json!([merge(gh_raw(), json!({"title": "a\r\nb", "body": "c\r\nd"}))]),
+        json!([merge(
+            gh_raw(),
+            json!({"title": "a\r\nb", "body": "c\r\nd"})
+        )]),
     );
     let v = e.forge(&["pr", "list"]).json();
     assert_eq!(v[0]["title"], "a\nb");

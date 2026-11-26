@@ -7,6 +7,6 @@ SCRIPTS_DIR="${SCRIPTS_DIR:-/scripts}"
 # give the node time to settle (network, other pods) after boot
 sleep "${BOOT_DELAY:-900}"
 if ! SKIP_IF_SYNCED=1 "$SCRIPTS_DIR/run.sh"; then
-  echo "boot sync failed, not retrying until the next boot" >&2
+	echo "boot sync failed, not retrying until the next boot" >&2
 fi
 exec sleep infinity

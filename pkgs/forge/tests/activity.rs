@@ -337,7 +337,13 @@ fn gl_discussions(discussions: Value) -> (Env, Value) {
 }
 
 fn gl_comments(notes: Value) -> (Env, Value) {
-    let ds: Vec<Value> = notes.as_array().unwrap().iter().cloned().map(single).collect();
+    let ds: Vec<Value> = notes
+        .as_array()
+        .unwrap()
+        .iter()
+        .cloned()
+        .map(single)
+        .collect();
     gl_discussions(json!(ds))
 }
 
@@ -479,7 +485,7 @@ fn gitlab_comments_ties_keep_fetch_order() {
 #[test]
 fn gitlab_comments_not_found_fails() {
     let mut e = gl();
-    e.route_error(&get(GL_DISC),"404 Not Found");
+    e.route_error(&get(GL_DISC), "404 Not Found");
     let out = e.forge(&["pr", "comments", GL_URL]);
     out.fails();
     assert!(out.stderr.contains("404 Not Found"), "{}", out.stderr);

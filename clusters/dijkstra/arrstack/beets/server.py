@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import json
 import logging
 import os
@@ -6,42 +5,42 @@ import queue
 import subprocess
 import sys
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 
+log = logging.getLogger("beets-webhook")
 import_queue = queue.Queue()
 
+
 def run_beets_import(target_path):
-    logging.info(f"Starting beets import for path: {target_path}")
+    log.info(f"Starting beets import for path: {target_path}")
     cmd = ["beet", "import", "-q", target_path]
     try:
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if result.returncode == 0:
-            logging.info(f"Successfully imported: {target_path}")
+            log.info(f"Successfully imported: {target_path}")
             if result.stdout.strip():
-                logging.info(f"Output: {result.stdout.strip()}")
+                log.info(f"Output: {result.stdout.strip()}")
         else:
-            logging.error(f"Beets import failed for {target_path} (exit code {result.returncode})")
+            log.error(
+                f"Beets import failed for {target_path} (exit code {result.returncode})"
+            )
             if result.stderr.strip():
-                logging.error(f"Stderr: {result.stderr.strip()}")
+                log.error(f"Stderr: {result.stderr.strip()}")
             if result.stdout.strip():
-                logging.error(f"Stdout: {result.stdout.strip()}")
-    except Exception as e:
-        logging.exception(f"Exception during beets import for {target_path}: {e}")
+                log.error(f"Stdout: {result.stdout.strip()}")
+    except Exception:
+        log.exception(f"Exception during beets import for {target_path}")
+
 
 def worker():
-    logging.info("Worker thread started and listening for import jobs.")
+    log.info("Worker thread started and listening for import jobs.")
     while True:
         target_path = import_queue.get()
         try:
@@ -49,12 +48,13 @@ def worker():
         finally:
             import_queue.task_done()
 
+
 def extract_target_path(data, query_params):
-    if 'path' in query_params and query_params['path']:
-        p = query_params['path'][0]
+    if query_params.get("path"):
+        p = query_params["path"][0]
         if os.path.exists(p):
             return p
-        dl_p = os.path.join('/downloads', p.lstrip('/'))
+        dl_p = os.path.join("/downloads", p.lstrip("/"))
         if os.path.exists(dl_p):
             return dl_p
 
@@ -64,8 +64,11 @@ def extract_target_path(data, query_params):
     track_files = data.get("trackFiles")
     if isinstance(track_files, list):
         paths = [
-            tf["path"] for tf in track_files
-            if isinstance(tf, dict) and isinstance(tf.get("path"), str) and os.path.isabs(tf["path"])
+            tf["path"]
+            for tf in track_files
+            if isinstance(tf, dict)
+            and isinstance(tf.get("path"), str)
+            and os.path.isabs(tf["path"])
         ]
         if paths:
             common = os.path.commonpath([os.path.dirname(p) for p in paths])
@@ -94,7 +97,7 @@ def extract_target_path(data, query_params):
     if isinstance(added_tracks, list) and len(added_tracks) > 0 and added_tracks[0]:
         candidates.append(os.path.dirname(added_tracks[0]))
     elif isinstance(added_tracks, str) and added_tracks:
-        first_track = added_tracks.split('|')[0]
+        first_track = added_tracks.split("|")[0]
         candidates.append(os.path.dirname(first_track))
 
     for cand in candidates:
@@ -102,29 +105,33 @@ def extract_target_path(data, query_params):
             cand = cand.strip()
             if os.path.exists(cand):
                 return cand
-            dl_cand = os.path.join('/downloads', cand.lstrip('/'))
+            dl_cand = os.path.join("/downloads", cand.lstrip("/"))
             if os.path.exists(dl_cand):
                 return dl_cand
 
     return None
 
+
 class WebhookHandler(BaseHTTPRequestHandler):
     def _send_json_response(self, code, response_data):
-        body = json.dumps(response_data).encode('utf-8')
+        body = json.dumps(response_data).encode("utf-8")
         self.send_response(code)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', str(len(body)))
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path in ['/health', '/ping', '/']:
-            self._send_json_response(200, {
-                "status": "ok",
-                "service": "beets-webhook-server",
-                "queue_size": import_queue.qsize()
-            })
+        if parsed.path in ["/health", "/ping", "/"]:
+            self._send_json_response(
+                200,
+                {
+                    "status": "ok",
+                    "service": "beets-webhook-server",
+                    "queue_size": import_queue.qsize(),
+                },
+            )
         else:
             self._send_json_response(404, {"error": "Not Found"})
 
@@ -132,50 +139,69 @@ class WebhookHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         query_params = parse_qs(parsed.query)
 
-        content_length = int(self.headers.get('Content-Length', 0))
+        content_length = int(self.headers.get("Content-Length", 0))
         post_data = {}
         if content_length > 0:
             raw_body = self.rfile.read(content_length)
             try:
-                post_data = json.loads(raw_body.decode('utf-8'))
-            except Exception as e:
-                logging.warning(f"Failed to parse JSON body: {e}")
+                post_data = json.loads(raw_body.decode("utf-8"))
+            except ValueError as e:
+                log.warning(f"Failed to parse JSON body: {e}")
 
-        logging.info(f"Received POST request to {self.path}. Payload: {post_data}")
+        log.info(f"Received POST request to {self.path}. Payload: {post_data}")
 
-        event_type = post_data.get("eventType") or post_data.get("event_type") or post_data.get("event")
+        event_type = (
+            post_data.get("eventType")
+            or post_data.get("event_type")
+            or post_data.get("event")
+        )
         if event_type == "Test":
-            logging.info("Handled Lidarr Test event successfully.")
-            self._send_json_response(200, {
-                "status": "ok",
-                "message": "Lidarr webhook test successful"
-            })
+            log.info("Handled Lidarr Test event successfully.")
+            self._send_json_response(
+                200, {"status": "ok", "message": "Lidarr webhook test successful"}
+            )
             return
 
         target_path = extract_target_path(post_data, query_params)
 
-        if not target_path:
-            if post_data.get("import_downloads") is True and os.path.exists("/downloads"):
-                target_path = "/downloads"
+        if (
+            not target_path
+            and post_data.get("import_downloads") is True
+            and os.path.exists("/downloads")
+        ):
+            target_path = "/downloads"
 
         if target_path:
             import_queue.put(target_path)
-            logging.info(f"Queued import for path: {target_path} (Queue size: {import_queue.qsize()})")
-            self._send_json_response(200, {
-                "status": "queued",
-                "message": "Import job queued successfully",
-                "path": target_path,
-                "queue_position": import_queue.qsize()
-            })
+            log.info(
+                f"Queued import for path: {target_path} (Queue size: {import_queue.qsize()})"
+            )
+            self._send_json_response(
+                200,
+                {
+                    "status": "queued",
+                    "message": "Import job queued successfully",
+                    "path": target_path,
+                    "queue_position": import_queue.qsize(),
+                },
+            )
         else:
-            logging.warning(f"No valid target path found in payload or filesystem: {post_data}")
-            self._send_json_response(400, {
-                "status": "error",
-                "message": "No valid target path found in request payload or filesystem."
-            })
+            log.warning(
+                f"No valid target path found in payload or filesystem: {post_data}"
+            )
+            self._send_json_response(
+                400,
+                {
+                    "status": "error",
+                    "message": "No valid target path found in request payload or filesystem.",
+                },
+            )
 
     def log_message(self, format, *args):
-        logging.info(f"HTTP {self.command} {self.path} - {args[1] if len(args) > 1 else ''}")
+        log.info(
+            f"HTTP {self.command} {self.path} - {args[1] if len(args) > 1 else ''}"
+        )
+
 
 def main():
     port = int(os.environ.get("PORT", "8000"))
@@ -183,15 +209,16 @@ def main():
     t = threading.Thread(target=worker, daemon=True)
     t.start()
 
-    server_address = ('', port)
+    server_address = ("", port)
     httpd = HTTPServer(server_address, WebhookHandler)
-    logging.info(f"Beets Webhook Server running on port {port}...")
+    log.info(f"Beets Webhook Server running on port {port}...")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
     httpd.server_close()
-    logging.info("Server stopped.")
+    log.info("Server stopped.")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
