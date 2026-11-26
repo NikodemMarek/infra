@@ -1,4 +1,4 @@
-{...}: {
+_: {
   boot = {
     kernelModules = ["iTCO_wdt"];
     blacklistedKernelModules = ["intel_oc_wdt"];

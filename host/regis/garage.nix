@@ -155,42 +155,44 @@ in {
     };
   };
 
-  # A static user, so the secret and the dataset can be owned by it
-  systemd.services.garage = {
-    # The fstab mount of tank/garage races zfs-mount.service at boot and loses
-    # (the dataset ends up mounted anyway), so RequiresMountsFor would fail
-    # garage. Wait for zfs-mount instead and refuse to start on the bare root.
-    after = ["zfs-mount.service"];
-    wants = ["zfs-mount.service"];
-    serviceConfig = {
-      ExecStartPre = "${pkgs.util-linux}/bin/mountpoint -q /mnt/garage";
-      Restart = "on-failure";
-      RestartSec = "30s";
-      MemoryHigh = "1G";
-      MemoryMax = "1536M";
-      DynamicUser = false;
-      User = "garage";
-      Group = "garage";
-      ExecStart = lib.mkForce "${config.services.garage.package}/bin/garage server --single-node";
+  systemd = {
+    # A static user, so the secret and the dataset can be owned by it
+    services.garage = {
+      # The fstab mount of tank/garage races zfs-mount.service at boot and loses
+      # (the dataset ends up mounted anyway), so RequiresMountsFor would fail
+      # garage. Wait for zfs-mount instead and refuse to start on the bare root.
+      after = ["zfs-mount.service"];
+      wants = ["zfs-mount.service"];
+      serviceConfig = {
+        ExecStartPre = "${pkgs.util-linux}/bin/mountpoint -q /mnt/garage";
+        Restart = "on-failure";
+        RestartSec = "30s";
+        MemoryHigh = "1G";
+        MemoryMax = "1536M";
+        DynamicUser = false;
+        User = "garage";
+        Group = "garage";
+        ExecStart = lib.mkForce "${config.services.garage.package}/bin/garage server --single-node";
+      };
     };
-  };
 
-  systemd.services.garage-provision = {
-    wantedBy = ["multi-user.target"];
-    requires = ["garage.service"];
-    after = ["garage.service"];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      TimeoutStartSec = "2min";
-      User = "garage";
-      Group = "garage";
-      ExecStart = lib.getExe garage-provision;
+    services.garage-provision = {
+      wantedBy = ["multi-user.target"];
+      requires = ["garage.service"];
+      after = ["garage.service"];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        TimeoutStartSec = "2min";
+        User = "garage";
+        Group = "garage";
+        ExecStart = lib.getExe garage-provision;
+      };
     };
-  };
 
-  systemd.tmpfiles.rules = [
-    "d /mnt/garage/meta 0700 garage garage -"
-    "d /mnt/garage/data 0700 garage garage -"
-  ];
+    tmpfiles.rules = [
+      "d /mnt/garage/meta 0700 garage garage -"
+      "d /mnt/garage/data 0700 garage garage -"
+    ];
+  };
 }

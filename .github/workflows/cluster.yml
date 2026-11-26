@@ -26,8 +26,4 @@ jobs:
       - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
       - name: Build
         run: >
-          nix shell --inputs-from . nixpkgs#fluxcd -c
-          flux build kustomization flux-system
-          --path ./clusters/dijkstra
-          --kustomization-file ./clusters/dijkstra/flux-system/gotk-sync.yaml
-          --dry-run > /dev/null
+          nix shell --inputs-from . nixpkgs#fluxcd -c flux build kustomization flux-system --path ./clusters/dijkstra --kustomization-file ./clusters/dijkstra/flux-system/gotk-sync.yaml --dry-run > /dev/null

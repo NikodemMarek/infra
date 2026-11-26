@@ -1,6 +1,6 @@
 use std::env;
 
-use crate::cmd::{Result, run};
+use crate::cmd::{run, Result};
 
 fn env_nonempty(key: &str) -> Option<String> {
     env::var(key).ok().filter(|v| !v.is_empty())

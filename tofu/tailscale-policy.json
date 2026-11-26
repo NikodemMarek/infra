@@ -44,12 +44,29 @@
     {
       "src": "tag:ci",
       "accept": ["tag:server:22", "tag:server:3902"],
-      "deny": ["tag:server:80", "tag:server:443", "tag:server:3900", "tag:server:6443", "tag:management:22", "tag:ci:22", "10.42.0.1:22", "10.42.0.1:443"]
+      "deny": [
+        "tag:server:80",
+        "tag:server:443",
+        "tag:server:3900",
+        "tag:server:6443",
+        "tag:management:22",
+        "tag:ci:22",
+        "10.42.0.1:22",
+        "10.42.0.1:443"
+      ]
     },
     {
       "src": "tag:ci-cache",
       "accept": ["tag:server:3900", "tag:server:3902"],
-      "deny": ["tag:server:22", "tag:server:80", "tag:server:443", "tag:server:6443", "tag:management:22", "10.42.0.1:22", "10.42.0.1:443"]
+      "deny": [
+        "tag:server:22",
+        "tag:server:80",
+        "tag:server:443",
+        "tag:server:6443",
+        "tag:management:22",
+        "10.42.0.1:22",
+        "10.42.0.1:443"
+      ]
     }
   ]
 }

@@ -35,10 +35,10 @@ output:
       pattern: fan_out
       outputs:
         - nats:
-            urls: [nats://nats.nats.svc.cluster.local:4222]
+            urls: ['nats://nats.nats.svc.cluster.local:4222']
             subject: mail.received
         - nats:
-            urls: [nats://nats.nats.svc.cluster.local:4222]
+            urls: ['nats://nats.nats.svc.cluster.local:4222']
             subject: matrix.send
           processors:
             - mapping: |

@@ -6,7 +6,9 @@
 dockerTools.buildLayeredImage {
   name = "matrix-gateway";
   compressor = "none";
-  config.Entrypoint = [(lib.getExe matrix-gateway)];
-  config.Env = ["XDG_CONFIG_HOME=/var/empty"];
-  config.Labels."org.opencontainers.image.source" = "https://github.com/NikodemMarek/infra";
+  config = {
+    Entrypoint = [(lib.getExe matrix-gateway)];
+    Env = ["XDG_CONFIG_HOME=/var/empty"];
+    Labels."org.opencontainers.image.source" = "https://github.com/NikodemMarek/infra";
+  };
 }

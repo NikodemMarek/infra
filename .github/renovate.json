@@ -1,7 +1,14 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "helpers:pinGitHubActionDigestsToSemver"],
-  "enabledManagers": ["custom.regex", "flux", "github-actions", "kubernetes", "nix", "terraform"],
+  "enabledManagers": [
+    "custom.regex",
+    "flux",
+    "github-actions",
+    "kubernetes",
+    "nix",
+    "terraform"
+  ],
   "schedule": ["* * * * 6"],
   "minimumReleaseAge": "5 days",
   "flux": { "managerFilePatterns": ["/^clusters/.+\\.yaml$/"] },
@@ -19,10 +26,18 @@
   ],
   "lockFileMaintenance": { "enabled": true, "schedule": ["* * * * 6"] },
   "packageRules": [
-    { "matchManagers": ["kubernetes"], "matchFileNames": ["clusters/dijkstra/flux-system/**"], "enabled": false },
+    {
+      "matchManagers": ["kubernetes"],
+      "matchFileNames": ["clusters/dijkstra/flux-system/**"],
+      "enabled": false
+    },
     { "matchUpdateTypes": ["major"], "minimumReleaseAge": "14 days" },
     { "matchManagers": ["github-actions"], "groupName": "GitHub Actions" },
-    { "matchManagers": ["nix"], "matchUpdateTypes": ["digest"], "enabled": false },
+    {
+      "matchManagers": ["nix"],
+      "matchUpdateTypes": ["digest"],
+      "enabled": false
+    },
     { "matchPackageNames": ["ghcr.io/immich-app/**"], "groupName": "immich" },
     {
       "matchPackageNames": ["linuxserver/**", "lscr.io/linuxserver/**"],
@@ -49,7 +64,10 @@
       "matchPackageNames": ["ghcr.io/ggml-org/llama.cpp"],
       "versioning": "regex:^server-b(?<patch>\\d+)$"
     },
-    { "matchPackageNames": ["jellyfin/jellyfin"], "allowedVersions": "/^\\d{10}$/" },
+    {
+      "matchPackageNames": ["jellyfin/jellyfin"],
+      "allowedVersions": "/^\\d{10}$/"
+    },
     {
       "matchManagers": ["kubernetes"],
       "matchPackageNames": ["velero/velero-plugin-for-aws"],

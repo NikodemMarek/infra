@@ -12,8 +12,8 @@ STATE_DIR="${STATE_DIR:-/data/.gutenberg-state}"
 BATCH=2000
 
 if [[ "${SOURCE_DIR%/*}" != "${TARGET_DIR%/*}" ]]; then
-    echo "SOURCE_DIR and TARGET_DIR must have the same parent" >&2
-    exit 1
+	echo "SOURCE_DIR and TARGET_DIR must have the same parent" >&2
+	exit 1
 fi
 SOURCE_NAME="${SOURCE_DIR##*/}"
 
@@ -26,9 +26,9 @@ touch "$STATE_DIR/started"
 find "$TARGET_DIR" -xtype l -delete
 
 if [[ "${FULL:-}" == 1 || ! -e "$STATE_DIR/last-done" ]]; then
-    find "$SOURCE_DIR" -name "*-images-3.epub" > "$TMP/all"
+	find "$SOURCE_DIR" -name "*-images-3.epub" >"$TMP/all"
 else
-    find "$SOURCE_DIR" -name "*-images-3.epub" -cnewer "$STATE_DIR/last-done" > "$TMP/all"
+	find "$SOURCE_DIR" -name "*-images-3.epub" -cnewer "$STATE_DIR/last-done" >"$TMP/all"
 fi
 
 BAD='[/\\:*"<>|]'
@@ -39,35 +39,35 @@ SUFFIX='[[:space:]]+(Jr\.?|Sr\.?|I{1,3}|IV|VI{0,3})$'
 # Sets CLEAN: $1 with control characters replaced by "." (as exiftool's text
 # output does), / \ : * " < > | removed and trimmed of whitespace.
 clean() {
-    local LC_ALL=C
-    local v="$1"
-    v="${v//[$'\001'-$'\037'$'\177']/.}"
-    v="${v//$BAD/}"
-    v="${v#"${v%%[![:space:]]*}"}"
-    v="${v%"${v##*[![:space:]]}"}"
-    CLEAN="$v"
+	local LC_ALL=C
+	local v="$1"
+	v="${v//[$'\001'-$'\037'$'\177']/.}"
+	v="${v//$BAD/}"
+	v="${v#"${v%%[![:space:]]*}"}"
+	v="${v%"${v##*[![:space:]]}"}"
+	CLEAN="$v"
 }
 
 # Sets INITIAL: upper-cased first byte of the author's surname, "#" if none.
 initial() {
-    local LC_ALL=C
-    local author="$1" cleaned surname
-    if [[ "$author" == *,* ]]; then
-        surname="${author%%,*}"
-    else
-        cleaned="$author"
-        shopt -s nocasematch
-        if [[ "$author" =~ $SUFFIX ]]; then
-            cleaned="${author%"${BASH_REMATCH[0]}"}"
-        fi
-        shopt -u nocasematch
-        # last blank-separated field, like awk '{print $NF}'
-        cleaned="${cleaned%"${cleaned##*[![:blank:]]}"}"
-        surname="${cleaned##*[[:blank:]]}"
-    fi
-    surname="${surname:0:1}"
-    INITIAL="${surname^^}"
-    [[ -n "$INITIAL" ]] || INITIAL="#"
+	local LC_ALL=C
+	local author="$1" cleaned surname
+	if [[ "$author" == *,* ]]; then
+		surname="${author%%,*}"
+	else
+		cleaned="$author"
+		shopt -s nocasematch
+		if [[ "$author" =~ $SUFFIX ]]; then
+			cleaned="${author%"${BASH_REMATCH[0]}"}"
+		fi
+		shopt -u nocasematch
+		# last blank-separated field, like awk '{print $NF}'
+		cleaned="${cleaned%"${cleaned##*[![:blank:]]}"}"
+		surname="${cleaned##*[[:blank:]]}"
+	fi
+	surname="${surname:0:1}"
+	INITIAL="${surname^^}"
+	[[ -n "$INITIAL" ]] || INITIAL="#"
 }
 
 # Per batch one NUL-terminated stream: source, title, creator, series. NULs
@@ -78,64 +78,67 @@ JQ='def s: (if . == null then "" elif type == "array" then map(tostring) | join(
         | explode | map(select(. != 0)) | if length == 0 then "" else implode end;
     .[] | (.SourceFile, (.Title | s), (.Creator | s), (.Series | s))'
 
-total=$(wc -l < "$TMP/all")
+total=$(wc -l <"$TMP/all")
 created=0
 errors=0
 if [[ "$total" -gt 0 ]]; then
-    split -l "$BATCH" "$TMP/all" "$TMP/batch."
-    for batch in "$TMP"/batch.*; do
-        # exiftool exits non-zero on unreadable files; those get "Unknown" below
-        exiftool -j -Title -Creator -Series -@ "$batch" > "$TMP/meta.json" || true
-        if [[ ! -s "$TMP/meta.json" ]]; then
-            echo "exiftool produced no output for $batch" >&2
-            exit 1
-        fi
-        jq --raw-output0 "$JQ" "$TMP/meta.json" > "$TMP/meta.bin"
+	split -l "$BATCH" "$TMP/all" "$TMP/batch."
+	for batch in "$TMP"/batch.*; do
+		# exiftool exits non-zero on unreadable files; those get "Unknown" below
+		exiftool -j -Title -Creator -Series -@ "$batch" >"$TMP/meta.json" || true
+		if [[ ! -s "$TMP/meta.json" ]]; then
+			echo "exiftool produced no output for $batch" >&2
+			exit 1
+		fi
+		jq --raw-output0 "$JQ" "$TMP/meta.json" >"$TMP/meta.bin"
 
-        while IFS= read -r -d '' epub_path \
-            && IFS= read -r -d '' TITLE \
-            && IFS= read -r -d '' AUTHOR \
-            && IFS= read -r -d '' SERIES; do
-            clean "$TITLE"; TITLE="$CLEAN"
-            clean "$AUTHOR"; AUTHOR="$CLEAN"
-            clean "$SERIES"; SERIES="$CLEAN"
+		while IFS= read -r -d '' epub_path &&
+			IFS= read -r -d '' TITLE &&
+			IFS= read -r -d '' AUTHOR &&
+			IFS= read -r -d '' SERIES; do
+			clean "$TITLE"
+			TITLE="$CLEAN"
+			clean "$AUTHOR"
+			AUTHOR="$CLEAN"
+			clean "$SERIES"
+			SERIES="$CLEAN"
 
-            [[ -z "$TITLE" ]] && TITLE="Unknown"
-            [[ -z "$AUTHOR" ]] && AUTHOR="Unknown"
+			[[ -z "$TITLE" ]] && TITLE="Unknown"
+			[[ -z "$AUTHOR" ]] && AUTHOR="Unknown"
 
-            TITLE="${TITLE:0:200}"
-            AUTHOR="${AUTHOR:0:100}"
-            SERIES="${SERIES:0:100}"
+			TITLE="${TITLE:0:200}"
+			AUTHOR="${AUTHOR:0:100}"
+			SERIES="${SERIES:0:100}"
 
-            initial "$AUTHOR"
+			initial "$AUTHOR"
 
-            if [[ -n "$SERIES" ]]; then
-                BOOK_DIR="$TARGET_DIR/$INITIAL/$AUTHOR/$SERIES"
-                UP="../../../../"
-            else
-                BOOK_DIR="$TARGET_DIR/$INITIAL/$AUTHOR"
-                UP="../../../"
-            fi
-            RELATIVE_PATH="$UP$SOURCE_NAME/${epub_path#"$SOURCE_DIR"/}"
-            LINK="$BOOK_DIR/$TITLE.epub"
+			if [[ -n "$SERIES" ]]; then
+				BOOK_DIR="$TARGET_DIR/$INITIAL/$AUTHOR/$SERIES"
+				UP="../../../../"
+			else
+				BOOK_DIR="$TARGET_DIR/$INITIAL/$AUTHOR"
+				UP="../../../"
+			fi
+			RELATIVE_PATH="$UP$SOURCE_NAME/${epub_path#"$SOURCE_DIR"/}"
+			LINK="$BOOK_DIR/$TITLE.epub"
 
-            if [[ ! -L "$LINK" || "$(readlink "$LINK")" != "$RELATIVE_PATH" ]]; then
-                if { [[ -d "$BOOK_DIR" ]] || mkdir -p "$BOOK_DIR"; } \
-                    && ln -sfn "$RELATIVE_PATH" "$LINK"; then
-                    created=$((created + 1))
-                else
-                    echo "link failed: $LINK -> $RELATIVE_PATH" >&2
-                    errors=$((errors + 1))
-                fi
-            fi
-        done < "$TMP/meta.bin"
-        rm -f "$TMP/meta.json" "$TMP/meta.bin"
-    done
+			if [[ ! -L "$LINK" || "$(readlink "$LINK")" != "$RELATIVE_PATH" ]]; then
+				if { [[ -d "$BOOK_DIR" ]] || mkdir -p "$BOOK_DIR"; } &&
+					ln -sfn "$RELATIVE_PATH" "$LINK"; then
+					created=$((created + 1))
+				else
+					echo "link failed: $LINK -> $RELATIVE_PATH" >&2
+					errors=$((errors + 1))
+				fi
+			fi
+		done <"$TMP/meta.bin"
+		rm -f "$TMP/meta.json" "$TMP/meta.bin"
+	done
 fi
 echo "processed $total epubs, (re)linked $created, $errors failed"
 
 # advanced even with failed links, so the next run does not redo everything
 mv "$STATE_DIR/started" "$STATE_DIR/last-done"
 if [[ "$errors" -gt 0 ]]; then
-    exit 1
+	exit 1
 fi
