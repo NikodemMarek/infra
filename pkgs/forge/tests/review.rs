@@ -29,7 +29,6 @@ fn gh() -> Env {
 }
 
 fn gl_ready(e: &mut Env) {
-    e.route(&format!("GET {GL_DRAFTS}"), json!([]));
     e.route(&format!("POST {GL_DRAFTS}"), json!({"id": 1}));
     e.route(
         &format!("GET {GL_VERS}"),
@@ -58,29 +57,72 @@ fn gl_ready(e: &mut Env) {
     );
 }
 
+fn gh_lookup(reviews: Value, head: &str) -> Value {
+    json!({"data": {"repository": {"pullRequest": {
+    "headRefOid": head,
+    "reviews": {"nodes": reviews},
+    "reviewThreads": {"nodes": [
+        {"id": "PRRT_a", "comments": {"nodes": [{"fullDatabaseId": "3000000001"}]}},
+        {"id": "PRRT_b", "comments": {"nodes": [{"fullDatabaseId": "3000000002"}]}}
+    ]}}}}})
+}
+
 fn gh_ready(e: &mut Env) {
     e.route(
         &format!("POST {GH_REVIEWS}"),
         json!({"id": 9, "node_id": "PRR_9"}),
     );
-    e.route(
-        "POST graphql ReviewThreads",
-        json!({"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": [
-            {"id": "PRRT_a", "comments": {"nodes": [{"fullDatabaseId": "3000000001"}]}},
-            {"id": "PRRT_b", "comments": {"nodes": [{"fullDatabaseId": "3000000002"}]}}
-        ]}}}}}),
-    );
+    e.route("POST graphql Review", gh_lookup(json!([]), "abc"));
     e.route(
         "POST graphql AddReply",
         json!({"data": {"addPullRequestReviewThreadReply": {"comment": {"id": "C1"}}}}),
     );
+    e.route(
+        "POST graphql UpdateReview",
+        json!({"data": {"updatePullRequestReview": {"pullRequestReview": {"id": "PRR_P"}}}}),
+    );
+    e.route(
+        "POST graphql AddThread",
+        json!({"data": {"addPullRequestReviewThread": {"thread": {"id": "T1"}}}}),
+    );
+}
+
+fn gh_pending(e: &mut Env, old_body: Value, commit: &str) {
+    gh_pending_head(e, old_body, commit, commit);
+}
+
+fn gh_pending_head(e: &mut Env, old_body: Value, commit: &str, head: &str) {
+    e.route(
+        "POST graphql Review",
+        gh_lookup(
+            json!([{"id": "PRR_P", "body": old_body, "viewerDidAuthor": true,
+                          "commit": {"oid": commit}}]),
+            head,
+        ),
+    );
+}
+
+fn ops(e: &Env) -> Vec<String> {
+    e.api_calls()
+        .iter()
+        .map(|c| match body(c).get("operationName") {
+            Some(o) => o.as_str().unwrap().to_string(),
+            None => c["path"].as_str().unwrap().to_string(),
+        })
+        .collect()
 }
 
 fn writes(e: &Env) -> Vec<Value> {
     e.api_calls()
         .into_iter()
         .filter(|c| c["method"] != "GET")
+        .filter(|c| body_op(c).as_deref() != Some("Review"))
         .collect()
+}
+
+fn body_op(call: &Value) -> Option<String> {
+    let b: Value = serde_json::from_str(call["body"].as_str()?).ok()?;
+    b.get("operationName")?.as_str().map(String::from)
 }
 
 fn body(call: &Value) -> Value {
@@ -389,7 +431,7 @@ fn gitlab_comment_not_in_diff() {
 }
 
 #[test]
-fn gitlab_existing_drafts_block() {
+fn gitlab_existing_drafts_are_kept() {
     let mut e = gl();
     gl_ready(&mut e);
     e.route(
@@ -397,11 +439,15 @@ fn gitlab_existing_drafts_block() {
         json!([{"id": 1, "note": "x"}, {"id": 2, "note": "y"}]),
     );
     let out = e.forge_stdin(&["pr", "review", GL_URL], r#"{"summary":"s"}"#);
-    out.fails();
-    assert!(out
-        .stderr
-        .contains("you already have 2 draft notes on !7: publish or delete them first"));
-    assert!(writes(&e).is_empty());
+    assert_eq!(out.json(), json!({"url": GL_URL, "drafts": 1}));
+    assert!(!e
+        .api_calls()
+        .iter()
+        .any(|c| c["path"] == GL_DRAFTS && c["method"] == "GET"));
+    let w = writes(&e);
+    assert_eq!(w.len(), 1);
+    assert_eq!(w[0]["path"], GL_DRAFTS);
+    assert_eq!(body(&w[0]), json!({"note": "s"}));
 }
 
 #[test]
@@ -571,6 +617,7 @@ fn github_review_with_summary_and_comments() {
     .to_string();
     let out = e.forge_stdin(&["pr", "review", GH_URL], &input);
     assert_eq!(out.json(), json!({"url": GH_URL, "drafts": 3}));
+    assert_eq!(ops(&e), ["Review", GH_REVIEWS]);
     let w = writes(&e);
     assert_eq!(w.len(), 1);
     assert_eq!(w[0]["path"], GH_REVIEWS);
@@ -634,7 +681,7 @@ fn github_replies() {
         ]
     );
     let lookup = body(&calls[0]);
-    assert_eq!(lookup["operationName"], "ReviewThreads");
+    assert_eq!(lookup["operationName"], "Review");
     assert_eq!(
         lookup["variables"],
         json!({"owner": "o", "name": "r", "number": 3})
@@ -729,7 +776,7 @@ fn github_graphql_lookup_errors_fail() {
     let mut e = gh();
     gh_ready(&mut e);
     e.route(
-        "POST graphql ReviewThreads",
+        "POST graphql Review",
         json!({"errors": [{"message": "no such repo"}]}),
     );
     let input = json!({"replies": [{"thread": "3000000001", "body": "b"}]}).to_string();
@@ -737,4 +784,237 @@ fn github_graphql_lookup_errors_fail() {
     out.fails();
     assert!(out.stderr.contains("no such repo"), "{}", out.stderr);
     assert!(!writes(&e).iter().any(|c| c["path"] == GH_REVIEWS));
+}
+
+#[test]
+fn github_lookup_errors_without_replies_fail_before_writes() {
+    let mut e = gh();
+    gh_ready(&mut e);
+    e.route(
+        "POST graphql Review",
+        json!({"errors": [{"message": "no such repo"}]}),
+    );
+    let out = e.forge_stdin(&["pr", "review", GH_URL], r#"{"summary":"s"}"#);
+    out.fails();
+    assert!(out.stderr.contains("no such repo"), "{}", out.stderr);
+    assert!(writes(&e).is_empty(), "{:?}", writes(&e));
+}
+
+#[test]
+fn github_reviews_null_or_missing_uses_rest() {
+    let null_reviews =
+        json!({"headRefOid": "abc", "reviews": null, "reviewThreads": {"nodes": []}});
+    let missing_reviews = json!({"headRefOid": "abc", "reviewThreads": {"nodes": []}});
+    for pr in [null_reviews, missing_reviews] {
+        let mut e = gh();
+        gh_ready(&mut e);
+        e.route(
+            "POST graphql Review",
+            json!({"data": {"repository": {"pullRequest": pr}}}),
+        );
+        let out = e.forge_stdin(&["pr", "review", GH_URL], r#"{"summary":"s"}"#);
+        assert_eq!(out.json()["drafts"], 1);
+        assert_eq!(ops(&e), ["Review", GH_REVIEWS]);
+    }
+}
+
+#[test]
+fn github_pending_review_on_older_commit_than_head_fails() {
+    let mut e = gh();
+    gh_ready(&mut e);
+    gh_pending_head(&mut e, json!("old"), "oldc", "headc");
+    let out = e.forge_stdin(&["pr", "review", GH_URL], r#"{"summary":"s"}"#);
+    out.fails();
+    assert!(
+        out.stderr.contains(
+            "you have a pending review on #3 at commit oldc: publish or delete it to review headc"
+        ),
+        "{}",
+        out.stderr
+    );
+    assert!(writes(&e).is_empty(), "{:?}", writes(&e));
+    assert_eq!(ops(&e), ["Review"]);
+}
+
+#[test]
+fn github_pending_review_commit_flag_overrides_head() {
+    let mut e = gh();
+    gh_ready(&mut e);
+    gh_pending_head(&mut e, json!(""), "oldc", "headc");
+    let out = e.forge_stdin(
+        &["pr", "review", GH_URL, "--commit", "oldc"],
+        r#"{"summary":"s"}"#,
+    );
+    assert_eq!(out.json()["drafts"], 1);
+    assert_eq!(ops(&e), ["Review", "UpdateReview"]);
+}
+
+// github: existing pending review
+
+fn pending_run(input: Value, args: &[&str], old_body: Value, commit: &str) -> (Env, common::Out) {
+    let mut e = gh();
+    gh_ready(&mut e);
+    gh_pending(&mut e, old_body, commit);
+    let mut a = vec!["pr", "review", GH_URL];
+    a.extend_from_slice(args);
+    let out = e.forge_stdin(&a, &input.to_string());
+    (e, out)
+}
+
+#[test]
+fn github_pending_review_is_extended() {
+    let input = json!({
+        "summary": "new",
+        "comments": [
+            {"path": "a.rs", "line": 5, "body": "c1"},
+            {"path": "b.rs", "line": 2, "side": "old", "body": "c2"}
+        ],
+        "replies": [{"thread": "3000000002", "body": "r"}]
+    });
+    let (e, out) = pending_run(input, &[], json!("old summary"), "abc");
+    assert_eq!(out.json(), json!({"url": GH_URL, "drafts": 4}));
+    assert_eq!(
+        ops(&e),
+        [
+            "Review",
+            "UpdateReview",
+            "AddThread",
+            "AddThread",
+            "AddReply"
+        ]
+    );
+    let calls = e.api_calls();
+    assert_eq!(
+        body(&calls[1])["variables"],
+        json!({"review": "PRR_P", "body": "old summary\n\nnew"})
+    );
+    assert_eq!(
+        body(&calls[2])["variables"],
+        json!({"review": "PRR_P", "path": "a.rs", "line": 5, "side": "RIGHT", "body": "c1"})
+    );
+    assert_eq!(
+        body(&calls[3])["variables"],
+        json!({"review": "PRR_P", "path": "b.rs", "line": 2, "side": "LEFT", "body": "c2"})
+    );
+    assert_eq!(
+        body(&calls[4])["variables"],
+        json!({"review": "PRR_P", "thread": "PRRT_b", "body": "r"})
+    );
+}
+
+#[test]
+fn github_pending_review_empty_body_uses_summary_alone() {
+    for old in [json!(""), json!("  \n"), Value::Null] {
+        let (e, out) = pending_run(json!({"summary": "new"}), &[], old, "abc");
+        assert_eq!(out.json()["drafts"], 1);
+        assert_eq!(ops(&e), ["Review", "UpdateReview"]);
+        assert_eq!(
+            body(&e.api_calls()[1])["variables"],
+            json!({"review": "PRR_P", "body": "new"})
+        );
+    }
+}
+
+#[test]
+fn github_pending_review_without_summary_skips_update() {
+    let input = json!({"comments": [{"path": "a.rs", "line": 5, "body": "c"}]});
+    let (e, out) = pending_run(input, &[], json!("old"), "abc");
+    assert_eq!(out.json()["drafts"], 1);
+    assert_eq!(ops(&e), ["Review", "AddThread"]);
+}
+
+#[test]
+fn github_pending_review_of_someone_else_is_ignored() {
+    let mut e = gh();
+    gh_ready(&mut e);
+    e.route(
+        "POST graphql Review",
+        gh_lookup(
+            json!([{"id": "PRR_X", "body": "b", "viewerDidAuthor": false,
+                          "commit": {"oid": "abc"}}]),
+            "abc",
+        ),
+    );
+    let input = json!({"summary": "s", "comments": [{"path": "a.rs", "line": 5, "body": "c"}]});
+    let out = e.forge_stdin(
+        &["pr", "review", GH_URL, "--commit", "zzz"],
+        &input.to_string(),
+    );
+    assert_eq!(out.json()["drafts"], 2);
+    assert_eq!(ops(&e), ["Review", GH_REVIEWS]);
+}
+
+#[test]
+fn github_pending_review_commit_mismatch_fails_before_writes() {
+    let (e, out) = pending_run(
+        json!({"summary": "s"}),
+        &["--commit", "def"],
+        json!("old"),
+        "abc",
+    );
+    out.fails();
+    assert!(
+        out.stderr.contains(
+            "you have a pending review on #3 at commit abc: publish or delete it to review def"
+        ),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(ops(&e), ["Review"]);
+}
+
+#[test]
+fn github_pending_review_matching_commit_proceeds() {
+    let (e, out) = pending_run(
+        json!({"summary": "s"}),
+        &["--commit", "abc"],
+        json!(""),
+        "abc",
+    );
+    assert_eq!(out.json()["drafts"], 1);
+    assert_eq!(ops(&e), ["Review", "UpdateReview"]);
+}
+
+#[test]
+fn github_pending_thread_failure_reports_progress() {
+    let mut e = gh();
+    gh_ready(&mut e);
+    gh_pending(&mut e, json!(""), "abc");
+    e.route_seq(
+        "POST graphql AddThread",
+        vec![
+            json!({"data": {"addPullRequestReviewThread": {"thread": {"id": "T1"}}}}),
+            json!({"__error": "boom"}),
+        ],
+    );
+    let input = json!({"summary": "s", "comments": [
+        {"path": "a.rs", "line": 5, "body": "c1"},
+        {"path": "a.rs", "line": 6, "body": "c2"}
+    ]});
+    let out = e.forge_stdin(&["pr", "review", GH_URL], &input.to_string());
+    out.fails();
+    assert!(
+        out.stderr
+            .contains("(2 of 3 drafts created; publish or delete them in the web UI)"),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
+fn github_pending_mutation_graphql_errors_fail() {
+    let mut e = gh();
+    gh_ready(&mut e);
+    gh_pending(&mut e, json!(""), "abc");
+    e.route(
+        "POST graphql AddThread",
+        json!({"data": null, "errors": [{"message": "line not in diff"}]}),
+    );
+    let input = json!({"comments": [{"path": "a.rs", "line": 5, "body": "c"}]});
+    let out = e.forge_stdin(&["pr", "review", GH_URL], &input.to_string());
+    out.fails();
+    assert!(out.stderr.contains("line not in diff"), "{}", out.stderr);
+    assert!(out
+        .stderr
+        .contains("(0 of 1 drafts created; publish or delete them in the web UI)"));
 }

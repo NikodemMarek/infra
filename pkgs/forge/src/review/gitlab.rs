@@ -44,13 +44,6 @@ pub fn submit(
 ) -> Result<()> {
     let mr = view_path(&target.project, number);
     let notes_path = format!("{mr}/draft_notes");
-    let existing: Vec<Value> = api.get_ndjson(&notes_path)?;
-    if !existing.is_empty() {
-        return Err(format!(
-            "you already have {} draft notes on !{number}: publish or delete them first",
-            existing.len()
-        ));
-    }
 
     let mut problems = Vec::new();
     let mut replies = Vec::new();
