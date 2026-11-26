@@ -14,3 +14,5 @@ events.claude.> event-handler-inbox
 events.sudo.> event-handler-inbox
 events.task.failed event-handler-inbox
 events.forge.> event-handler-forge
+events.review.requested event-handler-review-intake
+events.review.submitted event-handler-review

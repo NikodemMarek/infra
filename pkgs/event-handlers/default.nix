@@ -7,6 +7,7 @@
   coreutils,
   event-bus,
   jw,
+  plan-review,
   # `<subject> <handler>` lines, see ./handlers
   handlers ? ./handlers,
 }: let
@@ -24,6 +25,15 @@
       inherit session-message;
       name = "report";
       command = "${lib.getExe jw} report-notice";
+    };
+    review = callPackage ./notice {
+      inherit session-message;
+      name = "review";
+      command = "${lib.getExe plan-review} notice";
+    };
+    review-intake = writeShellApplication {
+      name = "event-handler-review-intake";
+      text = "exec ${lib.getExe plan-review} intake";
     };
     notify-critical = notify.override {urgency = "critical";};
     task = callPackage ./task {};
