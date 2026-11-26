@@ -311,7 +311,7 @@ def test_parse_send_deeply_nested() -> None:
     [
         ("!yenn fix the test", ("yenn", "fix the test")),
         ("!Yenn  fix\nmore ", ("yenn", "fix\nmore")),
-        ("  !shani x", ("shani", "x")),
+        ("  !geralt x", ("geralt", "x")),
         ("!yenn\nx", ("yenn", "x")),
         ("!a-b1 x", ("a-b1", "x")),
         ("!" + "a" * 63 + " x", ("a" * 63, "x")),

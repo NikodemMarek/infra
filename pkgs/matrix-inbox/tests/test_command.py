@@ -111,14 +111,14 @@ def test_unknown_outcome(outcome: Obj) -> None:
 
 
 def test_wrong_host_does_nothing() -> None:
-    seen, tasks, bus = run(cmd(to="shani"), STARTED)
+    seen, tasks, bus = run(cmd(to="geralt"), STARTED)
     assert seen.calls == []
     assert tasks.prompts == []
     assert bus.published == []
 
 
 def test_wrong_host_and_stale_does_nothing() -> None:
-    seen, tasks, bus = run(cmd(to="shani"), STARTED, now=TS / 1000 + 1000)
+    seen, tasks, bus = run(cmd(to="geralt"), STARTED, now=TS / 1000 + 1000)
     assert (seen.calls, tasks.prompts, bus.published) == ([], [], [])
 
 
@@ -149,7 +149,7 @@ def test_stale_does_not_consume_the_claim() -> None:
 
 def test_wrong_host_does_not_consume_the_claim() -> None:
     seen = FakeSeen()
-    run(cmd(to="shani"), STARTED, seen=seen)
+    run(cmd(to="geralt"), STARTED, seen=seen)
     assert seen.claimed == set()
 
 
