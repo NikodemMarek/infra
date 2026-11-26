@@ -59,16 +59,76 @@ impl Review {
     }
 }
 
+#[derive(Default, Serialize)]
+pub struct Draft {
+    id: String,
+    body: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    side: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct Drafts {
+    digest: String,
+    drafts: Vec<Draft>,
+}
+
+impl Drafts {
+    fn new(mut drafts: Vec<Draft>) -> Drafts {
+        drafts.sort_by(|a, b| a.id.cmp(&b.id));
+        let list = serde_json::to_string(&drafts).expect("drafts serialize to JSON");
+        Drafts {
+            digest: fnv1a(list.as_bytes()),
+            drafts,
+        }
+    }
+
+    /// `on` is the request as the user writes it (`!5`, `#5`).
+    fn check(&self, read: Option<&str>, on: &str) -> Result<()> {
+        if self.drafts.is_empty() || read == Some(&self.digest) {
+            return Ok(());
+        }
+        Err(format!(
+            "you have {} drafts on {on} that you have not read or that changed since: read them with `forge pr drafts` and pass --drafts DIGEST",
+            self.drafts.len()
+        ))
+    }
+}
+
+// Change detection, not security: collisions only matter if someone crafts them.
+fn fnv1a(bytes: &[u8]) -> String {
+    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, b| {
+        (hash ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+    });
+    format!("{hash:016x}")
+}
+
 #[derive(Serialize)]
 pub struct Submitted {
     url: String,
     drafts: usize,
 }
 
+pub fn drafts(target: &Target, number: u64) -> Result<Drafts> {
+    let api = Api::connect(target)?;
+    let drafts = match target.kind {
+        Kind::GitLab => gitlab::drafts(&api, target, number)?,
+        Kind::GitHub => github::drafts(&api, target, number)?,
+    };
+    Ok(Drafts::new(drafts))
+}
+
 pub fn submit(
     target: &Target,
     number: u64,
     commit: Option<&str>,
+    read: Option<&str>,
     input: &str,
 ) -> Result<Submitted> {
     let review = validate(input, target.kind)?;
@@ -76,11 +136,11 @@ pub fn submit(
     let (host, project) = (&target.host, &target.project);
     let url = match target.kind {
         Kind::GitLab => {
-            gitlab::submit(&api, target, number, commit, &review)?;
+            gitlab::submit(&api, target, number, commit, read, &review)?;
             format!("https://{host}/{project}/-/merge_requests/{number}")
         }
         Kind::GitHub => {
-            github::submit(&api, target, number, commit, &review)?;
+            github::submit(&api, target, number, commit, read, &review)?;
             format!("https://{host}/{project}/pull/{number}")
         }
     };

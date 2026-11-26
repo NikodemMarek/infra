@@ -1,6 +1,7 @@
 mod common;
 
 use common::Env;
+use serde::Serialize;
 use serde_json::{json, Value};
 
 const GL_URL: &str = "https://gitlab.example.com/g/p/-/merge_requests/7";
@@ -30,6 +31,7 @@ fn gh() -> Env {
 
 fn gl_ready(e: &mut Env) {
     e.route(&format!("POST {GL_DRAFTS}"), json!({"id": 1}));
+    e.route(&format!("GET {GL_DRAFTS}"), json!([]));
     e.route(
         &format!("GET {GL_VERS}"),
         json!([
@@ -95,11 +97,93 @@ fn gh_pending_head(e: &mut Env, old_body: Value, commit: &str, head: &str) {
     e.route(
         "POST graphql Review",
         gh_lookup(
-            json!([{"id": "PRR_P", "body": old_body, "viewerDidAuthor": true,
-                          "commit": {"oid": commit}}]),
+            json!([gh_review_node("PRR_P", old_body, commit, json!([]))]),
             head,
         ),
     );
+}
+
+#[derive(Serialize)]
+struct Draft {
+    id: String,
+    body: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    side: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread: Option<String>,
+}
+
+fn draft(id: &str, body: &str) -> Draft {
+    Draft {
+        id: id.into(),
+        body: body.into(),
+        path: None,
+        line: None,
+        side: None,
+        thread: None,
+    }
+}
+
+impl Draft {
+    fn at(mut self, path: &str, line: u64) -> Draft {
+        self.path = Some(path.into());
+        self.line = Some(line);
+        self
+    }
+    fn path_only(mut self, path: &str) -> Draft {
+        self.path = Some(path.into());
+        self
+    }
+    fn side(mut self, side: &str) -> Draft {
+        self.side = Some(side.into());
+        self
+    }
+    fn thread(mut self, thread: &str) -> Draft {
+        self.thread = Some(thread.into());
+        self
+    }
+}
+
+fn fnv1a(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{h:016x}")
+}
+
+// Expected `pr drafts` output: sorted by id (string order), digest over the printed list.
+fn expected(mut drafts: Vec<Draft>) -> (String, Value) {
+    drafts.sort_by(|a, b| a.id.cmp(&b.id));
+    let list = serde_json::to_string(&drafts).unwrap();
+    let digest = fnv1a(list.as_bytes());
+    let v = json!({"digest": digest, "drafts": serde_json::from_str::<Value>(&list).unwrap()});
+    (digest, v)
+}
+
+fn digest_of(drafts: Vec<Draft>) -> String {
+    expected(drafts).0
+}
+
+fn gh_review_node(id: &str, body: Value, commit: &str, comments: Value) -> Value {
+    let total = comments.as_array().map_or(0, |c| c.len());
+    gh_review_node_total(id, body, commit, comments, total)
+}
+
+fn gh_review_node_total(
+    id: &str,
+    body: Value,
+    commit: &str,
+    comments: Value,
+    total: usize,
+) -> Value {
+    json!({"id": id, "body": body, "viewerDidAuthor": true,
+           "commit": {"oid": commit}, "comments": {"totalCount": total, "nodes": comments}})
 }
 
 fn ops(e: &Env) -> Vec<String> {
@@ -430,24 +514,145 @@ fn gitlab_comment_not_in_diff() {
     assert!(writes(&e).is_empty());
 }
 
+fn gl_two_notes() -> Value {
+    json!([{"id": 1, "note": "x"}, {"id": 2, "note": "y"}])
+}
+
+fn gl_two_digest() -> String {
+    digest_of(vec![draft("1", "x"), draft("2", "y")])
+}
+
 #[test]
-fn gitlab_existing_drafts_are_kept() {
+fn gitlab_review_reads_drafts_first() {
     let mut e = gl();
     gl_ready(&mut e);
-    e.route(
-        &format!("GET {GL_DRAFTS}"),
-        json!([{"id": 1, "note": "x"}, {"id": 2, "note": "y"}]),
-    );
     let out = e.forge_stdin(&["pr", "review", GL_URL], r#"{"summary":"s"}"#);
     assert_eq!(out.json(), json!({"url": GL_URL, "drafts": 1}));
-    assert!(!e
-        .api_calls()
+    let calls = e.api_calls();
+    assert!(calls
         .iter()
         .any(|c| c["path"] == GL_DRAFTS && c["method"] == "GET"));
+}
+
+#[test]
+fn gitlab_existing_drafts_without_flag_refused() {
+    let mut e = gl();
+    gl_ready(&mut e);
+    e.route(&format!("GET {GL_DRAFTS}"), gl_two_notes());
+    let out = e.forge_stdin(&["pr", "review", GL_URL], r#"{"summary":"s"}"#);
+    out.fails();
+    assert!(
+        out.stderr.contains(
+            "you have 2 drafts on !7 that you have not read or that changed since: read them with `forge pr drafts` and pass --drafts DIGEST"
+        ),
+        "{}",
+        out.stderr
+    );
+    assert!(!out.stderr.contains(&gl_two_digest()), "{}", out.stderr);
+    assert!(writes(&e).is_empty(), "{:?}", writes(&e));
+}
+
+#[test]
+fn gitlab_existing_drafts_wrong_digest_refused() {
+    let mut e = gl();
+    gl_ready(&mut e);
+    e.route(&format!("GET {GL_DRAFTS}"), gl_two_notes());
+    let out = e.forge_stdin(
+        &["pr", "review", GL_URL, "--drafts", "0000000000000000"],
+        r#"{"summary":"s"}"#,
+    );
+    out.fails();
+    assert!(
+        out.stderr.contains("you have 2 drafts on !7"),
+        "{}",
+        out.stderr
+    );
+    assert!(!out.stderr.contains(&gl_two_digest()), "{}", out.stderr);
+    assert!(writes(&e).is_empty(), "{:?}", writes(&e));
+}
+
+#[test]
+fn gitlab_existing_drafts_right_digest_adds_alongside() {
+    let mut e = gl();
+    gl_ready(&mut e);
+    e.route(&format!("GET {GL_DRAFTS}"), gl_two_notes());
+    let d = gl_two_digest();
+    let out = e.forge_stdin(
+        &["pr", "review", GL_URL, "--drafts", &d],
+        r#"{"summary":"s"}"#,
+    );
+    assert_eq!(out.json(), json!({"url": GL_URL, "drafts": 1}));
     let w = writes(&e);
     assert_eq!(w.len(), 1);
     assert_eq!(w[0]["path"], GL_DRAFTS);
     assert_eq!(body(&w[0]), json!({"note": "s"}));
+}
+
+#[test]
+fn gitlab_drafts_flag_ignored_without_drafts() {
+    let mut e = gl();
+    gl_ready(&mut e);
+    let out = e.forge_stdin(
+        &["pr", "review", GL_URL, "--drafts", "0123456789abcdef"],
+        r#"{"summary":"s"}"#,
+    );
+    assert_eq!(out.json()["drafts"], 1);
+    assert_eq!(writes(&e).len(), 1);
+}
+
+#[test]
+fn gitlab_drafts_listing() {
+    let mut e = gl();
+    e.route(
+        &format!("GET {GL_DRAFTS}"),
+        json!([
+            {"id": 5, "note": "general", "position": null},
+            {"id": 10, "note": "new side", "discussion_id": null, "position": {
+                "new_path": "a.rs", "old_path": "a.rs", "new_line": 4, "old_line": null}},
+            {"id": 9, "note": "old side", "position": {
+                "new_path": "b.rs", "old_path": "b-old.rs", "new_line": null, "old_line": 2}},
+            {"id": 11, "note": "reply", "discussion_id": "d1"},
+            {"id": 12, "note": "ctx", "position": {
+                "new_path": "c.rs", "old_path": "c.rs", "new_line": 7, "old_line": 6}}
+        ]),
+    );
+    let out = e.forge(&["pr", "drafts", GL_URL]);
+    let (_, want) = expected(vec![
+        draft("5", "general"),
+        draft("10", "new side").at("a.rs", 4).side("new"),
+        draft("9", "old side").at("b-old.rs", 2).side("old"),
+        draft("11", "reply").thread("d1"),
+        draft("12", "ctx").at("c.rs", 7).side("new"),
+    ]);
+    assert_eq!(out.json(), want);
+    let ids: Vec<_> = want["drafts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["10", "11", "12", "5", "9"]);
+    assert!(writes(&e).is_empty());
+}
+
+#[test]
+fn gitlab_drafts_empty_has_digest() {
+    let mut e = gl();
+    e.route(&format!("GET {GL_DRAFTS}"), json!([]));
+    let out = e.forge(&["pr", "drafts", GL_URL]);
+    assert_eq!(out.json(), json!({"digest": fnv1a(b"[]"), "drafts": []}));
+}
+
+#[test]
+fn gitlab_drafts_api_error() {
+    let mut e = gl();
+    e.route_error(&format!("GET {GL_DRAFTS}"), "boom");
+    e.forge(&["pr", "drafts", GL_URL]).fails();
+}
+
+#[test]
+fn drafts_missing_pr_is_usage_error() {
+    gl().forge(&["pr", "drafts"]).usage_error();
 }
 
 #[test]
@@ -822,7 +1027,7 @@ fn github_reviews_null_or_missing_uses_rest() {
 fn github_pending_review_on_older_commit_than_head_fails() {
     let mut e = gh();
     gh_ready(&mut e);
-    gh_pending_head(&mut e, json!("old"), "oldc", "headc");
+    gh_pending_head(&mut e, json!(""), "oldc", "headc");
     let out = e.forge_stdin(&["pr", "review", GH_URL], r#"{"summary":"s"}"#);
     out.fails();
     assert!(
@@ -871,7 +1076,7 @@ fn github_pending_review_is_extended() {
         ],
         "replies": [{"thread": "3000000002", "body": "r"}]
     });
-    let (e, out) = pending_run(input, &[], json!("old summary"), "abc");
+    let (e, out) = pending_run(input, &[], json!("  "), "abc");
     assert_eq!(out.json(), json!({"url": GH_URL, "drafts": 4}));
     assert_eq!(
         ops(&e),
@@ -886,7 +1091,7 @@ fn github_pending_review_is_extended() {
     let calls = e.api_calls();
     assert_eq!(
         body(&calls[1])["variables"],
-        json!({"review": "PRR_P", "body": "old summary\n\nnew"})
+        json!({"review": "PRR_P", "body": "new"})
     );
     assert_eq!(
         body(&calls[2])["variables"],
@@ -918,9 +1123,261 @@ fn github_pending_review_empty_body_uses_summary_alone() {
 #[test]
 fn github_pending_review_without_summary_skips_update() {
     let input = json!({"comments": [{"path": "a.rs", "line": 5, "body": "c"}]});
-    let (e, out) = pending_run(input, &[], json!("old"), "abc");
+    let d = digest_of(vec![draft("PRR_P", "old")]);
+    let (e, out) = pending_run(input, &["--drafts", &d], json!("old"), "abc");
     assert_eq!(out.json()["drafts"], 1);
     assert_eq!(ops(&e), ["Review", "AddThread"]);
+}
+
+fn existing_comments() -> Value {
+    json!([
+        {"id": "PRRC_2", "body": "second", "path": "b.rs", "line": 9, "replyTo": null},
+        {"id": "PRRC_1", "body": "first", "path": "a.rs", "line": 3,
+         "replyTo": {"fullDatabaseId": "3000000001"}}
+    ])
+}
+
+fn existing_drafts(summary: &str) -> Vec<Draft> {
+    let mut v = vec![
+        draft("PRRC_2", "second").at("b.rs", 9),
+        draft("PRRC_1", "first").at("a.rs", 3).thread("3000000001"),
+    ];
+    if !summary.trim().is_empty() {
+        v.push(draft("PRR_P", summary));
+    }
+    v
+}
+
+fn pending_with_comments(body: &str) -> Env {
+    let mut e = gh();
+    gh_ready(&mut e);
+    e.route(
+        "POST graphql Review",
+        gh_lookup(
+            json!([gh_review_node(
+                "PRR_P",
+                json!(body),
+                "abc",
+                existing_comments()
+            )]),
+            "abc",
+        ),
+    );
+    e
+}
+
+#[test]
+fn github_pending_existing_comments_without_flag_refused() {
+    let e = pending_with_comments("");
+    let input = json!({"comments": [{"path": "a.rs", "line": 5, "body": "c"}]});
+    let out = e.forge_stdin(&["pr", "review", GH_URL], &input.to_string());
+    out.fails();
+    assert!(
+        out.stderr.contains(
+            "you have 2 drafts on #3 that you have not read or that changed since: read them with `forge pr drafts` and pass --drafts DIGEST"
+        ),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains(&digest_of(existing_drafts(""))),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(ops(&e), ["Review"]);
+}
+
+#[test]
+fn github_pending_wrong_digest_refused() {
+    let e = pending_with_comments("");
+    let input = json!({"comments": [{"path": "a.rs", "line": 5, "body": "c"}]});
+    let out = e.forge_stdin(
+        &["pr", "review", GH_URL, "--drafts", "0000000000000000"],
+        &input.to_string(),
+    );
+    out.fails();
+    assert!(
+        out.stderr.contains("you have 2 drafts on #3"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(ops(&e), ["Review"]);
+}
+
+#[test]
+fn github_pending_right_digest_proceeds_with_blank_body_summary() {
+    let e = pending_with_comments("");
+    let d = digest_of(existing_drafts(""));
+    let input = json!({"summary": "new", "comments": [{"path": "a.rs", "line": 5, "body": "c"}]});
+    let out = e.forge_stdin(
+        &["pr", "review", GH_URL, "--drafts", &d],
+        &input.to_string(),
+    );
+    assert_eq!(out.json()["drafts"], 2);
+    assert_eq!(ops(&e), ["Review", "UpdateReview", "AddThread"]);
+    assert_eq!(
+        body(&e.api_calls()[1])["variables"],
+        json!({"review": "PRR_P", "body": "new"})
+    );
+}
+
+#[test]
+fn github_pending_nonblank_body_counts_as_draft() {
+    let e = pending_with_comments("old summary");
+    let input = json!({"comments": [{"path": "a.rs", "line": 5, "body": "c"}]});
+    let out = e.forge_stdin(&["pr", "review", GH_URL], &input.to_string());
+    out.fails();
+    assert!(
+        out.stderr.contains("you have 3 drafts on #3"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(ops(&e), ["Review"]);
+
+    let e = pending_with_comments("old summary");
+    let d = digest_of(existing_drafts("old summary"));
+    let out = e.forge_stdin(
+        &["pr", "review", GH_URL, "--drafts", &d],
+        &input.to_string(),
+    );
+    assert_eq!(out.json()["drafts"], 1);
+    assert_eq!(ops(&e), ["Review", "AddThread"]);
+}
+
+#[test]
+fn github_pending_summary_on_nonblank_body_refused() {
+    let e = pending_with_comments("old summary");
+    let d = digest_of(existing_drafts("old summary"));
+    let input = json!({"summary": "new", "comments": [{"path": "a.rs", "line": 5, "body": "c"}]});
+    let out = e.forge_stdin(
+        &["pr", "review", GH_URL, "--drafts", &d],
+        &input.to_string(),
+    );
+    out.fails();
+    assert!(
+        out.stderr.contains(
+            "your pending review on #3 already has a summary: add the remark as a comment"
+        ),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(ops(&e), ["Review"]);
+}
+
+#[test]
+fn github_drafts_flag_ignored_without_drafts() {
+    let (e, out) = pending_run(
+        json!({"summary": "s"}),
+        &["--drafts", "0123456789abcdef"],
+        json!(""),
+        "abc",
+    );
+    assert_eq!(out.json()["drafts"], 1);
+    assert_eq!(ops(&e), ["Review", "UpdateReview"]);
+
+    let mut e = gh();
+    gh_ready(&mut e);
+    let out = e.forge_stdin(
+        &["pr", "review", GH_URL, "--drafts", "0123456789abcdef"],
+        r#"{"summary":"s"}"#,
+    );
+    assert_eq!(out.json()["drafts"], 1);
+    assert_eq!(ops(&e), ["Review", GH_REVIEWS]);
+}
+
+#[test]
+fn github_drafts_listing() {
+    let mut e = gh();
+    e.route(
+        "POST graphql Review",
+        gh_lookup(
+            json!([gh_review_node(
+                "PRR_P",
+                json!("the summary"),
+                "abc",
+                json!([
+                    {"id": "PRRC_3", "body": "numeric reply", "path": "c.rs", "line": 1,
+                     "replyTo": {"fullDatabaseId": 3000000002u64}},
+                    {"id": "PRRC_2", "body": "file level", "path": "b.rs", "line": null,
+                     "replyTo": null},
+                    {"id": "PRRC_1", "body": "first", "path": "a.rs", "line": 3,
+                     "replyTo": {"fullDatabaseId": "3000000001"}}
+                ])
+            )]),
+            "abc",
+        ),
+    );
+    let out = e.forge(&["pr", "drafts", GH_URL]);
+    let (_, want) = expected(vec![
+        draft("PRR_P", "the summary"),
+        draft("PRRC_1", "first").at("a.rs", 3).thread("3000000001"),
+        draft("PRRC_2", "file level").path_only("b.rs"),
+        draft("PRRC_3", "numeric reply")
+            .at("c.rs", 1)
+            .thread("3000000002"),
+    ]);
+    assert_eq!(out.json(), want);
+    for d in want["drafts"].as_array().unwrap() {
+        assert!(d.get("side").is_none());
+    }
+    assert!(writes(&e).is_empty());
+}
+
+#[test]
+fn github_drafts_blank_review_body_omitted() {
+    let mut e = gh();
+    e.route(
+        "POST graphql Review",
+        gh_lookup(
+            json!([gh_review_node(
+                "PRR_P",
+                Value::Null,
+                "abc",
+                json!([{"id": "PRRC_1", "body": "c", "path": "a.rs", "line": 3, "replyTo": null}])
+            )]),
+            "abc",
+        ),
+    );
+    let out = e.forge(&["pr", "drafts", GH_URL]);
+    let (_, want) = expected(vec![draft("PRRC_1", "c").at("a.rs", 3)]);
+    assert_eq!(out.json(), want);
+}
+
+#[test]
+fn github_drafts_none_is_empty_list_with_digest() {
+    let mut e = gh();
+    gh_ready(&mut e);
+    let out = e.forge(&["pr", "drafts", GH_URL]);
+    assert_eq!(out.json(), json!({"digest": fnv1a(b"[]"), "drafts": []}));
+}
+
+#[test]
+fn github_drafts_ignore_someone_elses_pending_review() {
+    let mut e = gh();
+    e.route(
+        "POST graphql Review",
+        gh_lookup(
+            json!([{"id": "PRR_X", "body": "theirs", "viewerDidAuthor": false,
+                    "commit": {"oid": "abc"},
+                    "comments": {"totalCount": 1, "nodes": [{"id": "PRRC_9", "body": "x", "path": "a.rs",
+                                            "line": 1, "replyTo": null}]}}]),
+            "abc",
+        ),
+    );
+    let out = e.forge(&["pr", "drafts", GH_URL]);
+    assert_eq!(out.json(), json!({"digest": fnv1a(b"[]"), "drafts": []}));
+}
+
+#[test]
+fn github_drafts_graphql_error_fails() {
+    let mut e = gh();
+    e.route(
+        "POST graphql Review",
+        json!({"errors": [{"message": "no such repo"}]}),
+    );
+    let out = e.forge(&["pr", "drafts", GH_URL]);
+    out.fails();
+    assert!(out.stderr.contains("no such repo"), "{}", out.stderr);
 }
 
 #[test]
@@ -949,7 +1406,7 @@ fn github_pending_review_commit_mismatch_fails_before_writes() {
     let (e, out) = pending_run(
         json!({"summary": "s"}),
         &["--commit", "def"],
-        json!("old"),
+        json!(" "),
         "abc",
     );
     out.fails();
@@ -1017,4 +1474,200 @@ fn github_pending_mutation_graphql_errors_fail() {
     assert!(out
         .stderr
         .contains("(0 of 1 drafts created; publish or delete them in the web UI)"));
+}
+
+// amendment
+
+const TOO_MANY: &str =
+    "your pending review on #3 has more than 100 comments: publish part of it first";
+
+fn pending_overflow() -> Env {
+    let mut e = gh();
+    gh_ready(&mut e);
+    e.route(
+        "POST graphql Review",
+        gh_lookup(
+            json!([gh_review_node_total(
+                "PRR_P",
+                json!(""),
+                "abc",
+                existing_comments(),
+                101
+            )]),
+            "abc",
+        ),
+    );
+    e
+}
+
+#[test]
+fn github_drafts_more_than_100_comments_fails() {
+    let e = pending_overflow();
+    let out = e.forge(&["pr", "drafts", GH_URL]);
+    out.fails();
+    assert!(out.stderr.contains(TOO_MANY), "{}", out.stderr);
+    assert!(writes(&e).is_empty());
+}
+
+#[test]
+fn github_review_more_than_100_comments_fails_without_writes() {
+    let input = json!({"summary": "s", "comments": [{"path": "a.rs", "line": 5, "body": "c"}]});
+    let e = pending_overflow();
+    let out = e.forge_stdin(&["pr", "review", GH_URL], &input.to_string());
+    out.fails();
+    assert!(writes(&e).is_empty(), "{:?}", writes(&e));
+
+    let e = pending_overflow();
+    let d = digest_of(existing_drafts(""));
+    let out = e.forge_stdin(
+        &["pr", "review", GH_URL, "--drafts", &d],
+        &input.to_string(),
+    );
+    out.fails();
+    assert!(out.stderr.contains(TOO_MANY), "{}", out.stderr);
+    assert!(writes(&e).is_empty(), "{:?}", writes(&e));
+}
+
+#[test]
+fn github_total_count_equal_to_nodes_works() {
+    let mut e = gh();
+    e.route(
+        "POST graphql Review",
+        gh_lookup(
+            json!([gh_review_node_total(
+                "PRR_P",
+                json!(""),
+                "abc",
+                existing_comments(),
+                2
+            )]),
+            "abc",
+        ),
+    );
+    let out = e.forge(&["pr", "drafts", GH_URL]);
+    assert_eq!(out.json(), expected(existing_drafts("")).1);
+}
+
+#[test]
+fn gitlab_drafts_position_of_nulls_has_no_location() {
+    let mut e = gl();
+    e.route(
+        &format!("GET {GL_DRAFTS}"),
+        json!([
+            {"id": 1, "note": "nulls", "position": {
+                "position_type": "text", "base_sha": null, "start_sha": null, "head_sha": null,
+                "old_path": null, "new_path": null, "old_line": null, "new_line": null}},
+            {"id": 2, "note": "missing"},
+            {"id": 3, "note": "paths only", "position": {
+                "position_type": "text", "old_path": "a.rs", "new_path": "a.rs",
+                "old_line": null, "new_line": null}},
+            {"id": 4, "note": "old", "position": {
+                "position_type": "text", "old_path": "o.rs", "new_path": null,
+                "old_line": 5, "new_line": null}}
+        ]),
+    );
+    let out = e.forge(&["pr", "drafts", GL_URL]);
+    let (_, want) = expected(vec![
+        draft("1", "nulls"),
+        draft("2", "missing"),
+        draft("3", "paths only"),
+        draft("4", "old").at("o.rs", 5).side("old"),
+    ]);
+    assert_eq!(out.json(), want);
+}
+
+#[test]
+fn gitlab_changed_body_since_read_is_refused() {
+    let mut e = gl();
+    e.route(&format!("GET {GL_DRAFTS}"), gl_two_notes());
+    let d = e.forge(&["pr", "drafts", GL_URL]).json()["digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(d, gl_two_digest());
+
+    let mut e = gl();
+    gl_ready(&mut e);
+    e.route(
+        &format!("GET {GL_DRAFTS}"),
+        json!([{"id": 1, "note": "x"}, {"id": 2, "note": "y edited"}]),
+    );
+    let out = e.forge_stdin(
+        &["pr", "review", GL_URL, "--drafts", &d],
+        r#"{"summary":"s"}"#,
+    );
+    out.fails();
+    assert!(
+        out.stderr.contains("you have 2 drafts on !7"),
+        "{}",
+        out.stderr
+    );
+    assert!(writes(&e).is_empty(), "{:?}", writes(&e));
+}
+
+#[test]
+fn github_changed_body_since_read_is_refused() {
+    let node = |second: &str| {
+        gh_review_node(
+            "PRR_P",
+            json!(""),
+            "abc",
+            json!([
+                {"id": "PRRC_1", "body": "first", "path": "a.rs", "line": 3, "replyTo": null},
+                {"id": "PRRC_2", "body": second, "path": "b.rs", "line": 9, "replyTo": null}
+            ]),
+        )
+    };
+    let mut e = gh();
+    e.route(
+        "POST graphql Review",
+        gh_lookup(json!([node("second")]), "abc"),
+    );
+    let d = e.forge(&["pr", "drafts", GH_URL]).json()["digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let mut e = gh();
+    gh_ready(&mut e);
+    e.route(
+        "POST graphql Review",
+        gh_lookup(json!([node("second edited")]), "abc"),
+    );
+    let input = json!({"comments": [{"path": "a.rs", "line": 5, "body": "c"}]});
+    let out = e.forge_stdin(
+        &["pr", "review", GH_URL, "--drafts", &d],
+        &input.to_string(),
+    );
+    out.fails();
+    assert!(
+        out.stderr.contains("you have 2 drafts on #3"),
+        "{}",
+        out.stderr
+    );
+    assert!(writes(&e).is_empty(), "{:?}", writes(&e));
+}
+
+#[test]
+fn gitlab_refusal_with_comments_and_replies_makes_no_post() {
+    let mut e = gl();
+    gl_ready(&mut e);
+    e.route(&format!("GET {GL_DRAFTS}"), gl_two_notes());
+    e.route(
+        &format!("GET {GL_DISC}"),
+        json!([{"id": "d1", "individual_note": false, "notes": []}]),
+    );
+    let input = json!({
+        "comments": [{"path": "a.rs", "line": 2, "body": "c"}],
+        "replies": [{"thread": "d1", "body": "r"}]
+    })
+    .to_string();
+    let out = e.forge_stdin(&["pr", "review", GL_URL], &input);
+    out.fails();
+    assert!(
+        out.stderr.contains("you have 2 drafts on !7"),
+        "{}",
+        out.stderr
+    );
+    assert!(writes(&e).is_empty(), "{:?}", writes(&e));
 }
