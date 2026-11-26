@@ -6,6 +6,7 @@
   gawk,
   coreutils,
   event-bus,
+  jw,
   # `<subject> <handler>` lines, see ./handlers
   handlers ? ./handlers,
 }: let
@@ -14,7 +15,7 @@
   forge = callPackage ./notice {
     inherit session-message;
     name = "forge";
-    subcommand = "forge-notice";
+    command = "${lib.getExe jw} forge-notice";
   };
 
   set = {
@@ -22,7 +23,7 @@
     report = callPackage ./notice {
       inherit session-message;
       name = "report";
-      subcommand = "report-notice";
+      command = "${lib.getExe jw} report-notice";
     };
     notify-critical = notify.override {urgency = "critical";};
     task = callPackage ./task {};
