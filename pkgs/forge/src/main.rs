@@ -94,8 +94,10 @@ enum PrCommand {
     /// Create draft review comments from JSON on stdin (number or URL); the user publishes them
     ///
     /// Creates drafts only (GitLab draft notes, a GitHub pending review) and never publishes:
-    /// the user publishes or deletes them in the web UI. GitLab refuses when you already have
-    /// draft notes on the request.
+    /// the user publishes or deletes them in the web UI. New drafts are added to the ones you
+    /// already have (GitLab draft notes; on GitHub your pending review, whose summary gets the
+    /// new one appended; there the pending review must be on the reviewed commit, --commit or
+    /// else the head).
     ///
     /// Input on stdin (unknown fields are rejected; at least one of summary, comments, replies):
     ///   {
