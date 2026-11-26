@@ -1,0 +1,11 @@
+#!/bin/sh
+# no external commands: the tests' PATH holds only the fakes
+IFS= read -r line || true
+{
+	echo "type=$1"
+	echo "stdin=$line"
+} >> "$FAKE_LOG_DIR/event-pub.log"
+if [ -f "$FAKE_LOG_DIR/event-pub.fail" ]; then
+	echo "event-pub failed" >&2
+	exit 1
+fi

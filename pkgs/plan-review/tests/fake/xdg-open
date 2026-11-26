@@ -1,0 +1,11 @@
+#!/bin/sh
+{
+	for a in "$@"; do
+		echo "arg=$a"
+	done
+	echo "--end--"
+} >> "$FAKE_LOG_DIR/xdg-open.log"
+if [ -f "$FAKE_LOG_DIR/xdg-open.fail" ]; then
+	echo "xdg-open failed" >&2
+	exit 1
+fi

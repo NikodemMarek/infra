@@ -43,6 +43,7 @@
   # jj-upload needs the upstream jj: the wrapped one bundles jj-upload (recursion).
   jj-upload = pkgs.callPackage ./jj-upload {inherit (prev) jujutsu;};
   jw = pkgs.callPackage ./jw {inherit (prev) jujutsu;};
+  plan-review = pkgs.callPackage ./plan-review {};
   forge = pkgs.callPackage ./forge {inherit (prev) jujutsu;};
   jail = pkgs.callPackage ./jail {};
   bitwarden-cli = pkgs.callPackage ./bitwarden-cli {inherit (prev) bitwarden-cli;};
