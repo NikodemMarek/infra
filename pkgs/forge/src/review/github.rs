@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::{blank, partial, Comment, Review, Side};
+use super::{blank, partial, Comment, Draft, Drafts, Review, Side};
 use crate::api::Api;
 use crate::cmd::Result;
 use crate::pr::github::view_path;
@@ -18,11 +18,16 @@ struct Pending {
     commit: String,
 }
 
+pub fn drafts(api: &Api, target: &Target, number: u64) -> Result<Vec<Draft>> {
+    pending_drafts(&lookup(api, target, number)?, number)
+}
+
 pub fn submit(
     api: &Api,
     target: &Target,
     number: u64,
     commit: Option<&str>,
+    read: Option<&str>,
     review: &Review,
 ) -> Result<()> {
     let lookup = lookup(api, target, number)?;
@@ -31,6 +36,7 @@ pub fn submit(
         .pointer("/data/repository/pullRequest/headRefOid")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    Drafts::new(pending_drafts(&lookup, number)?).check(read, &format!("#{number}"))?;
     match pending_review(&lookup) {
         Some(pending) => append(
             api,
@@ -53,24 +59,76 @@ fn lookup(api: &Api, target: &Target, number: u64) -> Result<Value> {
         api,
         json!({
             "operationName": "Review",
-            "query": "query Review($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid reviews(states:PENDING,first:10){nodes{id body viewerDidAuthor commit{oid}}} reviewThreads(first:100){nodes{id comments(first:1){nodes{fullDatabaseId}}}}}}}",
+            "query": "query Review($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid reviews(states:PENDING,first:10){nodes{id body viewerDidAuthor commit{oid} comments(first:100){totalCount nodes{id body path line replyTo{fullDatabaseId}}}}} reviewThreads(first:100){nodes{id comments(first:1){nodes{fullDatabaseId}}}}}}}",
             "variables": { "owner": owner, "name": name, "number": number },
         }),
     )
 }
 
-fn pending_review(lookup: &Value) -> Option<Pending> {
-    let node = lookup
+fn pending_node(lookup: &Value) -> Option<&Value> {
+    lookup
         .pointer("/data/repository/pullRequest/reviews/nodes")?
         .as_array()?
         .iter()
-        .find(|n| n["viewerDidAuthor"] == true)?;
+        .find(|n| n["viewerDidAuthor"] == true)
+}
+
+fn pending_review(lookup: &Value) -> Option<Pending> {
+    let node = pending_node(lookup)?;
     let text = |pointer: &str| node.pointer(pointer).and_then(Value::as_str);
     Some(Pending {
         id: text("/id")?.to_string(),
         body: text("/body").unwrap_or_default().to_string(),
         commit: text("/commit/oid").unwrap_or_default().to_string(),
     })
+}
+
+fn pending_drafts(lookup: &Value, number: u64) -> Result<Vec<Draft>> {
+    let Some(node) = pending_node(lookup) else {
+        return Ok(Vec::new());
+    };
+    let nodes = node
+        .pointer("/comments/nodes")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
+    let total = node.pointer("/comments/totalCount").and_then(Value::as_u64);
+    if total.is_some_and(|total| total > nodes.len() as u64) {
+        return Err(format!(
+            "your pending review on #{number} has more than 100 comments: publish part of it first"
+        ));
+    }
+    let body = node["body"].as_str().unwrap_or_default();
+    let summary = node["id"]
+        .as_str()
+        .filter(|_| !blank(body))
+        .map(|id| Draft {
+            id: id.to_string(),
+            body: body.to_string(),
+            ..Draft::default()
+        });
+    let comments = nodes.iter().filter_map(comment_draft);
+    Ok(summary.into_iter().chain(comments).collect())
+}
+
+fn comment_draft(comment: &Value) -> Option<Draft> {
+    Some(Draft {
+        id: comment["id"].as_str()?.to_string(),
+        body: comment["body"].as_str().unwrap_or_default().to_string(),
+        path: comment["path"].as_str().map(str::to_string),
+        line: comment["line"].as_i64(),
+        side: None,
+        thread: comment
+            .pointer("/replyTo/fullDatabaseId")
+            .and_then(database_id),
+    })
+}
+
+fn database_id(id: &Value) -> Option<String> {
+    match id {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
 }
 
 fn reply_threads(lookup: &Value, review: &Review, number: u64) -> Result<Vec<String>> {
@@ -81,11 +139,7 @@ fn reply_threads(lookup: &Value, review: &Review, number: u64) -> Result<Vec<Str
     let mut threads = Vec::new();
     for (i, r) in review.replies.iter().enumerate() {
         let id = nodes.into_iter().flatten().find_map(|n| {
-            let first = match n.pointer("/comments/nodes/0/fullDatabaseId")? {
-                Value::String(s) => s.clone(),
-                Value::Number(num) => num.to_string(),
-                _ => return None,
-            };
+            let first = database_id(n.pointer("/comments/nodes/0/fullDatabaseId")?)?;
             (first == r.thread).then(|| n["id"].as_str())?
         });
         match id {
@@ -162,10 +216,15 @@ fn append(
             pending.commit
         ));
     }
+    if review.summary.is_some() && !blank(&pending.body) {
+        return Err(format!(
+            "your pending review on #{number} already has a summary: add the remark as a comment"
+        ));
+    }
     let writes: Vec<Value> = review
         .summary
         .iter()
-        .map(|summary| update_review(pending, summary))
+        .map(|summary| update_review(&pending.id, summary))
         .chain(review.comments.iter().map(|c| add_thread(&pending.id, c)))
         .chain(
             review
@@ -181,16 +240,11 @@ fn append(
     Ok(())
 }
 
-fn update_review(pending: &Pending, summary: &str) -> Value {
-    let body = if blank(&pending.body) {
-        summary.to_string()
-    } else {
-        format!("{}\n\n{summary}", pending.body)
-    };
+fn update_review(review: &str, summary: &str) -> Value {
     json!({
         "operationName": "UpdateReview",
         "query": "mutation UpdateReview($review:ID!,$body:String!){updatePullRequestReview(input:{pullRequestReviewId:$review,body:$body}){pullRequestReview{id}}}",
-        "variables": { "review": pending.id, "body": body },
+        "variables": { "review": review, "body": summary },
     })
 }
 

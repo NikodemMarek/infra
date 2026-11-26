@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::{partial, Comment, Review, Side};
+use super::{partial, Comment, Draft, Drafts, Review, Side};
 use crate::api::Api;
 use crate::cmd::Result;
 use crate::pr::gitlab::view_path;
@@ -35,15 +35,63 @@ struct FileDiff {
     diff: String,
 }
 
+#[derive(Deserialize)]
+struct DraftNote {
+    id: u64,
+    note: String,
+    position: Option<DraftPosition>,
+    discussion_id: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct DraftPosition {
+    new_path: Option<String>,
+    new_line: Option<i64>,
+    old_path: Option<String>,
+    old_line: Option<i64>,
+}
+
+pub fn drafts(api: &Api, target: &Target, number: u64) -> Result<Vec<Draft>> {
+    let mr = view_path(&target.project, number);
+    let notes: Vec<DraftNote> = api.get_ndjson(&format!("{mr}/draft_notes"))?;
+    Ok(notes.into_iter().map(draft).collect())
+}
+
+fn draft(note: DraftNote) -> Draft {
+    let (path, line, side) = match note.position.unwrap_or_default() {
+        DraftPosition {
+            new_path,
+            new_line: Some(line),
+            ..
+        } => (new_path, Some(line), Some(Side::New.name())),
+        DraftPosition {
+            old_path,
+            old_line: Some(line),
+            ..
+        } => (old_path, Some(line), Some(Side::Old.name())),
+        _ => (None, None, None),
+    };
+    Draft {
+        id: note.id.to_string(),
+        body: note.note,
+        path,
+        line,
+        side,
+        thread: note.discussion_id,
+    }
+}
+
 pub fn submit(
     api: &Api,
     target: &Target,
     number: u64,
     commit: Option<&str>,
+    read: Option<&str>,
     review: &Review,
 ) -> Result<()> {
     let mr = view_path(&target.project, number);
     let notes_path = format!("{mr}/draft_notes");
+    let current = Drafts::new(drafts(api, target, number)?);
 
     let mut problems = Vec::new();
     let mut replies = Vec::new();
@@ -76,6 +124,7 @@ pub fn submit(
     if !problems.is_empty() {
         return Err(problems.join("\n"));
     }
+    current.check(read, &format!("!{number}"))?;
 
     let notes: Vec<Value> = review
         .summary

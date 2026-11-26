@@ -91,13 +91,18 @@ enum PrCommand {
         #[arg(long, default_value_t = 40, value_parser = clap::value_parser!(u32).range(1..))]
         tail: u32,
     },
+    /// List your unpublished drafts and their digest (number or URL)
+    ///
+    /// Prints {"digest": ..., "drafts": [...]}; pass the digest to `review --drafts`.
+    Drafts { pr: String },
     /// Create draft review comments from JSON on stdin (number or URL); the user publishes them
     ///
     /// Creates drafts only (GitLab draft notes, a GitHub pending review) and never publishes:
-    /// the user publishes or deletes them in the web UI. New drafts are added to the ones you
-    /// already have (GitLab draft notes; on GitHub your pending review, whose summary gets the
-    /// new one appended; there the pending review must be on the reviewed commit, --commit or
-    /// else the head).
+    /// the user publishes or deletes them in the web UI. When you already have drafts, read
+    /// them first with `forge pr drafts` and pass its digest as --drafts (refused if they
+    /// changed since); new drafts are added next to them, existing ones are never edited or
+    /// deleted. On GitHub they go into your pending review, which must be on the reviewed
+    /// commit (--commit, else the head), and a summary only if it has none yet.
     ///
     /// Input on stdin (unknown fields are rejected; at least one of summary, comments, replies):
     ///   {
@@ -123,6 +128,8 @@ enum PrCommand {
         pr: String,
         #[arg(long, value_name = "SHA")]
         commit: Option<String>,
+        #[arg(long, value_name = "DIGEST")]
+        drafts: Option<String>,
     },
 }
 
@@ -222,12 +229,24 @@ fn run(cli: Cli) -> Result<String> {
             pr::job_log(&target, job_id, tail as usize)
         }
         Command::Pr {
-            command: PrCommand::Review { pr, commit },
+            command: PrCommand::Drafts { pr },
+        } => {
+            let (target, number) = target::resolve_pr(remote, &pr)?;
+            json(&review::drafts(&target, number)?)
+        }
+        Command::Pr {
+            command: PrCommand::Review { pr, commit, drafts },
         } => {
             let (target, number) = target::resolve_pr(remote, &pr)?;
             let input = std::io::read_to_string(std::io::stdin())
                 .map_err(|e| format!("cannot read stdin: {e}"))?;
-            json(&review::submit(&target, number, commit.as_deref(), &input)?)
+            json(&review::submit(
+                &target,
+                number,
+                commit.as_deref(),
+                drafts.as_deref(),
+                &input,
+            )?)
         }
         Command::Upload { file } => json(&upload::upload(&target::resolve(remote)?, &file)?),
     }

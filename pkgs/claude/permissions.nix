@@ -61,6 +61,7 @@
     "Bash(forge pr view:*)"
     "Bash(forge pr checks:*)"
     "Bash(forge pr comments:*)"
+    "Bash(forge pr drafts:*)"
     "Bash(forge pr review:*)"
 
     "Bash(tm:*)"
