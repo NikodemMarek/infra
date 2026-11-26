@@ -139,6 +139,10 @@ in {
       install -d -m 0700 /mnt/offsite/staging/velero
       ${lib.getExe pkgs.rclone} sync garage:velero /mnt/offsite/staging/velero
     '';
+    backupCleanupCommand = ''
+      [[ $SERVICE_RESULT == exec-condition ]] && exit 0
+      systemctl stop mnt-offsite.mount systemd-cryptsetup@offsite.service
+    '';
   };
 
   persist.generated.directories = ["/var/lib/offsite-backup"];
