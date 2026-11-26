@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Plan review</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f6f6f4;
+  --fg: #1d1d1b;
+  --muted: #6a6a66;
+  --card: #ffffff;
+  --line: #d8d8d2;
+  --accent: #2457d6;
+  --accent-fg: #ffffff;
+  --err: #b3261e;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17181a;
+    --fg: #e6e6e3;
+    --muted: #9a9a95;
+    --card: #222426;
+    --line: #383a3d;
+    --accent: #7aa2ff;
+    --accent-fg: #101114;
+    --err: #ff8a80;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 24rem;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.4 system-ui, sans-serif;
+}
+iframe { width: 100%; height: 100%; border: 0; background: #fff; }
+aside {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  overflow-y: auto;
+  border-left: 1px solid var(--line);
+}
+h1 { margin: 0; font-size: 1.1rem; }
+h2 { margin: 0 0 0.4rem; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.meta { color: var(--muted); font-size: 0.85rem; overflow-wrap: anywhere; }
+.toggle { display: flex; gap: 0.25rem; }
+button, textarea {
+  font: inherit;
+  color: var(--fg);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+button { padding: 0.35rem 0.8rem; cursor: pointer; }
+button[aria-pressed="true"], #send { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: default; }
+textarea { width: 100%; min-height: 4rem; padding: 0.4rem; resize: vertical; }
+.card { padding: 0.5rem; margin-bottom: 0.5rem; background: var(--card); border: 1px solid var(--line); border-radius: 6px; }
+.card .target { color: var(--muted); font-size: 0.8rem; overflow-wrap: anywhere; }
+.card .remove { float: right; padding: 0 0.4rem; }
+.card textarea { margin-top: 0.4rem; }
+.empty { color: var(--muted); font-style: italic; }
+dl { margin: 0; }
+dt { font-weight: 600; overflow-wrap: anywhere; }
+dd { margin: 0 0 0.3rem 0.8rem; overflow-wrap: anywhere; }
+summary { cursor: pointer; color: var(--muted); }
+.previous-message { white-space: pre-wrap; }
+#status { min-height: 1.4em; }
+#status.error { color: var(--err); }
+</style>
+</head>
+<body>
+{{iframe}}
+<aside>
+  <div>
+    <h1 id="title"></h1>
+    <div class="meta" id="meta"></div>
+  </div>
+  <div class="toggle">
+    <button type="button" id="annotate" aria-pressed="true">Annotate</button>
+    <button type="button" id="explore" aria-pressed="false">Explore</button>
+  </div>
+  <section id="previous" hidden>
+    <details>
+      <summary id="previous-summary"></summary>
+      <ul id="previous-notes"></ul>
+    </details>
+  </section>
+  <section>
+    <h2>Notes</h2>
+    <div id="notes"></div>
+  </section>
+  <section>
+    <h2>Page answers (set by the page)</h2>
+    <dl id="answers"></dl>
+  </section>
+  <section>
+    <h2>Message</h2>
+    <textarea id="message" aria-label="Message"></textarea>
+  </section>
+  <div>
+    <button type="button" id="send">Send</button>
+    <div id="status" role="status"></div>
+  </div>
+</aside>
+<script type="application/json" id="review">{{review}}</script>
+<script>
+(() => {
+  const review = JSON.parse(document.getElementById("review").textContent);
+  const frame = document.querySelector("iframe");
+  const notesEl = document.getElementById("notes");
+  const answersEl = document.getElementById("answers");
+  const messageEl = document.getElementById("message");
+  const sendEl = document.getElementById("send");
+  const statusEl = document.getElementById("status");
+  const KEY = /^[A-Za-z0-9_.-]{1,100}$/;
+  const notes = [];
+  const answers = new Map();
+  let mode = "annotate";
+  let sent = review.sent;
+
+  const text = (value) => String(value ?? "");
+  const make = (tag, content, className) => {
+    const el = document.createElement(tag);
+    el.textContent = content;
+    if (className) el.className = className;
+    return el;
+  };
+  const describe = (note) => {
+    const where = note.cell
+      ? `table "${note.cell.table}" row "${note.cell.row}" col "${note.cell.col}"`
+      : note.selector;
+    return note.excerpt && !note.cell ? `${where} "${note.excerpt}"` : where;
+  };
+  const setStatus = (message, error) => {
+    statusEl.textContent = message;
+    statusEl.className = error ? "error" : "";
+  };
+
+  document.getElementById("title").textContent = review.title;
+  document.getElementById("meta").textContent = `${review.session} · ${review.path} · r${review.revision}`;
+
+  if (review.previous) {
+    const previous = review.previous;
+    const count = previous.notes.length;
+    document.getElementById("previous").hidden = false;
+    document.getElementById("previous-summary").textContent =
+      `Sent on r${review.revision - 1} (${count} ${count === 1 ? "note" : "notes"})`;
+    const list = document.getElementById("previous-notes");
+    for (const note of previous.notes) {
+      list.append(make("li", `${describe(note)}: ${note.text}`));
+    }
+    for (const [key, value] of Object.entries(previous.answers)) {
+      list.append(make("li", `Answer ${key}: ${value || "(empty)"}`));
+    }
+    if (previous.message.trim()) {
+      list.append(make("li", `Message: ${previous.message}`, "previous-message"));
+    }
+  }
+
+  function renderNotes() {
+    notesEl.replaceChildren();
+    if (!notes.length) notesEl.append(make("div", "Click the page to add a note.", "empty"));
+    notes.forEach((note, i) => {
+      const card = make("div", "", "card");
+      const remove = make("button", "×", "remove");
+      remove.type = "button";
+      remove.title = "Remove the note";
+      remove.disabled = sent;
+      remove.addEventListener("click", () => {
+        notes.splice(i, 1);
+        renderNotes();
+      });
+      const input = document.createElement("textarea");
+      input.value = note.text;
+      input.placeholder = "What should change?";
+      input.disabled = sent;
+      input.addEventListener("input", () => (note.text = input.value));
+      card.append(remove, make("div", describe(note), "target"), input);
+      notesEl.append(card);
+      if (!note.text && !sent) input.focus();
+    });
+  }
+
+  function renderAnswers() {
+    answersEl.replaceChildren();
+    if (!answers.size) answersEl.append(make("div", "None.", "empty"));
+    for (const [key, value] of answers) {
+      answersEl.append(make("dt", key), make("dd", value || "(empty)"));
+    }
+  }
+
+  function setMode(next) {
+    mode = next;
+    for (const name of ["annotate", "explore"]) {
+      document.getElementById(name).setAttribute("aria-pressed", String(name === mode));
+    }
+    frame.contentWindow.postMessage({ type: "mode", mode }, "*");
+  }
+
+  function renderSent() {
+    sendEl.disabled = sent;
+    messageEl.disabled = sent;
+    messageEl.placeholder = sent ? "This revision was sent, waiting for a new revision." : "";
+    if (sent) setStatus("Sent, waiting for a new revision");
+  }
+
+  window.addEventListener("message", (e) => {
+    const data = e.data;
+    if (e.source !== frame.contentWindow || !data || typeof data !== "object") return;
+    if (data.type === "ready") {
+      setMode(mode);
+    } else if (data.type === "note" && !sent) {
+      const cell = data.cell && typeof data.cell === "object"
+        ? { table: text(data.cell.table), row: text(data.cell.row), col: text(data.cell.col) }
+        : null;
+      notes.push({ selector: text(data.selector), excerpt: text(data.excerpt), cell, text: "" });
+      renderNotes();
+    } else if (data.type === "answer" && KEY.test(text(data.key))) {
+      answers.set(text(data.key), text(data.value));
+      renderAnswers();
+    }
+  });
+
+  document.getElementById("annotate").addEventListener("click", () => setMode("annotate"));
+  document.getElementById("explore").addEventListener("click", () => setMode("explore"));
+
+  sendEl.addEventListener("click", async () => {
+    if (notes.some((note) => !note.text.trim())) {
+      setStatus("Every note needs a text.", true);
+      return;
+    }
+    sendEl.disabled = true;
+    setStatus("Sending...");
+    try {
+      const res = await fetch(`/r/${review.id}/${review.revision}/submit?t=${encodeURIComponent(review.token)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes, answers: Object.fromEntries(answers), message: messageEl.value }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      sent = true;
+      renderNotes();
+      renderSent();
+    } catch (err) {
+      sendEl.disabled = false;
+      setStatus(`Not sent: ${err.message}`, true);
+    }
+  });
+
+  renderNotes();
+  renderAnswers();
+  renderSent();
+})();
+</script>
+</body>
+</html>

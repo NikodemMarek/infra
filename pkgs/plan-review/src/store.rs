@@ -12,7 +12,15 @@ use serde_json::{Map, Value};
 const MAX_HTML: u64 = 2_097_152;
 const MAX_TITLE_CHARS: usize = 200;
 const KEEP_SECS: u64 = 604_800;
-const ORIGIN: &str = "http://127.0.0.1:4388";
+
+macro_rules! addr {
+    () => {
+        "127.0.0.1:4388"
+    };
+}
+
+pub const ADDR: &str = addr!();
+pub const ORIGIN: &str = concat!("http://", addr!());
 
 pub struct Store {
     pub root: PathBuf,
@@ -116,8 +124,7 @@ impl Store {
         let json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
         write_private(&tmp, &json)?;
         let target = dir.join("meta.json");
-        fs::rename(&tmp, &target)
-            .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
+        fs::rename(&tmp, &target).map_err(|e| format!("cannot write {}: {e}", target.display()))?;
         for (other, m) in &reviews {
             if *other != id && m.updated < updated.saturating_sub(KEEP_SECS) {
                 let _ = fs::remove_dir_all(self.root.join(other));
@@ -133,8 +140,10 @@ impl Store {
     pub fn intake(&self, event: &str) -> Result<(), String> {
         let event: Map<String, Value> =
             serde_json::from_str(event).map_err(|_| "the event is not a JSON object")?;
-        let Ok(ReviewRef { review: id, revision }) =
-            serde_json::from_value(Value::Object(event))
+        let Ok(ReviewRef {
+            review: id,
+            revision,
+        }) = serde_json::from_value(Value::Object(event))
         else {
             return Ok(());
         };
@@ -174,7 +183,7 @@ impl Store {
             .collect())
     }
 
-    fn lock(&self) -> Result<File, String> {
+    pub fn lock(&self) -> Result<File, String> {
         let fail = |e: io::Error| format!("cannot lock {}: {e}", self.root.display());
         DirBuilder::new()
             .recursive(true)
@@ -193,7 +202,7 @@ impl Store {
         Ok(lock)
     }
 
-    fn read_meta(&self, id: &str) -> Option<Meta> {
+    pub fn read_meta(&self, id: &str) -> Option<Meta> {
         let data = fs::read(self.root.join(id).join("meta.json")).ok()?;
         serde_json::from_slice(&data).ok()
     }
@@ -232,7 +241,7 @@ fn valid_session(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
 }
 
-fn valid_id(id: &str) -> bool {
+pub fn valid_id(id: &str) -> bool {
     id.len() == 16 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
@@ -240,7 +249,7 @@ fn review_url(id: &str, token: &str) -> String {
     format!("{ORIGIN}/r/{id}?t={token}")
 }
 
-fn now() -> u64 {
+pub fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
@@ -254,7 +263,7 @@ fn random_hex(bytes: usize) -> Result<String, String> {
     Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-fn write_private(path: &Path, data: &[u8]) -> Result<(), String> {
+pub fn write_private(path: &Path, data: &[u8]) -> Result<(), String> {
     OpenOptions::new()
         .write(true)
         .create(true)
@@ -286,7 +295,9 @@ fn read_html(path: &Path) -> Result<Vec<u8>, String> {
         return Err(too_big());
     }
     let mut data = Vec::new();
-    file.take(MAX_HTML + 1).read_to_end(&mut data).map_err(fail)?;
+    file.take(MAX_HTML + 1)
+        .read_to_end(&mut data)
+        .map_err(fail)?;
     if data.len() as u64 > MAX_HTML {
         return Err(too_big());
     }
@@ -294,7 +305,7 @@ fn read_html(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 /// Publishes an event of kind with payload as JSON through `event-pub`.
-fn event_pub(kind: &str, payload: &ReviewRef) -> Result<(), String> {
+pub fn event_pub<T: Serialize>(kind: &str, payload: &T) -> Result<(), String> {
     let payload = serde_json::to_string(payload).map_err(|e| e.to_string())?;
     let mut child = Command::new("event-pub")
         .arg(kind)
@@ -316,10 +327,12 @@ fn event_pub(kind: &str, payload: &ReviewRef) -> Result<(), String> {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&out.stderr);
-    Err(match stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()) {
-        Some(line) => line.to_string(),
-        None => format!("event-pub failed: {}", out.status),
-    })
+    Err(
+        match stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()) {
+            Some(line) => line.to_string(),
+            None => format!("event-pub failed: {}", out.status),
+        },
+    )
 }
 
 /// Notifies about the review and, when the user picks "Open", opens it in the browser.
@@ -334,10 +347,12 @@ fn open_on_request(id: &str, meta: &Meta) -> Result<(), String> {
         .map_err(|e| format!("notify-send: {e}"))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        return Err(match stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()) {
-            Some(line) => format!("notify-send failed: {} ({line})", out.status),
-            None => format!("notify-send failed: {}", out.status),
-        });
+        return Err(
+            match stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()) {
+                Some(line) => format!("notify-send failed: {} ({line})", out.status),
+                None => format!("notify-send failed: {}", out.status),
+            },
+        );
     }
     if String::from_utf8_lossy(&out.stdout).trim() != "open" {
         return Ok(());

@@ -100,8 +100,14 @@ fn publish_again_makes_revision_2_with_same_id_and_token() {
     assert_eq!(m2["token"], m1["token"]);
     assert_eq!(m2["title"], "My plan 2");
     let dir = e.root().join(&id);
-    assert_eq!(fs::read_to_string(dir.join("r1.html")).unwrap(), "<html>v1</html>");
-    assert_eq!(fs::read_to_string(dir.join("r2.html")).unwrap(), "<html>v2</html>");
+    assert_eq!(
+        fs::read_to_string(dir.join("r1.html")).unwrap(),
+        "<html>v1</html>"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("r2.html")).unwrap(),
+        "<html>v2</html>"
+    );
 }
 
 #[test]
@@ -210,7 +216,10 @@ fn publish_event_pub_failure_exits_1_and_keeps_snapshot() {
     assert_eq!(ids.len(), 1);
     let id = &ids[0];
     assert_eq!(e.meta(id)["revision"], 1);
-    assert_eq!(fs::read_to_string(e.root().join(id).join("r1.html")).unwrap(), "v1");
+    assert_eq!(
+        fs::read_to_string(e.root().join(id).join("r1.html")).unwrap(),
+        "v1"
+    );
 
     e.clear_flag("event-pub.fail");
     e.write_plan("plan.html", "v2");
@@ -356,7 +365,12 @@ fn publish_accepts_file_of_exactly_2_mib() {
     let o = e.publish("big.html", "t");
     assert_eq!(o.code, 0, "{}", o.stderr);
     let id = &e.ids()[0];
-    assert_eq!(fs::metadata(e.root().join(id).join("r1.html")).unwrap().len(), MAX as u64);
+    assert_eq!(
+        fs::metadata(e.root().join(id).join("r1.html"))
+            .unwrap()
+            .len(),
+        MAX as u64
+    );
 }
 
 #[test]
@@ -538,7 +552,14 @@ fn intake_bad_id_does_nothing() {
 fn intake_bad_revision_does_nothing() {
     let e = Env::new();
     let id = publish_one(&e);
-    for rev in [json!(0), json!(-1), json!("1"), json!(1.5), json!(null), json!([1])] {
+    for rev in [
+        json!(0),
+        json!(-1),
+        json!("1"),
+        json!(1.5),
+        json!(null),
+        json!([1]),
+    ] {
         let o = e.intake(&event(&id, rev.clone()));
         assert_eq!(o.code, 0, "revision {rev}: {}", o.stderr);
         assert_eq!(e.log("notify-send.log"), "", "revision {rev}");
@@ -613,7 +634,10 @@ fn list_line_format() {
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(
         o.stdout,
-        format!("{}\n", list_line(&id, &token, "open", "sess-1", 1, "My plan"))
+        format!(
+            "{}\n",
+            list_line(&id, &token, "open", "sess-1", 1, "My plan")
+        )
     );
 }
 
@@ -626,7 +650,10 @@ fn list_shows_latest_revision() {
     assert_eq!(e.publish("plan.html", "Renamed").code, 0);
     assert_eq!(
         e.list().stdout,
-        format!("{}\n", list_line(&id, &token, "open", "sess-1", 2, "Renamed"))
+        format!(
+            "{}\n",
+            list_line(&id, &token, "open", "sess-1", 2, "Renamed")
+        )
     );
 }
 
@@ -700,9 +727,13 @@ fn list_mixed_states_and_sessions() {
 fn list_does_not_modify_the_store() {
     let e = Env::new();
     let id = publish_one(&e);
-    let before = fs::metadata(e.root().join(&id).join("meta.json")).unwrap().mtime();
+    let before = fs::metadata(e.root().join(&id).join("meta.json"))
+        .unwrap()
+        .mtime();
     e.list();
-    let after = fs::metadata(e.root().join(&id).join("meta.json")).unwrap().mtime();
+    let after = fs::metadata(e.root().join(&id).join("meta.json"))
+        .unwrap()
+        .mtime();
     assert_eq!(before, after);
     assert_eq!(e.log("event-pub.log").lines().count(), 2);
 }
@@ -715,7 +746,11 @@ fn store_falls_back_to_home_local_state_when_xdg_unset_or_relative() {
     e.write_plan("plan.html", "x");
     let home = e.dir.join("home");
     for xdg in [None, Some("relative/dir")] {
-        let unset: &[&str] = if xdg.is_none() { &["XDG_STATE_HOME"] } else { &[] };
+        let unset: &[&str] = if xdg.is_none() {
+            &["XDG_STATE_HOME"]
+        } else {
+            &[]
+        };
         let envs: Vec<(&str, &str)> = [("AGENT_SESSION", "sess-1")]
             .into_iter()
             .chain(xdg.map(|x| ("XDG_STATE_HOME", x)))

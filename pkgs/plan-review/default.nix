@@ -17,6 +17,7 @@ rustPlatform.buildRustPackage {
       ./Cargo.toml
       ./Cargo.lock
       ./src
+      ./assets
       ./tests
     ];
   };
@@ -28,6 +29,9 @@ rustPlatform.buildRustPackage {
   postInstall = ''
     wrapProgram $out/bin/plan-review \
       --suffix PATH : ${lib.makeBinPath [event-bus libnotify xdg-utils]}
+
+    mkdir -p $out/lib/systemd/user
+    substitute ${./plan-review.service} $out/lib/systemd/user/plan-review.service --subst-var out
   '';
 
   meta = {

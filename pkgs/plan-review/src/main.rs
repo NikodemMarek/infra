@@ -1,3 +1,4 @@
+mod server;
 mod store;
 
 use std::io::Read;
@@ -33,6 +34,9 @@ enum Command {
     Intake,
     /// list the reviews, newest first: URL, open or sent, session, revision, title
     List,
+    /// serve the review pages on 127.0.0.1:4388 (run by the plan-review user service)
+    #[command(hide = true)]
+    Serve,
 }
 
 fn main() {
@@ -64,5 +68,6 @@ fn run(command: Command) -> Result<(), String> {
             }
             Ok(())
         }
+        Command::Serve => server::serve(&store),
     }
 }

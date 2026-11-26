@@ -1,0 +1,11 @@
+[Unit]
+Description=Plan review pages on 127.0.0.1:4388
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=@out@/bin/plan-review serve
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
