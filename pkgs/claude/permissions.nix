@@ -88,6 +88,13 @@
     "Bash(glab mr note *--unresolve*)"
     "Bash(glab api *notes*)"
     "Bash(glab api *discussions*)"
+    "Bash(glab api *mutation*)"
+    "Bash(curl *notes*)"
+    "Bash(curl *discussions*)"
+    # The token would let any HTTP client bypass the rules above.
+    "Bash(glab config get token*)"
+    "Bash(glab auth status *-t*)"
+    "Read(~/.config/glab-cli/**)"
     "Bash(gh pr comment:*)"
     "Bash(gh pr review:*)"
     "Bash(gh api *comments*)"
