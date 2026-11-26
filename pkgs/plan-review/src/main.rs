@@ -1,3 +1,4 @@
+mod notice;
 mod server;
 mod store;
 
@@ -32,6 +33,9 @@ enum Command {
     /// turn a review.requested event on stdin into a desktop notification that opens the review (used by the event handler)
     #[command(hide = true)]
     Intake,
+    /// turn a review.submitted event on stdin into the line for the session-message handler (used by the event handler)
+    #[command(hide = true)]
+    Notice,
     /// list the reviews, newest first: URL, open or sent, session, revision, title
     List,
     /// serve the review pages on 127.0.0.1:4388 (run by the plan-review user service)
@@ -47,6 +51,14 @@ fn main() {
     }
 }
 
+fn read_event() -> Result<String, String> {
+    let mut event = String::new();
+    std::io::stdin()
+        .read_to_string(&mut event)
+        .map_err(|e| format!("reading stdin: {e}"))?;
+    Ok(event)
+}
+
 fn run(command: Command) -> Result<(), String> {
     let store = Store::from_env()?;
     match command {
@@ -55,12 +67,12 @@ fn run(command: Command) -> Result<(), String> {
             let file = std::path::absolute(file).map_err(|e| e.to_string())?;
             store.publish(&session, &file, &title)
         }
-        Command::Intake => {
-            let mut event = String::new();
-            std::io::stdin()
-                .read_to_string(&mut event)
-                .map_err(|e| format!("reading stdin: {e}"))?;
-            store.intake(&event)
+        Command::Intake => store.intake(&read_event()?),
+        Command::Notice => {
+            if let Some(line) = notice::notice(&store, &read_event()?)? {
+                println!("{line}");
+            }
+            Ok(())
         }
         Command::List => {
             for line in store.list()? {

@@ -37,7 +37,7 @@ pub struct Meta {
     pub updated: u64,
 }
 
-/// The payload of a `review.requested` event.
+/// A revision of a review, as carried by the review events.
 #[derive(Serialize, Deserialize)]
 pub struct ReviewRef {
     pub review: String,
@@ -138,18 +138,13 @@ impl Store {
 
     /// Handle a `review.requested` event (its JSON on stdin): notify and open the review on request.
     pub fn intake(&self, event: &str) -> Result<(), String> {
-        let event: Map<String, Value> =
-            serde_json::from_str(event).map_err(|_| "the event is not a JSON object")?;
-        let Ok(ReviewRef {
+        let Some(ReviewRef {
             review: id,
             revision,
-        }) = serde_json::from_value(Value::Object(event))
+        }) = review_ref(event)?
         else {
             return Ok(());
         };
-        if !valid_id(&id) || revision < 1 {
-            return Ok(());
-        }
         let Some(meta) = self.read_meta(&id).filter(|m| m.revision == revision) else {
             return Ok(());
         };
@@ -166,11 +161,7 @@ impl Store {
         Ok(reviews
             .into_iter()
             .map(|(id, m)| {
-                let sent = self
-                    .root
-                    .join(&id)
-                    .join(format!("feedback-r{}.json", m.revision))
-                    .exists();
+                let sent = self.feedback_path(&id, m.revision).exists();
                 format!(
                     "{}\t{}\t{}\tr{}\t{}",
                     review_url(&id, &m.token),
@@ -207,6 +198,10 @@ impl Store {
         serde_json::from_slice(&data).ok()
     }
 
+    pub fn feedback_path(&self, id: &str, n: u64) -> PathBuf {
+        self.root.join(id).join(format!("feedback-r{n}.json"))
+    }
+
     /// Every review dir with a readable meta.
     fn reviews(&self) -> Result<Vec<(String, Meta)>, String> {
         let entries = match fs::read_dir(&self.root) {
@@ -223,6 +218,15 @@ impl Store {
             })
             .collect())
     }
+}
+
+/// The review an event refers to: `Err` when the event is not a JSON object, `None` when its review or revision is invalid.
+pub fn review_ref(event: &str) -> Result<Option<ReviewRef>, String> {
+    let event: Map<String, Value> =
+        serde_json::from_str(event).map_err(|_| "the event is not a JSON object")?;
+    Ok(serde_json::from_value::<ReviewRef>(Value::Object(event))
+        .ok()
+        .filter(|r| valid_id(&r.review) && r.revision >= 1))
 }
 
 /// Collapse whitespace runs to one space, drop other control characters, trim.

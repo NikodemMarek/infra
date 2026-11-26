@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -109,26 +109,27 @@ fn same_token(a: &str, b: &str) -> bool {
 }
 
 #[derive(Serialize, Deserialize)]
-struct Cell {
-    table: String,
-    row: String,
-    col: String,
+pub(crate) struct Cell {
+    pub(crate) table: String,
+    pub(crate) row: String,
+    pub(crate) col: String,
 }
 
 #[derive(Serialize, Deserialize)]
-struct Note {
-    selector: String,
-    excerpt: String,
+pub(crate) struct Note {
+    pub(crate) selector: String,
+    pub(crate) excerpt: String,
     #[serde(deserialize_with = "Option::deserialize")]
-    cell: Option<Cell>,
-    text: String,
+    pub(crate) cell: Option<Cell>,
+    pub(crate) text: String,
 }
 
+/// The body of a submit request, and the part of `feedback-r<N>.json` that the user wrote.
 #[derive(Serialize, Deserialize)]
-struct Submission {
-    notes: Vec<Note>,
-    answers: BTreeMap<String, String>,
-    message: String,
+pub(crate) struct Submission {
+    pub(crate) notes: Vec<Note>,
+    pub(crate) answers: BTreeMap<String, String>,
+    pub(crate) message: String,
 }
 
 impl Submission {
@@ -187,7 +188,7 @@ pub fn handle(
     };
     let dir = store.root.join(id);
     match route {
-        Route::Panel(_) => panel(&dir, id, &meta),
+        Route::Panel(_) => panel(store, id, &meta),
         Route::Artifact(_, n) => match fs::read(dir.join(format!("r{n}.html"))) {
             Ok(html) => {
                 Response::new(200, "text/html; charset=utf-8", inject(&html)).csp(ARTIFACT_CSP)
@@ -206,12 +207,10 @@ pub fn handle(
     }
 }
 
-fn panel(dir: &Path, id: &str, meta: &Meta) -> Response {
-    let sent = dir
-        .join(format!("feedback-r{}.json", meta.revision))
-        .exists();
+fn panel(store: &Store, id: &str, meta: &Meta) -> Response {
+    let sent = store.feedback_path(id, meta.revision).exists();
     let previous = (meta.revision > 1)
-        .then(|| fs::read(dir.join(format!("feedback-r{}.json", meta.revision - 1))).ok())
+        .then(|| fs::read(store.feedback_path(id, meta.revision - 1)).ok())
         .flatten()
         .and_then(|data| serde_json::from_slice::<Submission>(&data).ok());
     let data = json!({
@@ -275,7 +274,7 @@ fn save(store: &Store, id: &str, n: u64, body: &[u8]) -> Result<PathBuf, Respons
     if n != meta.revision {
         return Err(error(409, "a newer revision exists"));
     }
-    let file = store.root.join(id).join(format!("feedback-r{n}.json"));
+    let file = store.feedback_path(id, n);
     if file.exists() {
         return Err(error(409, "already sent"));
     }

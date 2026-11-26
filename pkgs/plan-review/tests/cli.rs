@@ -787,3 +787,506 @@ fn concurrent_publishes_are_serialized() {
         assert!(f.is_file(), "r{n}.html");
     }
 }
+
+// ---- notice
+
+const NID: &str = "0123456789abcdef";
+const TRUNC: &str = "… truncated, read the full feedback";
+
+fn notice_meta(e: &Env, id: &str, session: &str, path: &str, title: &str, revision: u64) {
+    let d = e.root().join(id);
+    fs::create_dir_all(&d).unwrap();
+    fs::write(
+        d.join("meta.json"),
+        json!({"session": session, "path": path, "title": title, "token": "t".repeat(32),
+               "revision": revision, "updated": now()})
+        .to_string(),
+    )
+    .unwrap();
+}
+
+fn notice_feedback(e: &Env, id: &str, n: u64, session: &str, path: &str, title: &str, rest: Value) {
+    let mut f = json!({"review": id, "revision": n, "session": session, "title": title,
+                       "path": path, "submitted": now(),
+                       "notes": [], "answers": {}, "message": ""});
+    for (k, v) in rest.as_object().unwrap() {
+        f[k] = v.clone();
+    }
+    fs::write(
+        e.root().join(id).join(format!("feedback-r{n}.json")),
+        f.to_string(),
+    )
+    .unwrap();
+}
+
+/// Meta and feedback r1 for session `sess-1`, path `/w/plan.html`, title `My plan`.
+fn notice_setup(e: &Env, rest: Value) {
+    notice_meta(e, NID, "sess-1", "/w/plan.html", "My plan", 1);
+    notice_feedback(e, NID, 1, "sess-1", "/w/plan.html", "My plan", rest);
+}
+
+fn submitted(id: &str, revision: Value) -> String {
+    json!({"type": "review.submitted", "review": id, "revision": revision}).to_string()
+}
+
+fn notice_run(e: &Env, stdin: &str) -> common::Out {
+    e.run(&e.work, &[], stdin, &["notice"])
+}
+
+/// Runs notice, asserts exit 0 and a single `{"to","text"}` line; returns (to, text).
+fn notice_ok(e: &Env, stdin: &str) -> (String, String) {
+    let o = notice_run(e, stdin);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(o.stdout.lines().count(), 1, "{:?}", o.stdout);
+    let v: Value = serde_json::from_str(o.stdout.trim_end_matches('\n')).unwrap();
+    let obj = v.as_object().unwrap();
+    assert_eq!(obj.len(), 2, "{v}");
+    (
+        obj["to"].as_str().unwrap().to_string(),
+        obj["text"].as_str().unwrap().to_string(),
+    )
+}
+
+fn notice_text(e: &Env, rest: Value) -> String {
+    notice_setup(e, rest);
+    notice_ok(e, &submitted(NID, json!(1))).1
+}
+
+fn assert_nothing(e: &Env, stdin: &str) {
+    let o = notice_run(e, stdin);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(o.stdout, "", "stdin {stdin}");
+}
+
+fn framed(t: &str) -> usize {
+    22 + t.chars().count() + 2 * (t.matches('\n').count() + 1)
+}
+
+fn header(e: &Env) -> String {
+    format!(
+        "Feedback from the user on plan review \"My plan\" (r1 of /w/plan.html), sent from the plan-review page.\n\
+         Full feedback: {}/{NID}/feedback-r1.json\n\
+         Revise, then edit /w/plan.html and run plan-review publish again for the next revision.",
+        e.root().display()
+    )
+}
+
+#[test]
+fn notice_full_text_exact() {
+    let e = Env::new();
+    let t = notice_text(
+        &e,
+        json!({
+            "notes": [
+                {"selector": "#a > p:nth-of-type(2)", "excerpt": "some words", "cell": null, "text": "fix this"},
+                {"selector": "td", "excerpt": "ignored", "cell": {"table": "Costs", "row": "Rent", "col": "Q1"}, "text": "wrong number"},
+                {"selector": "#b", "excerpt": "", "cell": null, "text": "no excerpt"},
+            ],
+            "answers": {"zeta": "1", "alpha": "yes", "mid": "x y"},
+            "message": "first\n\nthird",
+        }),
+    );
+    let want = format!(
+        "{}\nNotes:\n\
+         - [#a > p:nth-of-type(2) \"some words\"] fix this\n\
+         - [table \"Costs\" row \"Rent\" col \"Q1\"] wrong number\n\
+         - [#b] no excerpt\n\
+         Page answers (set by the page's controls, possibly without the user): alpha=yes, mid=x y, zeta=1\n\
+         Message typed by the user:\n  > first\n  >\n  > third",
+        header(&e)
+    );
+    assert_eq!(t.trim_end_matches('\n'), want);
+}
+
+#[test]
+fn notice_to_is_meta_session_not_event() {
+    let e = Env::new();
+    notice_setup(&e, json!({"message": "hi"}));
+    let ev = json!({"type": "review.submitted", "review": NID, "revision": 1,
+                    "session": "evil", "to": "evil"})
+    .to_string();
+    let (to, _) = notice_ok(&e, &ev);
+    assert_eq!(to, "sess-1");
+}
+
+#[test]
+fn notice_to_ignores_feedback_session() {
+    let e = Env::new();
+    notice_meta(&e, NID, "sess-meta", "/w/plan.html", "My plan", 1);
+    notice_feedback(
+        &e,
+        NID,
+        1,
+        "sess-other",
+        "/w/plan.html",
+        "My plan",
+        json!({"message": "hi"}),
+    );
+    let (to, _) = notice_ok(&e, &submitted(NID, json!(1)));
+    assert_eq!(to, "sess-meta");
+}
+
+#[test]
+fn notice_message_only() {
+    let e = Env::new();
+    let t = notice_text(&e, json!({"message": "hello"}));
+    assert_eq!(
+        t.trim_end_matches('\n'),
+        format!("{}\nMessage typed by the user:\n  > hello", header(&e))
+    );
+}
+
+#[test]
+fn notice_notes_only_omits_answers_and_message() {
+    let e = Env::new();
+    let t = notice_text(
+        &e,
+        json!({"notes": [{"selector": "#x", "excerpt": "", "cell": null, "text": "n"}]}),
+    );
+    assert_eq!(
+        t.trim_end_matches('\n'),
+        format!("{}\nNotes:\n- [#x] n", header(&e))
+    );
+    assert!(!t.contains("Page answers"));
+    assert!(!t.contains("Message typed"));
+}
+
+#[test]
+fn notice_answers_only_label_and_sorted() {
+    let e = Env::new();
+    let t = notice_text(&e, json!({"answers": {"b": "2", "c": "3", "a": "1"}}));
+    assert_eq!(
+        t.trim_end_matches('\n'),
+        format!(
+            "{}\nPage answers (set by the page's controls, possibly without the user): a=1, b=2, c=3",
+            header(&e)
+        )
+    );
+    assert!(!t.contains("Notes:"));
+}
+
+#[test]
+fn notice_blank_message_block_omitted() {
+    let e = Env::new();
+    let t = notice_text(
+        &e,
+        json!({"answers": {"a": "1"}, "message": " \n\t\r\n  \n"}),
+    );
+    assert!(!t.contains("Message typed"), "{t}");
+    assert!(!t.contains('>'), "{t}");
+}
+
+#[test]
+fn notice_message_line_normalization() {
+    let e = Env::new();
+    let t = notice_text(
+        &e,
+        json!({"message": "a\r\nb\rc\u{2028}d\u{2029}e\u{85}f\u{1}g\th\n\nz\n\n\n"}),
+    );
+    let tail =
+        "Message typed by the user:\n  > a\n  > b\n  > c\n  > d\n  > e\n  > fg\th\n  >\n  > z";
+    assert!(t.trim_end_matches('\n').ends_with(tail), "{t:?}");
+}
+
+#[test]
+fn notice_oneline_on_title_and_path() {
+    let e = Env::new();
+    let path = "/w/a\tb\nc\u{2028}d\u{85}e\u{1}f.html";
+    let title = "T\nx\ty\u{2028}z\u{85}w\u{7}v  u";
+    notice_meta(&e, NID, "sess-1", path, title, 1);
+    notice_feedback(&e, NID, 1, "sess-1", path, title, json!({"message": "m"}));
+    let (_, t) = notice_ok(&e, &submitted(NID, json!(1)));
+    assert_eq!(
+        t.lines().next().unwrap(),
+        "Feedback from the user on plan review \"T x y z wv u\" (r1 of /w/a b c d ef.html), sent from the plan-review page."
+    );
+    assert!(
+        t.lines()
+            .nth(2)
+            .unwrap()
+            .starts_with("Revise, then edit /w/a b c d ef.html and run"),
+        "{t}"
+    );
+}
+
+#[test]
+fn notice_oneline_on_note_fields() {
+    let e = Env::new();
+    let t = notice_text(
+        &e,
+        json!({"notes": [
+            {"selector": "#a\n> p\u{2028}x\u{85}y\u{1}z", "excerpt": " ex\tc\r\nerpt\u{7} ", "cell": null,
+             "text": "line1\nline2\u{2028}l3\u{85}l4\u{1}l5\t l6 "},
+            {"selector": "td", "excerpt": "e", "text": "c",
+             "cell": {"table": "Ta\nb\u{2028}le\u{1}", "row": "R\to\u{85}w", "col": "C\u{7}o\r\nl"}},
+        ]}),
+    );
+    assert!(
+        t.contains("\n- [#a > p x yz \"ex c erpt\"] line1 line2 l3 l4l5 l6\n"),
+        "{t:?}"
+    );
+    assert!(
+        t.contains("\n- [table \"Ta b le\" row \"R o w\" col \"Co l\"] c"),
+        "{t:?}"
+    );
+}
+
+#[test]
+fn notice_oneline_on_answers() {
+    let e = Env::new();
+    let t = notice_text(
+        &e,
+        json!({"answers": {"k\ney\u{2028}x\u{1}": "v\u{85}a\tl\nue\u{7}"}}),
+    );
+    assert!(
+        t.trim_end_matches('\n')
+            .ends_with("possibly without the user): k ey x=v a l ue"),
+        "{t:?}"
+    );
+    assert_eq!(t.lines().count(), 4, "{t:?}");
+}
+
+/// A last line shorter than a full line (ending in `filler` repeated chars) was cut partially,
+/// so the result must sit exactly on the budget.
+fn assert_cut_fills_budget(t: &str, filler: usize) {
+    let body = t.strip_suffix(&format!("\n{TRUNC}")).expect("marker line");
+    let last = body.lines().last().unwrap();
+    let c = last.chars().last().unwrap();
+    let tail = last.chars().rev().take_while(|x| *x == c).count();
+    if tail < filler {
+        assert_eq!(
+            framed(t),
+            7900,
+            "partial cut must fill the budget: {last:?}"
+        );
+    }
+}
+
+#[test]
+fn notice_budget_exactly_at_limit_is_unchanged() {
+    let e = Env::new();
+    let base = notice_text(&e, json!({"message": "x".repeat(10)}));
+    let pad = 7900 - framed(base.trim_end_matches('\n'));
+    let msg = "x".repeat(10 + pad);
+    let t = notice_text(&e, json!({"message": msg}));
+    let t = t.trim_end_matches('\n');
+    assert_eq!(framed(t), 7900);
+    assert!(!t.contains("truncated"));
+    assert!(t.ends_with(&format!("  > {msg}")));
+}
+
+#[test]
+fn notice_budget_one_over_limit_is_truncated() {
+    let e = Env::new();
+    let base = notice_text(&e, json!({"message": "x".repeat(10)}));
+    let pad = 7900 - framed(base.trim_end_matches('\n')) + 1;
+    let t = notice_text(&e, json!({"message": "x".repeat(10 + pad)}));
+    assert!(t.ends_with(TRUNC), "{t:?}");
+    assert_eq!(framed(&t), 7900, "partial cut must fill the budget exactly");
+}
+
+#[test]
+fn notice_budget_huge_notes_and_message() {
+    let e = Env::new();
+    let notes: Vec<Value> = (0..60)
+        .map(|i| {
+            json!({"selector": format!("#n{i}"), "excerpt": "", "cell": null,
+                        "text": format!("note {i} {}", "w".repeat(400))})
+        })
+        .collect();
+    let msg: String = (0..40)
+        .map(|i| format!("message line {i} {}", "m".repeat(200)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let t = notice_text(
+        &e,
+        json!({"notes": notes, "message": msg, "answers": {"a": "b"}}),
+    );
+    assert!(t.ends_with(TRUNC), "{t:?}");
+    assert!(framed(&t) <= 7900, "framed {}", framed(&t));
+    assert!(
+        framed(&t) >= 7800,
+        "not the longest prefix: framed {}",
+        framed(&t)
+    );
+    assert_cut_fills_budget(&t, 400);
+    assert!(t.starts_with(&header(&e)), "{t:?}");
+    assert!(t.contains("\nNotes:\n- [#n0] note 0 "));
+}
+
+#[test]
+fn notice_budget_huge_message_only() {
+    let e = Env::new();
+    let msg: String = (0..300)
+        .map(|i| format!("line {i} {}", "z".repeat(50)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let t = notice_text(&e, json!({"message": msg}));
+    assert!(t.ends_with(TRUNC), "{t:?}");
+    assert!(framed(&t) <= 7900, "framed {}", framed(&t));
+    assert!(framed(&t) >= 7800, "framed {}", framed(&t));
+    assert_cut_fills_budget(&t, 50);
+    assert!(t.contains("Message typed by the user:\n  > line 0 "));
+}
+
+#[test]
+fn notice_truncated_text_is_prefix_of_full_rendering() {
+    let e = Env::new();
+    let big: Vec<Value> = (0..80)
+        .map(|i| {
+            json!({"selector": format!("#s{i}"), "excerpt": "", "cell": null,
+                        "text": format!("t{i} {}", "q".repeat(300))})
+        })
+        .collect();
+    let t = notice_text(&e, json!({"notes": big.clone()}));
+    let prefix = t
+        .strip_suffix(&format!("\n{TRUNC}"))
+        .expect("marker on its own line");
+    let mut full = format!("{}\nNotes:", header(&e));
+    for (i, n) in big.iter().enumerate() {
+        full.push_str(&format!("\n- [#s{i}] {}", n["text"].as_str().unwrap()));
+    }
+    assert!(
+        full.starts_with(prefix),
+        "not a prefix of the full rendering"
+    );
+}
+
+#[test]
+fn notice_other_event_type_is_nothing() {
+    let e = Env::new();
+    notice_setup(&e, json!({"message": "hi"}));
+    for ty in ["review.requested", "review.other", ""] {
+        let ev = json!({"type": ty, "review": NID, "revision": 1}).to_string();
+        assert_nothing(&e, &ev);
+    }
+    assert_nothing(&e, &json!({"review": NID, "revision": 1}).to_string());
+}
+
+#[test]
+fn notice_bad_review_id_is_nothing() {
+    let e = Env::new();
+    notice_setup(&e, json!({"message": "hi"}));
+    for id in [
+        "0123456789ABCDEF",
+        "0123456789abcde",
+        "0123456789abcdef0",
+        "../0123456789abcdef",
+        "0123456789abcdeg",
+        "",
+    ] {
+        assert_nothing(&e, &submitted(id, json!(1)));
+    }
+    assert_nothing(
+        &e,
+        &json!({"type": "review.submitted", "review": 5, "revision": 1}).to_string(),
+    );
+    assert_nothing(
+        &e,
+        &json!({"type": "review.submitted", "revision": 1}).to_string(),
+    );
+}
+
+#[test]
+fn notice_bad_revision_is_nothing() {
+    let e = Env::new();
+    notice_setup(&e, json!({"message": "hi"}));
+    for r in [
+        json!(0),
+        json!("1"),
+        json!(1.0),
+        json!(-1),
+        json!(null),
+        json!(1.5),
+        json!([1]),
+    ] {
+        assert_nothing(&e, &submitted(NID, r));
+    }
+    assert_nothing(
+        &e,
+        &json!({"type": "review.submitted", "review": NID}).to_string(),
+    );
+}
+
+#[test]
+fn notice_missing_dir_meta_or_feedback_is_nothing() {
+    let e = Env::new();
+    assert_nothing(&e, &submitted(NID, json!(1)));
+    fs::create_dir_all(e.root().join(NID)).unwrap();
+    assert_nothing(&e, &submitted(NID, json!(1)));
+    notice_meta(&e, NID, "sess-1", "/w/plan.html", "My plan", 1);
+    assert_nothing(&e, &submitted(NID, json!(1)));
+    notice_feedback(
+        &e,
+        NID,
+        1,
+        "sess-1",
+        "/w/plan.html",
+        "My plan",
+        json!({"message": "hi"}),
+    );
+    assert_nothing(&e, &submitted(NID, json!(2)));
+    let (to, _) = notice_ok(&e, &submitted(NID, json!(1)));
+    assert_eq!(to, "sess-1");
+}
+
+#[test]
+fn notice_non_object_stdin_exits_1() {
+    let e = Env::new();
+    notice_setup(&e, json!({"message": "hi"}));
+    for s in ["[]", "\"x\"", "42", "null", "not json", ""] {
+        let o = notice_run(&e, s);
+        assert_eq!(o.code, 1, "stdin {s:?}: {}", o.stderr);
+        assert_eq!(o.stdout, "", "stdin {s:?}");
+        assert!(o.stderr.starts_with("plan-review: "), "{}", o.stderr);
+    }
+}
+
+#[test]
+fn notice_old_revision_is_still_delivered() {
+    let e = Env::new();
+    notice_meta(&e, NID, "sess-1", "/w/plan.html", "My plan", 2);
+    notice_feedback(
+        &e,
+        NID,
+        1,
+        "sess-1",
+        "/w/plan.html",
+        "My plan",
+        json!({"message": "old words"}),
+    );
+    let (to, t) = notice_ok(&e, &submitted(NID, json!(1)));
+    assert_eq!(to, "sess-1");
+    assert!(t.contains("(r1 of /w/plan.html)"), "{t:?}");
+    assert!(t.contains("feedback-r1.json"), "{t:?}");
+    assert!(t.ends_with("  > old words"), "{t:?}");
+}
+
+#[test]
+fn notice_budget_truncation_on_whole_line_boundary() {
+    let e = Env::new();
+    let base = notice_text(&e, json!({"message": "x".repeat(10)}));
+    let marker_cost = 1 + TRUNC.chars().count() + 2;
+    let k = 7900 - framed(base.trim_end_matches('\n')) - marker_cost;
+    let first = "x".repeat(10 + k);
+    let prefix = notice_text(&e, json!({"message": first.clone()}));
+    let prefix = prefix.trim_end_matches('\n').to_string();
+    let t = notice_text(
+        &e,
+        json!({"message": format!("{first}\n{}", "y".repeat(500))}),
+    );
+    assert_eq!(t, format!("{prefix}\n{TRUNC}"));
+    assert_eq!(framed(&t), 7900);
+}
+
+#[test]
+fn notice_multibyte_cut_counts_chars_and_does_not_panic() {
+    for pad in 0..8 {
+        let e = Env::new();
+        let msg = format!("{}{}", "a".repeat(pad), "zażółć😀".repeat(3000));
+        let t = notice_text(&e, json!({"message": msg}));
+        assert!(t.ends_with(TRUNC), "pad {pad}");
+        assert_eq!(framed(&t), 7900, "pad {pad}");
+        assert!(t.contains("zażółć"), "pad {pad}");
+    }
+}
