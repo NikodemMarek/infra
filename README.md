@@ -164,9 +164,14 @@ Own programs (`nix build .#<name>`):
 | `event-bus` | events over plain NATS (`$NATS_URL`): `event-pub TYPE` publishes JSON from stdin on `events.TYPE`; `event-subscribe HANDLER SUBJECT...` runs HANDLER per event |
 | `event-handlers` | user service, one `event-subscribe` per line of `pkgs/event-handlers/handlers` (subjects stay under `events.`) |
 | `agent-inbox`, `agent-task`, `claude-hooks`, `claude-statusline`, `agent-skills` | agent tooling: terminal inbox of Claude prompts, sudo requests and tasks; task capture publishing `task.new`; claude's hooks, status line and skills |
+| `plan-review` | plan reviews: `plan-review publish <file> "<title>"` shows an agent's HTML plan in the browser, the feedback goes back to its session (see Plan reviews) |
 | `matrix-gateway`, `matrix-inbox`, `matrix-gateway-image` | Matrix bridge of the NATS hub (in the cluster) and its client on `yenn`; CI publishes the image to `ghcr.io/nikodemmarek/matrix-gateway` |
 | `tm`, `dictate`, `dictate-type`, `wallpaper` | task list CLI (`$TM_FILE`); microphone to text via the local whisper server; types the dictation into the focused window (SUPER+D toggles); the wallpaper image |
 | `jail` | a function: `jail <package> {ENV_VAR = "/abs/path";}` runs every binary with those env vars set |
+
+### Plan reviews
+
+An agent renders a plan as a self-contained HTML page (the `visual-plan` skill) and runs `plan-review publish <file> "<title>"` (the session is `$AGENT_SESSION`). The user gets a desktop notification, opens the page, annotates elements, text and table cells, answers its form controls, types a message and sends; the session receives the feedback as a message, revises the page and publishes it again as the next revision. `plan-review list` prints the open and sent reviews with their URLs. The page is served by the user unit `plan-review.service` on `127.0.0.1:4388`; state (revisions and feedback) is in `$XDG_STATE_HOME/plan-review` (default `~/.local/state/plan-review`).
 
 ## External infrastructure
 
