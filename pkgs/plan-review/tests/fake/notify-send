@@ -1,0 +1,15 @@
+#!/bin/sh
+{
+	for a in "$@"; do
+		echo "arg=$a"
+	done
+	echo "--end--"
+} >> "$FAKE_LOG_DIR/notify-send.log"
+if [ -f "$FAKE_LOG_DIR/notify-send.fail" ]; then
+	echo "notify-send failed" >&2
+	exit 1
+fi
+if [ -f "$FAKE_LOG_DIR/notify-send.out" ]; then
+	IFS= read -r out < "$FAKE_LOG_DIR/notify-send.out" || true
+	printf '%s\n' "$out"
+fi
