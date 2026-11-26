@@ -1,0 +1,42 @@
+name: lint
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, closed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hooks:
+    if: ${{ !github.event.pull_request.draft && github.event.action != 'closed' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          extra_nix_config: |
+            extra-trusted-public-keys = nix-cache-1:WFfV/XlLBXZdMcKtaAEB4MSIQlXf6FYa6rqGxxmUcw0=
+            connect-timeout = 5
+            fallback = true
+      - uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ secrets.TS_CACHE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_CACHE_OAUTH_SECRET }}
+          tags: tag:ci-cache
+      - name: nix cache
+        run: |
+          echo "100.100.215.91 nix-cache" | sudo tee -a /etc/hosts >/dev/null
+          if curl -sf --max-time 5 --retry 5 --retry-all-errors --retry-delay 5 http://nix-cache:3902/nix-cache-info >/dev/null; then
+            echo "NIX_CONFIG=extra-substituters = http://nix-cache:3902?priority=50" >> "$GITHUB_ENV"
+          fi
+      - name: hooks
+        run: nix run --inputs-from . nixpkgs#devenv -- test

@@ -35,6 +35,7 @@ Rules:
 
 - `nix eval` is blocked in agent sessions. Use the dry-run build, or `nix repl` with `:lf .` for single values (e.g. `nixosConfigurations.triss.config.services.k3s.role`).
 - Build in a jj workspace (no `.git`, so nix sees the files as they are). In the colocated main checkout new files are invisible to `nix build .#` until `git add`ed. Never use `path:.#` there: it copies the git-ignored plaintext keys (`host/alp/key`, `host/*/ssh_host_ed25519_key`, `host/*/disk.key`) into the store.
+- Lint: `devenv test` runs every git hook (treefmt, statix, deadnix, ruff, shellcheck, clippy) on all files; CI (`lint.yml`) runs it on PRs and fails on any finding.
 - Format Nix with `nix run nixpkgs#alejandra`. Check scripts with `bash -n` and `nix run nixpkgs#shellcheck -- -s bash`.
 - Cluster: `KUBECONFIG` is `kubeconfig.yaml` (git-ignored) in the root of the `default` jj workspace; the dev shell sets it. `kubectl` is read-only unless asked.
 - Hosts: `ssh maintenance@<host>`. Its sudo needs a password and a terminal (only deploy-rs activation is passwordless), so sudo steps go to the user.
