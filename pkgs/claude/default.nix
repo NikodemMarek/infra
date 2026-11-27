@@ -118,6 +118,15 @@
 
       settingsFile = writeText "claude-settings.json" (builtins.toJSON settings);
 
+      substitute = ''
+        find "$out" -type f \( -name '*.md' -o -name 'settings.json' \) -exec sed -i \
+          -e ${lib.escapeShellArg "s|@dataDir@|${prettyDataDir}|g"} \
+          -e ${lib.escapeShellArg "s|@memoryDir@|${prettyMemoryDir}|g"} \
+          -e ${lib.escapeShellArg "s|@projectsDir@|${prettyProjectsDir}|g"} \
+          -e ${lib.escapeShellArg "s|@knowledgeFile@|${prettyKnowledgeFile}|g"} \
+          {} +
+      '';
+
       config = runCommand "claude-config" {} ''
         mkdir -p "$out/agents" "$out/skills"
         cp ${instructions} "$out/CLAUDE.md"
@@ -129,12 +138,7 @@
         cp ${settingsFile} "$out/settings.json"
         chmod -R u+w "$out"
 
-        find "$out" -type f \( -name '*.md' -o -name 'settings.json' \) -exec sed -i \
-          -e ${lib.escapeShellArg "s|@dataDir@|${prettyDataDir}|g"} \
-          -e ${lib.escapeShellArg "s|@memoryDir@|${prettyMemoryDir}|g"} \
-          -e ${lib.escapeShellArg "s|@projectsDir@|${prettyProjectsDir}|g"} \
-          -e ${lib.escapeShellArg "s|@knowledgeFile@|${prettyKnowledgeFile}|g"} \
-          {} +
+        ${substitute}
       '';
 
       # Everything the launch preamble keeps linked into $CLAUDE_CONFIG_DIR.
@@ -147,7 +151,40 @@
         ++ map (n: "agents/${n}.md") (lib.attrNames agents)
         ++ map (n: "skills/${n}") (lib.attrNames skills);
 
-      managed = "${builtins.storeDir}/*-claude-config/*";
+      # The first mate's own config: the coordinator's settings without the plugins, plus its deny rules.
+      mateSkills = lib.mapAttrs (n: _: ./mate/skills + "/${n}") (
+        lib.filterAttrs (_: t: t == "directory") (builtins.readDir ./mate/skills)
+      );
+
+      # `//` marks an absolute path in a rule; `~/` is already unambiguous.
+      mateEditRule = "Edit(${lib.optionalString (lib.hasPrefix "/" prettyProjectsDir) "/"}${prettyProjectsDir}/**)";
+
+      mateSettingsFile = writeText "claude-mate-settings.json" (
+        builtins.toJSON (
+          deepMerge (builtins.removeAttrs settings ["enabledPlugins"]) (
+            deepMerge (import ./mate/settings.nix) {permissions.deny = [mateEditRule];}
+          )
+        )
+      );
+
+      mateConfig = runCommand "claude-mate-config" {} ''
+        mkdir -p "$out/skills"
+        cp ${./mate/CLAUDE.md} "$out/CLAUDE.md"
+        ${lib.concatStringsSep "\n" (
+          lib.mapAttrsToList (n: p: ''cp -rL "${p}" "$out/skills/${n}"'') mateSkills
+        )}
+        cp ${mateSettingsFile} "$out/settings.json"
+        chmod -R u+w "$out"
+
+        ${substitute}
+      '';
+
+      mateEntries =
+        [
+          "CLAUDE.md"
+          "settings.json"
+        ]
+        ++ map (n: "skills/${n}") (lib.attrNames mateSkills);
 
       # Adds the keys of the JSON object $1 to claude's state file where they are missing
       # (nested objects merge, claude's own values win). Atomic, never fails.
@@ -166,78 +203,115 @@
       # Sourced from the makeWrapper script, which runs with `bash -e`: all work
       # happens in a function called through `|| true` (this disables -e inside
       # it), and nothing but the exports is left behind.
-      preamble = writeShellScript "claude-preamble" ''
-        __claude_link() {
-          local dst="$CLAUDE_CONFIG_DIR/$1" src="$2" cur
-          if [ -L "$dst" ]; then
-            cur="$(${coreutils}/bin/readlink "$dst")"
-            if [ "$cur" = "$src" ]; then
+      # configDir: shell expression for CLAUDE_CONFIG_DIR; store: the config derivation
+      # linked into it; entries: what to link; prepare: shell run in __claude_setup before the linking.
+      mkPreamble = {
+        configDir,
+        store,
+        entries,
+        prepare,
+      }: let
+        managed = "${builtins.storeDir}/*-${store.name}/*";
+      in
+        writeShellScript "claude-preamble" ''
+          __claude_link() {
+            local dst="$CLAUDE_CONFIG_DIR/$1" src="$2" cur
+            if [ -L "$dst" ]; then
+              cur="$(${coreutils}/bin/readlink "$dst")"
+              if [ "$cur" = "$src" ]; then
+                return 0
+              fi
+              case "$cur" in
+                ${managed})
+                  # atomic replace: never leaves $dst missing for a concurrent launch
+                  ${coreutils}/bin/ln -s "$src" "$dst.tmp.$$" \
+                    && ${coreutils}/bin/mv -T "$dst.tmp.$$" "$dst" \
+                    || ${coreutils}/bin/rm -f "$dst.tmp.$$"
+                  ;;
+                *)
+                  echo "claude: not replacing $dst (not managed by nix)" >&2
+                  ;;
+              esac
+            elif [ -e "$dst" ]; then
+              echo "claude: not replacing $dst (not managed by nix)" >&2
+            elif ! ${coreutils}/bin/ln -s "$src" "$dst" 2>/dev/null; then
+              # a concurrent launch may have created it in the meantime
+              [ "$(${coreutils}/bin/readlink "$dst" 2>/dev/null)" = "$src" ] \
+                || echo "claude: could not link $dst" >&2
+            fi
+          }
+
+          __claude_prune() {
+            local dir l t
+            for dir in "$CLAUDE_CONFIG_DIR" "$CLAUDE_CONFIG_DIR/agents" "$CLAUDE_CONFIG_DIR/skills"; do
+              for l in "$dir"/*; do
+                [ -L "$l" ] || continue
+                t="$(${coreutils}/bin/readlink "$l")"
+                case "$t" in
+                  "${store}"/*) ;;
+                  ${managed}) ${coreutils}/bin/rm -f "$l" ;;
+                esac
+              done
+            done
+          }
+
+          # settings.json is claude's to write by default; move a real file (or a
+          # foreign link) aside once so the managed link can take its place.
+          __claude_adopt_settings() {
+            local dst="$CLAUDE_CONFIG_DIR/settings.json" bak
+            if [ -L "$dst" ]; then
+              case "$(${coreutils}/bin/readlink "$dst")" in
+                ${managed}) return 0 ;;
+              esac
+            elif [ ! -e "$dst" ]; then
               return 0
             fi
-            case "$cur" in
-              ${managed})
-                # atomic replace: never leaves $dst missing for a concurrent launch
-                ${coreutils}/bin/ln -s "$src" "$dst.tmp.$$" \
-                  && ${coreutils}/bin/mv -T "$dst.tmp.$$" "$dst" \
-                  || ${coreutils}/bin/rm -f "$dst.tmp.$$"
-                ;;
-              *)
-                echo "claude: not replacing $dst (not managed by nix)" >&2
-                ;;
-            esac
-          elif [ -e "$dst" ]; then
-            echo "claude: not replacing $dst (not managed by nix)" >&2
-          elif ! ${coreutils}/bin/ln -s "$src" "$dst" 2>/dev/null; then
-            # a concurrent launch may have created it in the meantime
-            [ "$(${coreutils}/bin/readlink "$dst" 2>/dev/null)" = "$src" ] \
-              || echo "claude: could not link $dst" >&2
-          fi
-        }
-
-        __claude_prune() {
-          local dir l t
-          for dir in "$CLAUDE_CONFIG_DIR" "$CLAUDE_CONFIG_DIR/agents" "$CLAUDE_CONFIG_DIR/skills"; do
-            for l in "$dir"/*; do
-              [ -L "$l" ] || continue
-              t="$(${coreutils}/bin/readlink "$l")"
-              case "$t" in
-                "${config}"/*) ;;
-                ${managed}) ${coreutils}/bin/rm -f "$l" ;;
-              esac
+            local n=0 stamp
+            stamp="backups/settings.json.$(${coreutils}/bin/date +%Y%m%d-%H%M%S)"
+            bak="$stamp"
+            # never clobber an earlier backup from the same second
+            while [ -e "$CLAUDE_CONFIG_DIR/$bak" ] || [ -L "$CLAUDE_CONFIG_DIR/$bak" ]; do
+              n=$((n + 1))
+              bak="$stamp.$n"
             done
-          done
-        }
+            ${coreutils}/bin/mkdir -p "$CLAUDE_CONFIG_DIR/backups" \
+              && ${coreutils}/bin/mv -T "$dst" "$CLAUDE_CONFIG_DIR/$bak" \
+              && echo "claude: moved unmanaged settings.json to $bak" >&2
+          }
 
-        # settings.json is claude's to write by default; move a real file (or a
-        # foreign link) aside once so the managed link can take its place.
-        __claude_adopt_settings() {
-          local dst="$CLAUDE_CONFIG_DIR/settings.json" bak
-          if [ -L "$dst" ]; then
-            case "$(${coreutils}/bin/readlink "$dst")" in
-              ${managed}) return 0 ;;
+          __claude_setup() {
+            export CLAUDE_CONFIG_DIR="${configDir}"
+            # unconditional: the agents' prose and the permission rules have this path baked in at build time
+            export CLAUDE_MEMORY_DIR="${memoryDir}"
+            export CLAUDE_PROJECTS_DIR="${projectsDir}"
+            ${coreutils}/bin/mkdir -p "$CLAUDE_CONFIG_DIR/agents" "$CLAUDE_CONFIG_DIR/skills"
+            ${prepare}
+            __claude_adopt_settings
+            # skips the first-run screens and the trust prompt in projectsDir
+            ${seedState} "$(${jq}/bin/jq -nc --arg p "${projectsDir}" \
+              '{hasCompletedOnboarding: true, hasSeenAutoDefaultNotice: true, projects: {($p): {hasTrustDialogAccepted: true}}}')"
+            local top
+            top="$(${git}/bin/git rev-parse --show-toplevel 2>/dev/null)" || top=""
+            case "$top" in
+              "${projectsDir}/"*) ${seedState} "$(${jq}/bin/jq -nc --arg p "$top" '{projects: {($p): {hasTrustDialogAccepted: true}}}')" ;;
             esac
-          elif [ ! -e "$dst" ]; then
-            return 0
-          fi
-          local n=0 stamp
-          stamp="backups/settings.json.$(${coreutils}/bin/date +%Y%m%d-%H%M%S)"
-          bak="$stamp"
-          # never clobber an earlier backup from the same second
-          while [ -e "$CLAUDE_CONFIG_DIR/$bak" ] || [ -L "$CLAUDE_CONFIG_DIR/$bak" ]; do
-            n=$((n + 1))
-            bak="$stamp.$n"
-          done
-          ${coreutils}/bin/mkdir -p "$CLAUDE_CONFIG_DIR/backups" \
-            && ${coreutils}/bin/mv -T "$dst" "$CLAUDE_CONFIG_DIR/$bak" \
-            && echo "claude: moved unmanaged settings.json to $bak" >&2
-        }
+            ${lib.concatMapStringsSep "\n" (
+              e: ''__claude_link ${lib.escapeShellArg e} "${store}/${e}"''
+            )
+            entries}
+            __claude_prune
+          }
 
-        __claude_setup() {
-          export CLAUDE_CONFIG_DIR="''${CLAUDE_CONFIG_DIR:-${dataDir}}"
-          # unconditional: the agents' prose and the permission rules have this path baked in at build time
-          export CLAUDE_MEMORY_DIR="${memoryDir}"
-          export CLAUDE_PROJECTS_DIR="${projectsDir}"
-          ${coreutils}/bin/mkdir -p "$CLAUDE_CONFIG_DIR/agents" "$CLAUDE_CONFIG_DIR/skills" "$CLAUDE_MEMORY_DIR"
+          __claude_setup || true
+          unset -f __claude_link __claude_prune __claude_adopt_settings __claude_setup
+        '';
+
+      preamble = mkPreamble {
+        configDir = "\${CLAUDE_CONFIG_DIR:-${dataDir}}";
+        store = config;
+        inherit entries;
+        prepare = ''
+          ${coreutils}/bin/mkdir -p "$CLAUDE_MEMORY_DIR"
           if [ ! -e "$CLAUDE_MEMORY_DIR/.git" ] && command -v git >/dev/null 2>&1; then
             git -C "$CLAUDE_MEMORY_DIR" init -q >/dev/null 2>&1
           fi
@@ -246,25 +320,32 @@
           if [ -n "$nested" ]; then
             echo "claude: $CLAUDE_MEMORY_DIR contains a nested git repository ($nested); memory commits miss files below it" >&2
           fi
-          __claude_adopt_settings
-          # skips the first-run screens and the trust prompt in projectsDir
-          ${seedState} "$(${jq}/bin/jq -nc --arg p "${projectsDir}" \
-            '{hasCompletedOnboarding: true, hasSeenAutoDefaultNotice: true, projects: {($p): {hasTrustDialogAccepted: true}}}')"
-          local top
-          top="$(${git}/bin/git rev-parse --show-toplevel 2>/dev/null)" || top=""
-          case "$top" in
-            "${projectsDir}/"*) ${seedState} "$(${jq}/bin/jq -nc --arg p "$top" '{projects: {($p): {hasTrustDialogAccepted: true}}}')" ;;
-          esac
-          ${lib.concatMapStringsSep "\n" (
-            e: ''__claude_link ${lib.escapeShellArg e} "${config}/${e}"''
-          )
-          entries}
-          __claude_prune
-        }
+        '';
+      };
 
-        __claude_setup || true
-        unset -f __claude_link __claude_prune __claude_adopt_settings __claude_setup
-      '';
+      # Always its own dir, whatever CLAUDE_CONFIG_DIR says. jw reads sessions, transcripts and
+      # workspaces from the coordinator's dir, so those are shared by relative link; the login
+      # (.credentials.json) is not: a link would be replaced on token refresh and log the
+      # coordinators out.
+      matePreamble = mkPreamble {
+        configDir = "${dataDir}/mate";
+        store = mateConfig;
+        entries = mateEntries;
+        prepare = ''
+          local shared dst
+          for shared in sessions projects jj-agents; do
+            dst="$CLAUDE_CONFIG_DIR/$shared"
+            if [ -L "$dst" ]; then
+              continue
+            elif [ -e "$dst" ]; then
+              echo "claude: not replacing $dst (a real directory, not a link to ../$shared)" >&2
+            else
+              ${coreutils}/bin/mkdir -p "${dataDir}/$shared" \
+                && ${coreutils}/bin/ln -s "../$shared" "$dst" 2>/dev/null
+            fi
+          done
+        '';
+      };
 
       # Sourced after the preamble: a plain interactive `claude [prompt]` in a repo's main jj
       # workspace runs in its own one (`--worktree`, see `jw hook`). Anything with
@@ -344,6 +425,21 @@
         unset -f __claude_project __claude_workspace
         unset __claude_ws __claude_root
       '';
+      wrapperArgs = ''
+        --set-default DISABLE_AUTOUPDATER 1 \
+        --prefix PATH : ${
+          lib.makeBinPath (
+            [
+              claude-hooks
+              claude-statusline
+              forge
+              jj-upload
+            ]
+            ++ extraPackages
+          )
+        } \
+        --suffix PATH : ${lib.makeBinPath [jw plan-review jujutsu git]}
+      '';
     in
       symlinkJoin {
         name = "claude-${claude-code.version}";
@@ -353,19 +449,11 @@
           wrapProgram $out/bin/claude \
             --run "source ${preamble}" \
             --run "source ${workspace}" \
-            --set-default DISABLE_AUTOUPDATER 1 \
-            --prefix PATH : ${
-            lib.makeBinPath (
-              [
-                claude-hooks
-                claude-statusline
-                forge
-                jj-upload
-              ]
-              ++ extraPackages
-            )
-          } \
-            --suffix PATH : ${lib.makeBinPath [jw plan-review jujutsu git]}
+            ${wrapperArgs}
+          makeWrapper ${claude-code}/bin/claude $out/bin/claude-mate \
+            --run "source ${matePreamble}" \
+            --run "source ${workspace}" \
+            ${wrapperArgs}
         '';
 
         passthru = {
