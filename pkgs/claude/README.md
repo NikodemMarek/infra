@@ -81,7 +81,7 @@ xdg.configFile."opencode/skills".source = "${pkgs.agent-skills}";
 Claude-only frontmatter (`allowed-tools`, and `disable-model-invocation` in `commit` and `drill-me`) is ignored by other tools.
 ## Data dir
 
-On launch the wrapper uses `CLAUDE_CONFIG_DIR` (default: the package's `dataDir`, `$HOME/.local/share/claude`) and sets `CLAUDE_MEMORY_DIR=$CLAUDE_CONFIG_DIR/memory` (always; the agents' prose has that path baked in) and `CLAUDE_PROJECTS_DIR` (the package's `projectsDir`, where `claude-guard-writes` lets agents write to other repos). The memory dir is `git init`ed if it is not a repo yet.
+On launch the wrapper uses `CLAUDE_CONFIG_DIR` (default: the package's `dataDir`, `$HOME/.local/share/claude`) and sets `CLAUDE_MEMORY_DIR` to the package's `memoryDir` (default `$HOME/.local/share/claude/memory`; always, a value from the environment is overwritten, since the agents' prose, `@import` and permission rules have that path baked in) and `CLAUDE_PROJECTS_DIR` (the package's `projectsDir`, where `claude-guard-writes` lets agents write to other repos). The memory dir is `git init`ed if it is not a repo yet.
 
 ```
 ~/.local/share/claude/
@@ -91,7 +91,7 @@ On launch the wrapper uses `CLAUDE_CONFIG_DIR` (default: the package's `dataDir`
   skills/<name>      -> /nix/store/...-claude-config/skills/<name>
   settings.json      -> /nix/store/...-claude-config/settings.json (read-only)
   backups/           unmanaged settings.json files moved aside on launch
-  memory/            the architect's project memory (a git repo, not managed by Nix): README.md, INDEX.md,
+  memory/            `memoryDir` (default location): the architect's project memory (a git repo, not managed by Nix): README.md, INDEX.md,
                      templates/ and projects/<slug>/{overview,decisions,log}.md + notes/; private/ is the user's
   ...                sessions, credentials, etc. (claude's own state)
 ```
@@ -100,7 +100,7 @@ On launch the wrapper uses `CLAUDE_CONFIG_DIR` (default: the package's `dataDir`
 
 Managed entries are symlinks refreshed on every launch; stale ones from older builds are pruned. Real files or foreign symlinks are never overwritten (a warning is printed), except `settings.json`, which is moved to `backups/` first.
 
-`dataDir` is shell-expanded at runtime and must start with `$HOME/` (checked at build time; the markdown prose shows it as `~/...`). Variants (e.g. different `extend` results) sharing one `dataDir` re-link each other's entries on every launch; give a variant its own `dataDir` to run them side by side.
+`dataDir` is shell-expanded at runtime and must start with `$HOME/` (checked at build time; the markdown prose shows it as `~/...`). Variants (e.g. different `extend` results) sharing one `dataDir` re-link each other's entries on every launch; give a variant its own `dataDir` to run them side by side. `memoryDir` follows the same rules (shell-expanded, `$HOME/` prefix) and is independent of `dataDir`: variants with different `dataDir`s can share one memory repo.
 
 ## Migrating from ~/.claude
 
@@ -139,7 +139,7 @@ final: prev: {
 }
 ```
 
-`extend` accepts `instructions`, `agents`, `skills`, `settings`, `extraPackages`, `dataDir`, `projectsDir` and `knowledgeFile` (other names fail with an error). It deep-merges `settings`, `agents` and `skills` (attrsets recurse, lists such as `permissions.allow` are concatenated and deduplicated), concatenates `extraPackages`, and replaces `instructions` / `dataDir` / `projectsDir` / `knowledgeFile`. A `null` agent/skill removes it: `claude.extend { skills.atomic-commits = null; }`. The result carries `extend` again, so layers chain, and still supports `.override { ... }`, which replaces `instructions` / `agents` / `skills` / `settings` wholesale instead.
+`extend` accepts `instructions`, `agents`, `skills`, `settings`, `extraPackages`, `dataDir`, `projectsDir` and `memoryDir` (other names fail with an error). It deep-merges `settings`, `agents` and `skills` (attrsets recurse, lists such as `permissions.allow` are concatenated and deduplicated), concatenates `extraPackages`, and replaces `instructions` / `dataDir` / `projectsDir` / `memoryDir`. A `null` agent/skill removes it: `claude.extend { skills.atomic-commits = null; }`. The result carries `extend` again, so layers chain, and still supports `.override { ... }`, which replaces `instructions` / `agents` / `skills` / `settings` wholesale instead.
 
 ## Local/private extensions
 

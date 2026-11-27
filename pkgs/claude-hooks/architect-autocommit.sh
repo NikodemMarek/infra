@@ -1,6 +1,10 @@
 # PostToolUse hook for the architect: auto-commit the edited file in the project memory repo.
 # Deliberately no errexit (the package sets only nounset + pipefail): a failing git call must never fail the hook.
-MEM="${CLAUDE_MEMORY_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/memory}"
+MEM="${CLAUDE_MEMORY_DIR:-}"
+if [ -z "$MEM" ]; then
+	jq -n '{systemMessage: "memory: CLAUDE_MEMORY_DIR is not set; the edit was not committed"}'
+	exit 0
+fi
 input="$(cat)"
 path="$(jq -r '.tool_input.file_path // empty' <<<"$input")"
 real="$(realpath "$MEM" 2>/dev/null)" || exit 0

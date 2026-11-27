@@ -6,7 +6,7 @@
 # (writeShellApplication prepends the shebang and `set -o errexit -o nounset -o pipefail`)
 MODE="${1:?mode required}"
 CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-MEM="${CLAUDE_MEMORY_DIR:-$CFG/memory}"
+MEM="${CLAUDE_MEMORY_DIR:-}"
 PROJECTS="${CLAUDE_PROJECTS_DIR:-}"
 input="$(cat)"
 path="$(jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' <<<"$input")"
@@ -18,6 +18,7 @@ deny() {
 	exit 0
 }
 
+[ -z "$MEM" ] && deny "CLAUDE_MEMORY_DIR is not set; start claude through the nix wrapper."
 [ -z "$path" ] && deny "No file path in tool input."
 case "$path" in /*) ;; *) path="$cwd/$path" ;; esac
 abs="$(realpath -m -- "$path")"
