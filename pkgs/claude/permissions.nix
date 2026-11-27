@@ -71,7 +71,7 @@
     "Bash(mvn verify:*)"
   ];
   deny = [
-    # Sessions are started only with `jw agent`: others are invisible to agent-inbox.
+    # Sessions are started only with `jw agent`: others have no jw session record.
     "Bash(shpool attach:*)"
     "Bash(shpool --no-daemonize attach:*)"
 

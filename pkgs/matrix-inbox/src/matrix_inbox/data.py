@@ -21,25 +21,13 @@ def loads(data: str | bytes) -> Json:
         raise ParseError(f"invalid json: {e}") from e
 
 
-def dumps(value: Json, indent: int | None = None, sort_keys: bool = False) -> str:
-    """Compact (one line) without indent."""
-    if indent is None:
-        return json.dumps(
-            value, ensure_ascii=False, separators=(",", ":"), sort_keys=sort_keys
-        )
-    return json.dumps(value, ensure_ascii=False, indent=indent, sort_keys=sort_keys)
+def dumps(value: Json, sort_keys: bool = False) -> str:
+    """Compact (one line)."""
+    return json.dumps(
+        value, ensure_ascii=False, separators=(",", ":"), sort_keys=sort_keys
+    )
 
 
 def get_str(o: Obj, key: str) -> str | None:
     v = o.get(key)
     return v if isinstance(v, str) else None
-
-
-def get_obj(o: Obj, key: str) -> Obj | None:
-    v = o.get(key)
-    return v if isinstance(v, dict) else None
-
-
-def get_list(o: Obj, key: str) -> list[Json] | None:
-    v = o.get(key)
-    return v if isinstance(v, list) else None

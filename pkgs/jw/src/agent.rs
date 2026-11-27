@@ -348,7 +348,7 @@ fn launch(
         if mate {
             fields.kind = Some(MATE_KIND.to_string());
         }
-        // the inbox shows the session from its record; a failure must not stop the session
+        // a failure to write the record must not stop the session
         let recorded = records.update(&name, |r| {
             r.merge(fields);
             // a (re)started session is not finished
@@ -378,7 +378,6 @@ fn launch(
     };
     if detach {
         eprintln!("jw: started {name} in {}", basename(home));
-        // agent-inbox parses this line (its `N`)
         eprintln!("jw attach {name}");
         return Ok(());
     }

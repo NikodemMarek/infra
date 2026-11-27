@@ -1,8 +1,6 @@
-from matrix_inbox.data import Json, Obj, loads
+from matrix_inbox.data import Obj, loads
 
 HOST = "yenn"
-PERMISSION = "claude.permission_request"
-QUESTION = "claude.question"
 
 
 class FakeBus:
@@ -37,25 +35,6 @@ class FakeBus:
         return bodies
 
 
-class FakeLocal:
-    """The `Local` of the tests: holds the inbox items, records replies."""
-
-    def __init__(self, items: list[Obj] | None = None) -> None:
-        self.held: list[Obj] = list(items) if items is not None else []
-        self.items_error: Exception | None = None
-        self.replies: list[tuple[str, str]] = []
-        self.reply_results: dict[str, str | None] = {}
-
-    def items(self) -> list[Obj]:
-        if self.items_error is not None:
-            raise self.items_error
-        return list(self.held)
-
-    def reply(self, item_id: str, line: str) -> str | None:
-        self.replies.append((item_id, line))
-        return self.reply_results.get(item_id)
-
-
 class FakeSeen:
     """The `Seen` of the tests: a set of claimed ids, or raises `error` when set."""
 
@@ -86,46 +65,3 @@ class FakeTasks:
     def start(self, prompt: str) -> Obj | None:
         self.prompts.append(prompt)
         return self.outcome
-
-
-def item(item_id: str, event: Obj, received: float = 1.0) -> Obj:
-    return {"id": item_id, "received": received, "event": event}
-
-
-def permission(
-    reply: str | None = "/r/p", command: str = "ls -la", **extra: Json
-) -> Obj:
-    event: Obj = {
-        "type": PERMISSION,
-        "project": "infra",
-        "session": "s-1",
-        "title": "List files",
-        "tool_name": "Bash",
-        "tool_input": {"command": command},
-    }
-    if reply is not None:
-        event["reply"] = reply
-    event.update(extra)
-    return event
-
-
-def question(reply: str | None = "/r/q", multi: bool = False, **extra: Json) -> Obj:
-    q: Obj = {
-        "question": "Which db?",
-        "options": [
-            {"label": "A"},
-            {"label": "B", "description": "fast"},
-            {"label": "C"},
-        ],
-    }
-    if multi:
-        q["multiSelect"] = True
-    event: Obj = {
-        "type": QUESTION,
-        "project": "infra",
-        "tool_input": {"questions": [q]},
-    }
-    if reply is not None:
-        event["reply"] = reply
-    event.update(extra)
-    return event

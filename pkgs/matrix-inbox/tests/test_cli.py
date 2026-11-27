@@ -42,14 +42,6 @@ class Forbidden:
 
 
 @pytest.fixture
-def guarded(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(cli, "ProcessLocal", Forbidden)
-    monkeypatch.setattr(cli, "NatsBus", Forbidden)
-    monkeypatch.setattr(cli, "answer_reply", Forbidden)
-    monkeypatch.setattr("sys.argv", ["matrix-inbox-answer"])
-
-
-@pytest.fixture
 def stdin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
     """Hands `set_stdin` a way to feed both fd 0 and sys.stdin; restores fd 0 afterwards."""
     saved = os.dup(0)
@@ -74,87 +66,6 @@ def feed(stdin: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):  # type:
         )
 
     return set_stdin
-
-
-def run_answer() -> int:
-    with pytest.raises(SystemExit) as exc:
-        cli.answer()
-    code = exc.value.code
-    assert isinstance(code, int)
-    return code
-
-
-def test_key_unset_exits_2(
-    guarded: None,
-    feed,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.delenv("MATRIX_GATEWAY_KEY", raising=False)
-    feed(signed_line(Ed25519PrivateKey.generate()))
-    assert run_answer() == 2
-    assert (
-        "set MATRIX_GATEWAY_KEY to the gateway's public key" in capsys.readouterr().err
-    )
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        "",
-        "!!!not base64",
-        "AAAA",
-        base64.b64encode(b"x" * 31).decode(),
-        base64.b64encode(b"x" * 33).decode(),
-    ],
-    ids=["empty", "not-base64", "short", "31-bytes", "33-bytes"],
-)
-def test_key_invalid_exits_2(
-    value: str,
-    guarded: None,
-    feed,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setenv("MATRIX_GATEWAY_KEY", value)
-    feed(signed_line(Ed25519PrivateKey.generate()))
-    assert run_answer() == 2
-    assert (
-        "set MATRIX_GATEWAY_KEY to the gateway's public key" in capsys.readouterr().err
-    )
-
-
-@pytest.mark.parametrize(
-    "kind", ["unsigned", "plain", "empty", "wrong-key", "tampered"]
-)
-def test_bad_line_is_dropped_with_exit_1(
-    kind: str,
-    guarded: None,
-    feed,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    key = Ed25519PrivateKey.generate()
-    monkeypatch.setenv("MATRIX_GATEWAY_KEY", public_b64(key))
-    lines = {
-        "unsigned": dumps(
-            {"type": "matrix.reply", "msg": dumps(FIELDS, sort_keys=True)}
-        ),
-        "plain": "nil body",
-        "empty": "",
-        "wrong-key": signed_line(Ed25519PrivateKey.generate()),
-        "tampered": signed_line(key).replace(
-            '\\"text\\":\\"y\\"', '\\"text\\":\\"z\\"'
-        ),
-    }
-    feed(lines[kind] + "\n")
-    assert run_answer() == 1
-    assert "dropping an unsigned or invalid reply" in capsys.readouterr().err
-
-
-def test_args_exit_2(guarded: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("sys.argv", ["matrix-inbox-answer", "extra"])
-    assert run_answer() == 2
 
 
 COMMAND_ERR = "matrix-inbox-command: "

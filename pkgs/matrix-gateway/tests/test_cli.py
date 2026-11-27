@@ -10,7 +10,7 @@ from fakes import OWNER, ROOM, FakeBus, FakeMatrix
 from matrix_gateway import cli
 from matrix_gateway.gateway import Fatal, Gateway, MatrixError
 
-LINE = '{"to":"yenn","ref":"r","body":"hi"}'
+LINE = '{"room":"mail","body":"hi"}'
 
 
 def test_keygen(capsys: pytest.CaptureFixture[str]) -> None:

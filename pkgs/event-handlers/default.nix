@@ -37,8 +37,6 @@
     };
     notify-critical = notify.override {urgency = "critical";};
     task = callPackage ./task {};
-    # queues the event for agent-inbox in `$XDG_RUNTIME_DIR/agent-inbox`
-    inbox = callPackage ./inbox {};
   };
 
   # one event-subscribe per handler, with all its subjects

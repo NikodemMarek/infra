@@ -36,7 +36,6 @@ in {
         knowledgeFile = "$HOME/omniverse/agents/AGENTS.md";
         settings.env.TM_FILE = "/home/nikodem/omniverse/tasks/ai-tasks.md";
       })
-      pkgs.agent-inbox
       pkgs.agent-task
       pkgs.stay-awake
       pkgs.tm

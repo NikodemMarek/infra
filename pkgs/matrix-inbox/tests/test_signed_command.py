@@ -3,7 +3,7 @@ import base64
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from matrix_inbox.data import Json, dumps
-from matrix_inbox.signed import Command, open_command, open_reply
+from matrix_inbox.signed import Command, open_command
 
 FIELDS: dict[str, Json] = {
     "kind": "matrix.command",
@@ -120,16 +120,6 @@ def test_open_command_rejects_a_sealed_reply() -> None:
     msg = msg_of(REPLY_FIELDS)
     line = envelope(msg, sign(key, msg), "matrix.reply")
     assert open_command(line, key.public_key()) is None
-
-
-def test_open_reply_rejects_a_sealed_command() -> None:
-    key = Ed25519PrivateKey.generate()
-    assert open_reply(sealed(key), key.public_key()) is None
-
-
-def test_open_reply_rejects_a_command_message_in_a_reply_envelope() -> None:
-    key = Ed25519PrivateKey.generate()
-    assert open_reply(sealed(key, type_="matrix.reply"), key.public_key()) is None
 
 
 def test_kind_missing() -> None:

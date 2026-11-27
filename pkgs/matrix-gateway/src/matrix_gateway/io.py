@@ -158,12 +158,6 @@ class HttpMatrix:
             get_list(timeline, "events")
         )
 
-    def get_event(self, room: str, event_id: str) -> Obj | None:
-        try:
-            return self._call("GET", f"/rooms/{_quote(room)}/event/{_quote(event_id)}")
-        except _NotFound:
-            return None
-
     def send(
         self, room: str, content: Obj, txn: str, event_type: str = "m.room.message"
     ) -> str:

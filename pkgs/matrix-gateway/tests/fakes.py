@@ -28,8 +28,6 @@ class FakeMatrix:
         self.resolved: list[str] = []
         self.script: list[tuple[str, list[Obj]]] = []
         self.sync_calls: list[tuple[str, str | None, int]] = []
-        self.events: dict[str, Obj] = {}
-        self.event_errors: dict[str, Exception] = {}
         self.sent: list[Sent] = []
         self.send_attempts: list[str] = []
         self.send_failures: list[Exception] = []
@@ -54,12 +52,6 @@ class FakeMatrix:
             return self.script.pop(0)
         return (f"s{len(self.sync_calls)}", [])
 
-    def get_event(self, room: str, event_id: str) -> Obj | None:
-        error = self.event_errors.get(event_id)
-        if error is not None:
-            raise error
-        return self.events.get(event_id)
-
     def send(
         self, room: str, content: Obj, txn: str, event_type: str = "m.room.message"
     ) -> str:
@@ -69,17 +61,6 @@ class FakeMatrix:
         event_id = f"$sent{len(self.sent) + 1}"
         self.sent.append(Sent(room, content, txn, event_type, event_id))
         return event_id
-
-    def add_event(self, event_id: str, sender: str, content: Obj) -> None:
-        self.events[event_id] = {
-            "event_id": event_id,
-            "type": "m.room.message",
-            "sender": sender,
-            "content": content,
-        }
-
-    def notices(self) -> list[Sent]:
-        return [s for s in self.sent if s.content.get("msgtype") == "m.notice"]
 
 
 class FakeBus:
@@ -99,15 +80,12 @@ class FakeBus:
 def owner_message(
     event_id: str,
     body: str,
-    parent: str | None = None,
     sender: str = OWNER,
     msgtype: str = "m.text",
     rel_type: str | None = None,
     event_type: str = "m.room.message",
 ) -> Obj:
     relates: Obj = {}
-    if parent is not None:
-        relates["m.in_reply_to"] = {"event_id": parent}
     if rel_type is not None:
         relates["rel_type"] = rel_type
         relates["event_id"] = "$orig"
