@@ -1,27 +1,23 @@
 use std::collections::BTreeMap;
-use std::env;
-use std::fs::{self, DirBuilder, OpenOptions, TryLockError};
-use std::io::{self, Read, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::kv::{nats_url, Bucket, Kv, KvError};
-use crate::procs::home;
 
-const RECORD_MAX: u64 = 65536;
+const RECORD_MAX: usize = 65536;
 const QUEUE_MESSAGE_MAX: usize = 786432;
+const RESULT_MAX: usize = 786432;
 const RECORD_DAYS: u64 = 7;
-const LOCK_WAIT: Duration = Duration::from_secs(5);
+const BUSY_WAIT: Duration = Duration::from_secs(5);
+const BUSY: &str = "session records are busy";
 const RESULT_TEXT_MAX: usize = 262144;
-/// A result file: the text with every character escaped as \u00XX, plus the other fields.
-const RESULT_FILE_MAX: u64 = RESULT_TEXT_MAX as u64 * 6 + 4096;
+const TRUNCATED: &str = "\n[truncated]";
+/// TRUNCATED as the JSON of a string escapes it.
+const TRUNCATED_JSON_LEN: usize = TRUNCATED.len() + 1;
 /// The record kind of a first mate (`jw mate`): `jw reap` never stops it and pruning keeps its record.
 pub const MATE_KIND: &str = "mate";
 
@@ -42,7 +38,7 @@ pub enum ResultKind {
     Died,
 }
 
-/// The result of one turn of a headless worker, a numbered file kept until the supervisor acks it.
+/// The result of one turn of a headless worker, a numbered entry kept until the supervisor acks it.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct TurnResult {
     pub seq: u64,
@@ -227,10 +223,21 @@ pub fn write_error(e: &str) -> String {
     }
 }
 
+/// A name that is a KV key whose `<name>.*` subjects are exactly the entries of this session.
 pub fn valid_name(name: &str) -> bool {
     let mut chars = name.chars();
     chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
         && chars.all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+        && !name.contains("..")
+        && !name.ends_with('.')
+}
+
+fn check_name(name: &str) -> Result<(), String> {
+    if valid_name(name) {
+        Ok(())
+    } else {
+        Err(format!("invalid session name: '{name}'"))
+    }
 }
 
 pub fn now() -> f64 {
@@ -239,45 +246,84 @@ pub fn now() -> f64 {
         .map_or(0.0, |d| d.as_secs_f64())
 }
 
-/// The content of the file at path, None if it is missing or not a plain file of at most max bytes.
-fn read_capped(path: &Path, max: u64) -> Option<Vec<u8>> {
-    // O_NONBLOCK: opening a FIFO must not wait for a writer
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
-    if !file.metadata().ok()?.is_file() {
+/// The record in a stored value, None if it is too large or not a JSON object.
+fn parse_record(data: &[u8]) -> Option<Record> {
+    if data.len() > RECORD_MAX {
         return None;
     }
-    let mut data = Vec::new();
-    file.take(max + 1).read_to_end(&mut data).ok()?;
-    (data.len() as u64 <= max).then_some(data)
+    serde_json::from_slice(data)
+        .ok()
+        .and_then(Record::from_value)
+}
+
+fn result_key(name: &str, seq: u64) -> String {
+    format!("{name}.{seq}")
+}
+
+fn turn_result(seq: u64, kind: ResultKind, text: &str) -> Result<TurnResult, serde_json::Error> {
+    let mut result = TurnResult {
+        seq,
+        kind,
+        text: String::new(),
+        at: now(),
+    };
+    let room = RESULT_MAX - serde_json::to_vec(&result)?.len();
+    result.text = clip_result_text(text, room);
+    Ok(result)
+}
+
+/// The bytes a character takes in a JSON string.
+fn json_len(c: char) -> usize {
+    match c {
+        '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+        c if c < ' ' => 6,
+        c => c.len_utf8(),
+    }
+}
+
+/// text cut to RESULT_TEXT_MAX characters and to room bytes of JSON, marked when it was cut.
+fn clip_result_text(text: &str, room: usize) -> String {
+    let fits = text.chars().count() <= RESULT_TEXT_MAX
+        && text.chars().map(json_len).sum::<usize>() <= room;
+    if fits {
+        return text.to_string();
+    }
+    let room = room - TRUNCATED_JSON_LEN;
+    let limit = text
+        .char_indices()
+        .nth(RESULT_TEXT_MAX)
+        .map_or(text.len(), |(i, _)| i);
+    let mut used = 0;
+    let end = text[..limit]
+        .char_indices()
+        .find_map(|(i, c)| {
+            used += json_len(c);
+            (used > room).then_some(i)
+        })
+        .unwrap_or(limit);
+    format!("{}{TRUNCATED}", &text[..end])
+}
+
+/// The outcome of one attempt to write a result.
+enum Attempt {
+    Done(Option<u64>),
+    /// The record or the result number changed meanwhile.
+    Retry,
 }
 
 /// The connection of this process, shared by every `Records::open`.
 static SHARED_KV: Mutex<Option<Arc<Kv>>> = Mutex::new(None);
 
-/// The session records, $XDG_STATE_HOME/agent-sessions/<name>.json, and the queues of the headless workers in NATS KV.
+/// The session records and results, and the queues of the headless workers, in NATS KV.
 pub struct Records {
-    dir: PathBuf,
     kv: Arc<Kv>,
-}
-
-/// The entries of the directory at path, none if it does not exist.
-fn dir_entries(path: &Path) -> Result<Vec<fs::DirEntry>, String> {
-    match fs::read_dir(path) {
-        Ok(entries) => Ok(entries.flatten().collect()),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(vec![]),
-        Err(e) => Err(format!("cannot read {}: {e}", path.display())),
-    }
 }
 
 impl Records {
     pub fn open() -> Result<Records, String> {
         let mut shared = SHARED_KV.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(kv) = shared.as_ref() {
-            return Ok(Records::with(Arc::clone(kv)));
+            return Ok(Records { kv: Arc::clone(kv) });
         }
         let records = Records::connect(&nats_url())?;
         *shared = Some(Arc::clone(&records.kv));
@@ -286,152 +332,112 @@ impl Records {
 
     /// Records on a fresh connection to the NATS server at url.
     pub fn connect(url: &str) -> Result<Records, String> {
-        Ok(Records::with(Arc::new(Kv::connect(url)?)))
+        Ok(Records {
+            kv: Arc::new(Kv::connect(url)?),
+        })
     }
 
-    fn with(kv: Arc<Kv>) -> Records {
-        let state = env::var("XDG_STATE_HOME")
-            .ok()
-            .filter(|s| Path::new(s).is_absolute())
-            .unwrap_or_else(|| format!("{}/.local/state", home()));
-        Records {
-            dir: PathBuf::from(state).join("agent-sessions"),
-            kv,
-        }
-    }
-
-    /// The record of session name, None if it is missing or not a plain, small JSON object file.
+    /// The record of session name, None if it is missing or not a small JSON object.
     pub fn read(&self, name: &str) -> Result<Option<Record>, String> {
         if !valid_name(name) {
             return Ok(None);
         }
-        let Some(data) = read_capped(&self.dir.join(format!("{name}.json")), RECORD_MAX) else {
-            return Ok(None);
-        };
-        Ok(serde_json::from_slice(&data)
-            .ok()
-            .and_then(Record::from_value))
+        Ok(self
+            .kv
+            .get(Bucket::Sessions, name)?
+            .and_then(|e| parse_record(&e.value)))
     }
 
     /// The records, sorted by name.
     pub fn load_all(&self) -> Result<Vec<(String, Record)>, String> {
-        let mut files: Vec<String> = dir_entries(&self.dir)?
-            .iter()
-            .filter_map(|e| e.file_name().into_string().ok())
-            .collect();
-        files.sort();
         let mut records = vec![];
-        for file in &files {
-            let Some(name) = file.strip_suffix(".json") else {
+        for key in self.kv.keys(Bucket::Sessions)? {
+            if !valid_name(&key) {
                 continue;
-            };
-            if let Some(record) = self.read(name)? {
-                records.push((name.to_string(), record));
+            }
+            if let Some(record) = self.read(&key)? {
+                records.push((key, record));
             }
         }
         Ok(records)
     }
 
-    /// Under the records lock calls change on the record of session name (empty if there is none) and writes it
-    /// unless that returns false; returns the record. change may run again, so it must have no side effects beyond
-    /// what it captures.
+    /// Writes record as the value of session name: created if revision is None, else replacing that revision.
+    fn save(&self, name: &str, record: &Record, revision: Option<u64>) -> Result<u64, KvError> {
+        let json = serde_json::to_vec(record).map_err(|e| KvError::Other(e.to_string()))?;
+        if json.len() > RECORD_MAX {
+            return Err(KvError::Other(format!(
+                "{WRITE_FAILED}it is larger than {RECORD_MAX} bytes"
+            )));
+        }
+        match revision {
+            Some(revision) => self.kv.update(Bucket::Sessions, name, &json, revision),
+            None => self.kv.create(Bucket::Sessions, name, &json),
+        }
+    }
+
+    /// Calls change on the record of session name (empty if there is none) and writes it unless that returns false;
+    /// returns the record. A concurrent write reruns change on the new record, for up to BUSY_WAIT, so change must have
+    /// no side effects beyond what it captures.
     pub fn update(
         &self,
         name: &str,
         mut change: impl FnMut(&mut Record) -> bool,
     ) -> Result<Record, String> {
-        if !valid_name(name) {
-            return Err(format!("invalid session name: '{name}'"));
-        }
-        let fail = |e: io::Error| format!("{WRITE_FAILED}{e}");
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&self.dir)
-            .map_err(fail)?;
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(self.dir.join(".lock"))
-            .map_err(fail)?;
-        // polling: a writer that died holding the lock cannot hang the callers (agents, hooks) for good
-        let deadline = Instant::now() + LOCK_WAIT;
+        check_name(name)?;
+        let deadline = Instant::now() + BUSY_WAIT;
         loop {
-            match lock.try_lock() {
-                Ok(()) => break,
-                Err(TryLockError::WouldBlock) => {
-                    if Instant::now() >= deadline {
-                        return Err("session records are busy".to_string());
-                    }
-                    thread::sleep(Duration::from_millis(50));
+            let entry = self.kv.get(Bucket::Sessions, name)?;
+            let mut record = entry
+                .as_ref()
+                .and_then(|e| parse_record(&e.value))
+                .unwrap_or_default();
+            if !change(&mut record) {
+                return Ok(record);
+            }
+            match self.save(name, &record, entry.map(|e| e.revision)) {
+                Ok(_) => return Ok(record),
+                Err(KvError::Conflict) if Instant::now() >= deadline => {
+                    return Err(BUSY.to_string())
                 }
-                Err(TryLockError::Error(e)) => return Err(fail(e)),
+                Err(KvError::Conflict) => {}
+                Err(KvError::Other(e)) => return Err(write_error(&e)),
             }
         }
-        let path = self.dir.join(format!("{name}.json"));
-        let existed = fs::symlink_metadata(&path).is_ok();
-        let mut record = self.read(name)?.unwrap_or_default();
-        if !change(&mut record) {
-            return Ok(record);
-        }
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let tmp = self.dir.join(format!(".tmp-{}-{nanos}", process::id()));
-        let written = serde_json::to_string(&record)
-            .map_err(io::Error::from)
-            .and_then(|json| {
-                OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .mode(0o600)
-                    .open(&tmp)?
-                    .write_all(json.as_bytes())?;
-                fs::rename(&tmp, &path)
-            });
-        if let Err(e) = written {
-            let _ = fs::remove_file(&tmp);
-            return Err(fail(e));
-        }
-        if !existed {
-            self.prune();
-        }
-        Ok(record)
     }
 
-    /// Deletes the records untouched for RECORD_DAYS, except those of a mate or headless worker that is not reaped,
-    /// with the results and queue of a deleted record.
-    fn prune(&self) {
-        let Ok(entries) = fs::read_dir(&self.dir) else {
-            return;
-        };
-        let cutoff = SystemTime::now() - Duration::from_secs(RECORD_DAYS * 86400);
-        for entry in entries.flatten() {
-            if entry.file_name() == ".lock" {
+    /// Deletes the records untouched for RECORD_DAYS before now, except those of a mate or headless worker that is not
+    /// reaped, with the results and queue of a deleted record; calls on_pruned with each name once it is deleted.
+    pub fn prune(&self, now: f64, mut on_pruned: impl FnMut(&str)) -> Result<(), String> {
+        let cutoff = now - (RECORD_DAYS * 86400) as f64;
+        for key in self.kv.keys(Bucket::Sessions)? {
+            if !valid_name(&key) {
                 continue;
             }
-            let path = entry.path();
-            let old = fs::symlink_metadata(&path)
-                .is_ok_and(|m| m.is_file() && m.modified().is_ok_and(|t| t < cutoff));
-            let name = entry
-                .file_name()
-                .to_str()
-                .and_then(|f| f.strip_suffix(".json"))
-                .filter(|name| valid_name(name))
-                .map(str::to_string);
-            let kept = name
-                .as_deref()
-                .and_then(|name| self.read(name).ok().flatten())
-                .is_some_and(|r| r.long_lived() && r.reaped.is_none());
-            if old && !kept {
-                let _ = fs::remove_file(&path);
-                if let Some(name) = name {
-                    let _ = fs::remove_dir_all(self.dir.join("results").join(&name));
-                    let _ = self.kv.purge(Bucket::Queue, &format!("{name}.*"));
+            let Some(entry) = self.kv.get(Bucket::Sessions, &key)? else {
+                continue;
+            };
+            let kept =
+                parse_record(&entry.value).is_some_and(|r| r.long_lived() && r.reaped.is_none());
+            if entry.at >= cutoff || kept {
+                continue;
+            }
+            match self.kv.delete(Bucket::Sessions, &key, entry.revision) {
+                Ok(()) => {
+                    self.purge_entries(&key);
+                    on_pruned(&key);
                 }
+                Err(KvError::Conflict) => {}
+                Err(KvError::Other(e)) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    fn purge_entries(&self, name: &str) {
+        for bucket in [Bucket::Results, Bucket::Queue] {
+            if let Err(e) = self.kv.purge(bucket, &format!("{name}.*")) {
+                eprintln!("jw: {name}: {e}");
             }
         }
     }
@@ -463,9 +469,11 @@ impl Records {
         .map(|_| ())
     }
 
-    /// Under the records lock: if guard (which may change the record) returns true, writes the next numbered result of
-    /// session name, saves the record with the turn closed and returns the number; false: nothing is written. guard
-    /// may run again, so it must have no side effects beyond what it captures.
+    /// If guard (which may change the record) returns true, writes the next numbered result of session name, saves the
+    /// record with the turn closed and returns the number; false: nothing is written. The result is created first and
+    /// deleted again if the record changed meanwhile (a result left by an earlier attempt is reused, and deleted only
+    /// if guard returns false); a concurrent write reruns guard for up to BUSY_WAIT, so guard
+    /// must have no side effects beyond what it captures.
     pub fn write_result(
         &self,
         name: &str,
@@ -473,109 +481,144 @@ impl Records {
         text: &str,
         mut guard: impl FnMut(&mut Record) -> bool,
     ) -> Result<Option<u64>, String> {
-        let mut written = Ok(None);
-        self.update(name, |r| {
-            if !guard(r) {
-                return false;
+        check_name(name)?;
+        let deadline = Instant::now() + BUSY_WAIT;
+        loop {
+            if let Attempt::Done(seq) = self.attempt_result(name, kind, text, &mut guard)? {
+                return Ok(seq);
             }
-            written = self.last_seq(name, r).and_then(|last| {
-                let seq = last + 1;
-                self.store_result(name, seq, kind, text).map(|()| Some(seq))
-            });
-            if let Ok(Some(seq)) = written {
-                r.result_seq = seq;
-                r.turn_base = None;
+            if Instant::now() >= deadline {
+                return Err(BUSY.to_string());
             }
-            written.is_ok()
-        })?;
-        written
+        }
     }
 
-    fn store_result(
+    fn attempt_result(
         &self,
         name: &str,
-        seq: u64,
         kind: ResultKind,
         text: &str,
-    ) -> Result<(), String> {
-        let text = if text.chars().count() > RESULT_TEXT_MAX {
-            let head: String = text.chars().take(RESULT_TEXT_MAX).collect();
-            format!("{head}\n[truncated]")
-        } else {
-            text.to_string()
-        };
-        let result = TurnResult {
-            seq,
-            kind,
-            text,
-            at: now(),
-        };
-        let dir = self.dir.join("results").join(name);
-        let tmp = dir.join(format!(".{seq}.tmp"));
-        let stored = DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&dir)
-            .and_then(|()| {
-                let json = serde_json::to_string(&result).map_err(io::Error::from)?;
-                let mut file = OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .truncate(true)
-                    .mode(0o600)
-                    .open(&tmp)?;
-                file.write_all(json.as_bytes())?;
-                file.sync_all()?;
-                fs::rename(&tmp, dir.join(format!("{seq}.json")))
-            });
-        stored.map_err(|e| {
-            let _ = fs::remove_file(&tmp);
-            format!("cannot write the result of {name}: {e}")
-        })
-    }
-
-    /// The numbers of the unacked results of session name, ascending: the numeric `<n>.json` file names are the
-    /// source of truth.
-    pub fn result_seqs(&self, name: &str) -> Result<Vec<u64>, String> {
-        if !valid_name(name) {
-            return Ok(vec![]);
+        guard: &mut impl FnMut(&mut Record) -> bool,
+    ) -> Result<Attempt, String> {
+        let cannot = |e: &dyn std::fmt::Display| format!("cannot write the result of {name}: {e}");
+        let entry = self.kv.get(Bucket::Sessions, name)?;
+        let mut record = entry
+            .as_ref()
+            .and_then(|e| parse_record(&e.value))
+            .unwrap_or_default();
+        let reused = self.written_result(name, &record, kind, text)?;
+        if !guard(&mut record) {
+            if let Some(seq) = reused {
+                let _ = self.kv.purge(Bucket::Results, &result_key(name, seq));
+            }
+            return Ok(Attempt::Done(None));
         }
-        let mut seqs: Vec<u64> = dir_entries(&self.dir.join("results").join(name))?
-            .iter()
-            .filter_map(|e| {
-                e.file_name()
-                    .to_str()?
-                    .strip_suffix(".json")?
-                    .parse::<u64>()
-                    .ok()
-            })
-            .collect();
-        seqs.sort_unstable();
-        Ok(seqs)
-    }
-
-    /// The highest result number of session name: a result file renamed into place before its record was saved
-    /// counts.
-    fn last_seq(&self, name: &str, record: &Record) -> Result<u64, String> {
-        let on_disk = self.result_seqs(name)?.last().copied().unwrap_or_default();
-        Ok(record.result_seq.max(on_disk))
-    }
-
-    /// The unacked results of session name, by number; an unreadable file is reported on stderr and skipped.
-    pub fn results(&self, name: &str) -> Result<Vec<TurnResult>, String> {
-        let dir = self.dir.join("results").join(name);
-        Ok(self
-            .result_seqs(name)?
-            .into_iter()
-            .filter_map(|seq| {
-                let result = read_capped(&dir.join(format!("{seq}.json")), RESULT_FILE_MAX)
-                    .and_then(|data| serde_json::from_slice(&data).ok());
-                if result.is_none() {
-                    eprintln!("jw: {name}: unreadable result {seq}");
+        let seq = match reused {
+            Some(seq) => seq,
+            None => self.last_seq(name, &record)? + 1,
+        };
+        let key = result_key(name, seq);
+        if reused.is_none() {
+            let json = serde_json::to_vec(&turn_result(seq, kind, text).map_err(|e| cannot(&e))?)
+                .map_err(|e| cannot(&e))?;
+            match self.kv.create(Bucket::Results, &key, &json) {
+                Ok(_) => {}
+                Err(KvError::Conflict) => return Ok(Attempt::Retry),
+                Err(e) => return Err(cannot(&e)),
+            }
+        }
+        record.result_seq = seq;
+        record.turn_base = None;
+        let drop_created = || {
+            if reused.is_none() {
+                let _ = self.kv.purge(Bucket::Results, &key);
+            }
+        };
+        match self.save(name, &record, entry.map(|e| e.revision)) {
+            Ok(_) => Ok(Attempt::Done(Some(seq))),
+            Err(KvError::Conflict) => {
+                drop_created();
+                Ok(Attempt::Retry)
+            }
+            // a lost reply: if the record points at our result, the write landed
+            Err(KvError::Other(e)) => match self.read(name) {
+                Ok(Some(saved)) if saved.result_seq == seq => Ok(Attempt::Done(Some(seq))),
+                Ok(_) => {
+                    drop_created();
+                    Err(write_error(&e))
                 }
-                result
-            })
-            .collect())
+                Err(_) => Err(write_error(&e)),
+            },
+        }
+    }
+
+    /// The highest result of session name above the saved result_seq if it already holds this kind and text: an
+    /// earlier create whose reply was lost, which the retry reuses instead of writing a duplicate.
+    fn written_result(
+        &self,
+        name: &str,
+        record: &Record,
+        kind: ResultKind,
+        text: &str,
+    ) -> Result<Option<u64>, String> {
+        let Some(seq) = self
+            .result_seqs(name)?
+            .last()
+            .copied()
+            .filter(|&seq| seq > record.result_seq)
+        else {
+            return Ok(None);
+        };
+        let Some(entry) = self.kv.get(Bucket::Results, &result_key(name, seq))? else {
+            return Ok(None);
+        };
+        let wanted = turn_result(seq, kind, text).map_err(|e| e.to_string())?;
+        Ok(serde_json::from_slice::<TurnResult>(&entry.value)
+            .ok()
+            .filter(|old| old.kind == wanted.kind && old.text == wanted.text)
+            .map(|_| seq))
+    }
+
+    /// The numbers of the unacked results of every session, ascending: the numeric result keys are the source of truth.
+    pub fn unacked(&self) -> Result<BTreeMap<String, Vec<u64>>, String> {
+        let mut unacked: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+        for key in self.kv.keys(Bucket::Results)? {
+            let Some((name, seq)) = key.rsplit_once('.') else {
+                continue;
+            };
+            let Some(seq) = seq.parse().ok().filter(|&seq| key == result_key(name, seq)) else {
+                continue;
+            };
+            unacked.entry(name.to_string()).or_default().push(seq);
+        }
+        unacked.values_mut().for_each(|seqs| seqs.sort_unstable());
+        Ok(unacked)
+    }
+
+    /// The numbers of the unacked results of session name, ascending.
+    pub fn result_seqs(&self, name: &str) -> Result<Vec<u64>, String> {
+        Ok(self.unacked()?.remove(name).unwrap_or_default())
+    }
+
+    /// The highest result number of session name: a result created before its record was saved counts.
+    fn last_seq(&self, name: &str, record: &Record) -> Result<u64, String> {
+        let stored = self.result_seqs(name)?.last().copied().unwrap_or_default();
+        Ok(record.result_seq.max(stored))
+    }
+
+    /// The unacked results of session name, by number; an unreadable one is reported on stderr and skipped.
+    pub fn results(&self, name: &str) -> Result<Vec<TurnResult>, String> {
+        let mut results = vec![];
+        for seq in self.result_seqs(name)? {
+            let Some(entry) = self.kv.get(Bucket::Results, &result_key(name, seq))? else {
+                continue;
+            };
+            match serde_json::from_slice(&entry.value) {
+                Ok(result) => results.push(result),
+                Err(_) => eprintln!("jw: {name}: unreadable result {seq}"),
+            }
+        }
+        Ok(results)
     }
 
     /// Deletes the results of session name up to seq; a seq beyond the last result fails.
@@ -586,9 +629,9 @@ impl Records {
         if seq > self.last_seq(name, &record)? {
             return Err(format!("no result {seq} of {name}"));
         }
-        let dir = self.dir.join("results").join(name);
         for n in self.result_seqs(name)?.into_iter().filter(|&n| n <= seq) {
-            fs::remove_file(dir.join(format!("{n}.json")))
+            self.kv
+                .purge(Bucket::Results, &result_key(name, n))
                 .map_err(|e| format!("cannot delete the result of {name}: {e}"))?;
         }
         Ok(())

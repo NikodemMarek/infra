@@ -608,7 +608,7 @@ fn poll_record(name: &str, r: &Record) {
 }
 
 /// Records that session name died: a `died` result if it reports to a session, else only the record; guard re-checks
-/// under the records lock what was read and changes the record. Whether it was recorded.
+/// when it is written what was read and changes the record. Whether it was recorded.
 fn record_died(
     name: &str,
     r: &Record,
@@ -619,11 +619,12 @@ fn record_died(
         .reports_to
         .as_deref()
         .is_some_and(|to| valid_name(to) && to != name);
+    let records = Records::open()?;
     if supervised {
-        return Ok(worker::finish(name, ResultKind::Died, text, guard)?.is_some());
+        return Ok(worker::finish(&records, name, ResultKind::Died, text, guard)?.is_some());
     }
     let mut changed = false;
-    Records::open()?.update(name, |rec| {
+    records.update(name, |rec| {
         changed = guard(rec);
         changed
     })?;

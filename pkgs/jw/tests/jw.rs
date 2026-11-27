@@ -317,6 +317,21 @@ fn s1_session_set_keeps_record_written_by_python() {
 }
 
 #[test]
+fn s1_session_set_without_mr_keeps_notified() {
+    let e = Env::new();
+    e.write_record(
+        "n",
+        r#"{"kind": "task", "notified": 1700000100.25, "mrs": ["https://example.com/mr/1"]}"#,
+    );
+    e.jw(
+        &e.home,
+        &["session", "set", "-s", "n", "--description", "d"],
+    )
+    .ok();
+    assert_eq!(num(&e.record("n")["notified"]), 1700000100.25);
+}
+
+#[test]
 fn s1_session_set_ignores_wrong_typed_field() {
     let e = Env::new();
     e.write_record(
@@ -1784,28 +1799,32 @@ fn m8_picker_resume_mate_workspace() {
 }
 
 #[test]
-fn m9_prune_keeps_unreaped_mate_records() {
+fn m9_session_update_does_not_prune() {
     let e = Env::new();
     e.write_record("mate-old", r#"{"kind":"mate"}"#);
     e.write_record("mate-reaped", r#"{"kind":"mate","reaped":1700000000}"#);
     e.write_record("stale", r#"{"kind":"task"}"#);
-    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(8 * 86400);
-    for n in ["mate-old", "mate-reaped", "stale"] {
-        fs::File::open(e.record_path(n))
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
-    }
     e.jw_env(
         &e.home,
         &[("AGENT_SESSION", "fresh")],
         &["session", "status", "busy"],
     )
     .ok();
-    assert!(e.record_path("fresh").exists());
-    assert!(!e.record_path("stale").exists(), "control: prune ran");
-    assert!(!e.record_path("mate-reaped").exists());
-    assert!(e.record_path("mate-old").exists());
+    for n in ["fresh", "stale", "mate-reaped", "mate-old"] {
+        assert!(e.has_record(n), "{n}: update no longer prunes");
+    }
+}
+
+#[test]
+fn m9b_reap_keeps_fresh_records_and_prints_no_pruned() {
+    let e = Env::new();
+    e.write_record("mate-old", r#"{"kind":"mate"}"#);
+    e.write_record("stale", r#"{"kind":"task"}"#);
+    let o = e.jw(&e.root, &["reap"]);
+    o.ok();
+    assert!(!o.stdout.contains("pruned"), "{}", o.stdout);
+    assert!(e.has_record("mate-old"));
+    assert!(e.has_record("stale"));
 }
 
 #[test]
@@ -2004,18 +2023,12 @@ fn m16_mate_init_without_main() {
 }
 
 fn write_result_file(e: &Env, name: &str, seq: u64, kind: &str, text: &str) {
-    let d = e.state.join("agent-sessions/results").join(name);
-    fs::create_dir_all(&d).unwrap();
     let body = json!({"seq": seq, "kind": kind, "text": text, "at": 1.0e9});
-    fs::write(d.join(format!("{seq}.json")), body.to_string()).unwrap();
+    e.put_result(name, seq, &body.to_string());
 }
 
 fn result_exists(e: &Env, name: &str, seq: u64) -> bool {
-    e.state
-        .join("agent-sessions/results")
-        .join(name)
-        .join(format!("{seq}.json"))
-        .exists()
+    e.has_result(name, seq)
 }
 
 fn worker_env(results: &[(u64, &str, &str)]) -> Env {
@@ -2254,7 +2267,7 @@ fn rn_result_wake_prints_nothing_without_a_target() {
     for (event, case) in events {
         let e = worker_env(&[(2, "result", "x")]);
         match case {
-            "no-supervisor" => fs::remove_file(e.record_path("P")).unwrap(),
+            "no-supervisor" => e.remove_record("P"),
             "done" => e.write_record("P", r#"{"kind":"mate","status":"done"}"#),
             "reaped" => e.write_record("P", r#"{"kind":"mate","reaped":1}"#),
             "self" => e.write_record("W", r#"{"headless":true,"reports_to":"W","result_seq":2}"#),
@@ -2283,19 +2296,8 @@ fn add_queue(e: &Env, name: &str, file: &str, text: &str) {
     e.put_queue(name, &id, text);
 }
 
-/// The texts of the queue entries of name, by id.
-fn queue_texts(e: &Env, name: &str) -> Vec<String> {
-    e.queue(name)
-}
-
 fn read_result(e: &Env, name: &str, seq: u64) -> Value {
-    let p = e
-        .state
-        .join("agent-sessions/results")
-        .join(name)
-        .join(format!("{seq}.json"));
-    let text = fs::read_to_string(&p).unwrap_or_else(|x| panic!("read {}: {x}", p.display()));
-    serde_json::from_str(&text).unwrap()
+    e.result(name, seq)
 }
 
 /// The repo, the workspace `C` and the records of headless worker C (reports to M).
@@ -2395,7 +2397,7 @@ fn wt1_turn_runs_claude_and_writes_the_result() {
     assert_eq!(r["kind"], "result");
     assert_eq!(r["text"], "all done");
     assert_eq!(r["seq"], 1);
-    assert!(queue_texts(&e, "C").is_empty());
+    assert!(e.queue("C").is_empty());
     let rec = e.record("C");
     assert!(rec.get("turn_base").is_none(), "{rec}");
     assert_eq!(rec["status"], "idle");
@@ -2465,7 +2467,7 @@ fn wt3_two_entries_are_one_turn() {
     assert_eq!(run_logs(&e), 1);
     assert_eq!(run_stdin(&e, 1), "first\n\nsecond");
     assert_eq!(e.record("C")["result_seq"], 1);
-    assert!(queue_texts(&e, "C").is_empty());
+    assert!(e.queue("C").is_empty());
     assert_eq!(event_seqs(&e), [1]);
 }
 
@@ -2530,7 +2532,7 @@ fn wt6_no_result_event_is_a_died_result() {
     assert!(text.contains("exit status 3"), "{text}");
     assert!(text.contains("boom"), "{text}");
     assert!(text.contains("journalctl --user -u jw-worker-C"), "{text}");
-    assert_eq!(queue_texts(&e, "C"), ["go"]);
+    assert_eq!(e.queue("C"), ["go"]);
     assert_eq!(event_seqs(&e), [1]);
 }
 
@@ -2557,7 +2559,7 @@ fn wt7_message_during_a_turn_runs_as_the_next_turn() {
     );
     assert_eq!(e.record("C")["result_seq"], 2);
     assert_eq!(event_seqs(&e), [1, 2]);
-    assert!(queue_texts(&e, "C").is_empty());
+    assert!(e.queue("C").is_empty());
     assert!(!e.logs.join("systemd-run.log").exists());
 }
 
@@ -2572,7 +2574,7 @@ fn wt8_turn_needs_a_headless_record() {
     add_queue(&e, "C", "1-1.txt", "go");
     turn(&e).fail("C is not a headless worker");
     assert!(!e.logs.join("claude-run-1.log").exists());
-    fs::remove_file(e.record_path("C")).unwrap();
+    e.remove_record("C");
     turn(&e).fail("C is not a headless worker");
 }
 
@@ -2604,7 +2606,7 @@ fn dm1_msg_to_idle_worker_starts_a_turn() {
     let o = e.jw(&e.root, &["msg", "C", "hi"]);
     o.ok();
     assert!(o.stderr.contains("jw: started a turn of C"), "{}", o.stderr);
-    let texts = queue_texts(&e, "C");
+    let texts = e.queue("C");
     assert_eq!(texts.len(), 1);
     assert!(texts[0].starts_with("Message from user:"), "{}", texts[0]);
     assert!(texts[0].contains("hi"));
@@ -2629,7 +2631,7 @@ fn dm2_msg_to_open_turn_queues() {
     let o = e.jw(&e.root, &["msg", "C", "hi"]);
     o.ok();
     assert!(o.stderr.contains("jw: queued for C"), "{}", o.stderr);
-    assert_eq!(queue_texts(&e, "C").len(), 1);
+    assert_eq!(e.queue("C").len(), 1);
     assert!(!e.logs.join("systemd-run.log").exists());
 }
 
@@ -2678,7 +2680,7 @@ fn dm5_persistent_start_failure_gives_up() {
         o.stderr
     );
     assert!(t.elapsed().as_secs() >= 5, "{:?}", t.elapsed());
-    assert!(queue_texts(&e, "C").is_empty());
+    assert!(e.queue("C").is_empty());
 }
 
 #[test]
@@ -2689,7 +2691,7 @@ fn dm6_unreadable_unit_state_fails() {
     let o = e.jw(&e.root, &["msg", "C", "hi"]);
     o.fail("cannot tell whether C's turn runs");
     assert!(!e.logs.join("systemd-run.log").exists());
-    assert!(queue_texts(&e, "C").is_empty());
+    assert!(e.queue("C").is_empty());
 }
 
 #[test]
@@ -2700,7 +2702,7 @@ fn k3_msg_queues_the_text_under_an_id() {
     e.jw(&e.root, &["msg", "C", "first"]).ok();
     e.jw(&e.root, &["msg", "C", "second"]).ok();
     assert_eq!(
-        queue_texts(&e, "C"),
+        e.queue("C"),
         [
             "Message from user:\n\n> first",
             "Message from user:\n\n> second"
@@ -2715,7 +2717,7 @@ fn k3_msg_to_another_session_with_a_dotted_name_prefix_is_not_ours() {
     set_active(&e, "active");
     e.put_queue("C.d", "00000000000000000001-1", "not for C");
     e.jw(&e.root, &["msg", "C", "mine"]).ok();
-    assert_eq!(queue_texts(&e, "C"), ["Message from user:\n\n> mine"]);
+    assert_eq!(e.queue("C"), ["Message from user:\n\n> mine"]);
 }
 
 #[test]
@@ -2728,7 +2730,7 @@ fn k3_deadline_cancels_a_message_nobody_claimed() {
     let o = e.jw(&e.root, &["msg", "C", "hi"]);
     o.fail("cannot start a turn of C");
     assert!(t.elapsed().as_secs() >= 9, "{:?}", t.elapsed());
-    assert!(queue_texts(&e, "C").is_empty());
+    assert!(e.queue("C").is_empty());
 }
 
 #[test]
@@ -2757,7 +2759,7 @@ fn k3_deadline_with_a_claimed_message_counts_as_queued() {
     assert!(claimer.join().unwrap(), "the message never showed up");
     o.ok();
     assert!(o.stderr.contains("jw: queued for C"), "{}", o.stderr);
-    assert_eq!(queue_texts(&e, "C"), ["Message from user:\n\n> hi"]);
+    assert_eq!(e.queue("C"), ["Message from user:\n\n> hi"]);
 }
 
 #[test]
@@ -2769,7 +2771,7 @@ fn k3_turn_keeps_the_queue_entries_when_claude_dies() {
     fs::write(e.logs.join("claude.cmd"), "kill -KILL $PPID").unwrap();
     turn(&e);
     assert_eq!(read_result(&e, "C", 1)["kind"], "died");
-    assert_eq!(queue_texts(&e, "C"), ["a", "b"]);
+    assert_eq!(e.queue("C"), ["a", "b"]);
 }
 
 #[test]
@@ -2875,12 +2877,58 @@ fn k3_new_works_with_nats_down() {
 }
 
 #[test]
+fn k4_record_commands_with_nats_down_fail() {
+    let e = Env::new();
+    e.write_record("s1", r#"{"kind":"task"}"#);
+    type Case<'a> = (Vec<&'a str>, Vec<(&'a str, &'a str)>);
+    let cases: Vec<Case> = vec![
+        (vec!["session", "get", "-s", "s1"], vec![]),
+        (vec!["session", "list"], vec![]),
+        (vec!["session", "set", "-s", "s1", "--title", "t"], vec![]),
+        (
+            vec!["session", "status", "busy"],
+            vec![("AGENT_SESSION", "s1")],
+        ),
+        (vec!["session", "results", "-s", "s1"], vec![]),
+        (vec!["session", "ack", "s1", "1"], vec![]),
+        (vec!["reap"], vec![]),
+    ];
+    for (args, extra) in cases {
+        let url = common::closed_url();
+        let mut envs = vec![("NATS_URL", url.as_str())];
+        envs.extend(extra);
+        let o = e.jw_env(&e.root, &envs, &args);
+        assert_eq!(
+            o.code, 1,
+            "{args:?}\nstdout: {}\nstderr: {}",
+            o.stdout, o.stderr
+        );
+        assert!(
+            o.stderr
+                .contains(&format!("jw: cannot reach NATS at {url}: ")),
+            "{args:?}: {}",
+            o.stderr
+        );
+    }
+    assert_eq!(e.record("s1")["kind"], "task");
+}
+
+#[test]
+fn k4_names_with_a_trailing_dot_or_double_dot_are_invalid() {
+    let e = Env::new();
+    e.jw(&e.root, &["session", "results", "-s", "a."])
+        .fail("invalid session name");
+    e.jw(&e.root, &["session", "results", "-s", "a..b"])
+        .fail("invalid session name");
+}
+
+#[test]
 fn dm7_reaped_worker_refuses() {
     let e = Env::new();
     headless(&e, json!({"status": "done", "reaped": 1}));
     e.jw(&e.root, &["msg", "C", "hi"])
         .fail("session C is reaped");
-    assert!(queue_texts(&e, "C").is_empty());
+    assert!(e.queue("C").is_empty());
 }
 
 #[test]
@@ -2966,7 +3014,7 @@ fn wt11_claude_killed_by_a_signal_is_a_died_result() {
         assert_eq!(r["kind"], "died", "{sig}: {r}");
         let text = r["text"].as_str().unwrap();
         assert!(text.contains("signal"), "{sig}: {text}");
-        assert_eq!(queue_texts(&e, "C"), ["go"]);
+        assert_eq!(e.queue("C"), ["go"]);
     }
 }
 
@@ -2998,7 +3046,7 @@ fn wt13_error_after_open_is_a_died_result() {
     assert_ne!(o.code, 124, "{}", o.stderr);
     let r = read_result(&e, "C", 1);
     assert_eq!(r["kind"], "died", "{r}");
-    assert_eq!(queue_texts(&e, "C"), ["go"]);
+    assert_eq!(e.queue("C"), ["go"]);
     assert!(
         e.record("C").get("turn_base").is_none(),
         "{}",
@@ -3073,7 +3121,7 @@ fn check_headless_start(e: &Env, out: &Out) {
     assert_eq!(r["reports_to"], "M");
     assert_eq!(r["kind"], "task");
     assert_eq!(r["title"], "brief");
-    assert_eq!(queue_texts(e, &name), ["brief"]);
+    assert_eq!(e.queue(&name), ["brief"]);
     assert!(!e.logs.join("shpool.log").exists());
     let run = e.log("systemd-run.log");
     assert!(
@@ -3209,12 +3257,7 @@ fn h3_8_headless_start_failure_marks_record_done() {
         out.stdout, out.stderr
     );
     assert!(out.stderr.contains("done"), "{}", out.stderr);
-    let created: Vec<String> = fs::read_dir(e.state.join("agent-sessions"))
-        .unwrap()
-        .map(|d| d.unwrap().file_name().to_string_lossy().into_owned())
-        .filter_map(|f| f.strip_suffix(".json").map(String::from))
-        .filter(|n| n != "M")
-        .collect();
+    let created: Vec<String> = e.record_names().into_iter().filter(|n| n != "M").collect();
     assert_eq!(created.len(), 1, "{created:?}");
     let r = e.record(&created[0]);
     assert_eq!(r["status"], "done");
@@ -3626,7 +3669,7 @@ fn ic10_turn_compact_runs_compact_and_writes_no_result() {
     assert_eq!(rec["status"], "idle");
     assert_eq!(num(&rec["status_at"]), 111.0);
     assert!(rec.get("turn_base").is_none(), "{rec}");
-    assert!(!e.state.join("agent-sessions/results/C/3.json").exists());
+    assert!(!e.has_result("C", 3));
     assert!(event_seqs(&e).is_empty());
     assert!(compact_line(&e).is_none());
 }
@@ -3640,7 +3683,7 @@ fn ic11_turn_compact_without_result_event_is_quiet() {
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(run_logs(&e), 1);
     assert_eq!(e.record("C")["result_seq"], 2);
-    assert!(!e.state.join("agent-sessions/results/C/3.json").exists());
+    assert!(!e.has_result("C", 3));
     assert!(event_seqs(&e).is_empty());
 }
 
@@ -3707,7 +3750,7 @@ fn ic15_message_during_compact_is_queued_and_runs_next() {
     assert_eq!(e.record("C")["result_seq"], 3);
     assert_eq!(read_result(&e, "C", 3)["kind"], "result");
     assert_eq!(event_seqs(&e), [3]);
-    assert!(queue_texts(&e, "C").is_empty());
+    assert!(e.queue("C").is_empty());
 }
 
 #[test]

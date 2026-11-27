@@ -49,7 +49,7 @@ enum Command {
     Clone(CloneArgs),
     /// remove the workspaces whose stack is merged and broken ones in all repos, and the idle detached Claude shpool sessions in merged ones (killing a session kills its background jobs)
     Prune(PruneArgs),
-    /// stop the finished sessions (jw done, or merged MRs) once idle and detached, and remove their merged workspaces (after jw done also the worktrees the session created, unless they hold work); stop the detached Claude shpool sessions idle or stuck on a permission prompt for 4 hours (their workspaces stay; resume with jw resume --session NAME)
+    /// stop the finished sessions (jw done, or merged MRs) once idle and detached, and remove their merged workspaces (after jw done also the worktrees the session created, unless they hold work); stop the detached Claude shpool sessions idle or stuck on a permission prompt for 4 hours (their workspaces stay; resume with jw resume --session NAME); delete the session records untouched for 7 days
     Reap,
     /// publish failed pipelines, new comments and reviews and merges of agent sessions' MRs as forge.* events
     Poll,
@@ -73,7 +73,7 @@ enum Command {
     Attach(AttachArgs),
     /// send a message to a Claude session: delivered right away, between the tool calls of a busy session or as a new turn of an idle one; fails if an interactive session is not running (a headless worker queues it for its next turn or starts one)
     Msg(MsgArgs),
-    /// read, list or update the records of agent sessions (kind, title, description, url, workspace, mrs, worktrees that jw hook create records), a JSON file in $XDG_STATE_HOME/agent-sessions that the notifications show
+    /// read, list or update the records of agent sessions (kind, title, description, url, workspace, mrs, worktrees that jw hook create records), an entry of the NATS KV bucket `sessions` ($NATS_URL) that the notifications show
     Session {
         #[command(subcommand)]
         action: SessionAction,

@@ -1,36 +1,27 @@
 use super::*;
 
-use std::os::unix::fs::PermissionsExt;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use crate::kv::{Bucket, Kv};
+use serde_json::Value;
+use std::cell::Cell;
+use std::time::{Duration, Instant};
 
 #[path = "../common/nats.rs"]
 #[allow(clippy::duplicate_mod)]
 mod nats;
 
-static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-struct Tmp(PathBuf, nats::NatsServer);
+struct Tmp(nats::NatsServer);
 
 impl Tmp {
     fn new() -> Tmp {
-        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let base = fs::canonicalize(env::temp_dir()).unwrap();
-        let dir = base.join(format!("jw-record-test-{}-{}", process::id(), n));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        Tmp(dir, nats::NatsServer::start())
+        Tmp(nats::NatsServer::start())
     }
 
     fn records(&self) -> Records {
-        let mut records = Records::connect(&self.1.url()).unwrap();
-        records.dir = self.0.join("agent-sessions");
-        records
+        Records::connect(&self.0.url()).unwrap()
     }
-}
 
-impl Drop for Tmp {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+    fn kv(&self) -> Kv {
+        Kv::connect(&self.0.url()).unwrap()
     }
 }
 
@@ -38,17 +29,32 @@ fn always(_: &mut Record) -> bool {
     true
 }
 
-fn result_file(r: &Records, name: &str, seq: u64) -> PathBuf {
-    r.dir.join("results").join(name).join(format!("{seq}.json"))
+fn put(kv: &Kv, b: Bucket, key: &str, value: &str) {
+    kv.put(b, key, value.as_bytes()).unwrap();
 }
 
-fn mode(p: &Path) -> u32 {
-    fs::metadata(p).unwrap().permissions().mode() & 0o777
+fn raw(kv: &Kv, b: Bucket, key: &str) -> Option<Value> {
+    kv.get(b, key)
+        .unwrap()
+        .map(|e| serde_json::from_slice(&e.value).unwrap())
 }
 
-fn old(p: &Path) {
-    let t = SystemTime::now() - Duration::from_secs((RECORD_DAYS + 1) * 86400);
-    fs::File::open(p).unwrap().set_modified(t).unwrap();
+fn result_keys(kv: &Kv, name: &str) -> Vec<String> {
+    let prefix = format!("{name}.");
+    kv.keys(Bucket::Results)
+        .unwrap()
+        .into_iter()
+        .filter(|k| k.starts_with(&prefix))
+        .collect()
+}
+
+fn queue_keys(kv: &Kv, name: &str) -> Vec<String> {
+    let prefix = format!("{name}.");
+    kv.keys(Bucket::Queue)
+        .unwrap()
+        .into_iter()
+        .filter(|k| k.starts_with(&prefix))
+        .collect()
 }
 
 #[test]
@@ -95,8 +101,7 @@ fn new_fields_round_trip() {
     assert!(rec.headless);
     assert_eq!(rec.turn_base, Some(4));
     assert_eq!(rec.result_seq, 4);
-    let json: Value =
-        serde_json::from_str(&fs::read_to_string(r.dir.join("w.json")).unwrap()).unwrap();
+    let json = raw(&t.kv(), Bucket::Sessions, "w").unwrap();
     assert_eq!(json["headless"], true);
     assert_eq!(json["turn_base"], 4);
     assert_eq!(json["result_seq"], 4);
@@ -106,12 +111,12 @@ fn new_fields_round_trip() {
 fn new_fields_of_the_wrong_type_are_ignored() {
     let t = Tmp::new();
     let r = t.records();
-    fs::create_dir_all(&r.dir).unwrap();
-    fs::write(
-        r.dir.join("w.json"),
+    put(
+        &t.kv(),
+        Bucket::Sessions,
+        "w",
         r#"{"kind":"task","headless":"yes","turn_base":"x","result_seq":"y"}"#,
-    )
-    .unwrap();
+    );
     let rec = r.read("w").unwrap().unwrap();
     assert_eq!(rec.kind.as_deref(), Some("task"));
     assert!(!rec.headless);
@@ -144,6 +149,197 @@ fn result_kind_serializes_lowercase() {
 }
 
 #[test]
+fn valid_name_rules() {
+    for ok in ["a", "a.b", "s-1127-130155", "A_b-1.c", "0"] {
+        assert!(valid_name(ok), "{ok}");
+    }
+    for bad in ["", "a..b", "a.", "..", ".a", "-a", "x/y", "a b", "a*"] {
+        assert!(!valid_name(bad), "{bad}");
+    }
+}
+
+#[test]
+fn invalid_names_read_none_and_update_fails() {
+    let t = Tmp::new();
+    let r = t.records();
+    for bad in ["a..b", "a.", "x/y"] {
+        assert!(r.read(bad).unwrap().is_none(), "{bad}");
+        assert_eq!(
+            r.update(bad, always).err().unwrap(),
+            format!("invalid session name: '{bad}'")
+        );
+        assert!(r
+            .write_result(bad, ResultKind::Result, "x", always)
+            .is_err());
+    }
+}
+
+#[test]
+fn read_of_absent_oversized_or_non_object_values_is_none() {
+    let t = Tmp::new();
+    let r = t.records();
+    let kv = t.kv();
+    assert!(r.read("absent").unwrap().is_none());
+    let big = format!(r#"{{"title":"{}"}}"#, "a".repeat(65536));
+    put(&kv, Bucket::Sessions, "big", &big);
+    put(&kv, Bucket::Sessions, "arr", "[1]");
+    put(&kv, Bucket::Sessions, "str", "\"x\"");
+    put(&kv, Bucket::Sessions, "junk", "not json");
+    for n in ["big", "arr", "str", "junk"] {
+        assert!(r.read(n).unwrap().is_none(), "{n}");
+    }
+}
+
+#[test]
+fn load_all_is_sorted_and_skips_invalid_names_and_unreadable_values() {
+    let t = Tmp::new();
+    let r = t.records();
+    let kv = t.kv();
+    put(&kv, Bucket::Sessions, "b.c", r#"{"kind":"task"}"#);
+    put(&kv, Bucket::Sessions, "a", r#"{"kind":"task"}"#);
+    put(&kv, Bucket::Sessions, "c", r#"{"kind":"task"}"#);
+    put(&kv, Bucket::Sessions, "junk", "not json");
+    put(&kv, Bucket::Sessions, "arr", "[]");
+    put(&kv, Bucket::Sessions, "-bad", r#"{"kind":"task"}"#);
+    let names: Vec<String> = r.load_all().unwrap().into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names, ["a", "b.c", "c"]);
+}
+
+#[test]
+fn update_false_writes_nothing() {
+    let t = Tmp::new();
+    let r = t.records();
+    let got = r
+        .update("w", |rec| {
+            rec.title = Some("x".to_string());
+            false
+        })
+        .unwrap();
+    assert_eq!(got.title.as_deref(), Some("x"));
+    assert!(r.read("w").unwrap().is_none());
+    assert!(t.kv().get(Bucket::Sessions, "w").unwrap().is_none());
+}
+
+#[test]
+fn update_replaces_an_unreadable_value() {
+    let t = Tmp::new();
+    let r = t.records();
+    put(&t.kv(), Bucket::Sessions, "w", "not json");
+    r.update("w", |rec| {
+        rec.title = Some("T".to_string());
+        true
+    })
+    .unwrap();
+    assert_eq!(r.read("w").unwrap().unwrap().title.as_deref(), Some("T"));
+}
+
+#[test]
+fn update_rejects_a_record_over_the_size_limit_and_keeps_the_old_one() {
+    let t = Tmp::new();
+    let r = t.records();
+    r.update("w", |rec| {
+        rec.title = Some("small".to_string());
+        true
+    })
+    .unwrap();
+    let err = r
+        .update("w", |rec| {
+            rec.description = Some("d".repeat(70000));
+            true
+        })
+        .err()
+        .unwrap();
+    assert_eq!(
+        err,
+        "cannot write the session record: it is larger than 65536 bytes"
+    );
+    let rec = r.read("w").unwrap().unwrap();
+    assert_eq!(rec.title.as_deref(), Some("small"));
+    assert!(rec.description.is_none());
+    let err = r
+        .update("fresh", |rec| {
+            rec.description = Some("d".repeat(70000));
+            true
+        })
+        .err()
+        .unwrap();
+    assert!(err.contains("larger than 65536 bytes"), "{err}");
+    assert!(r.read("fresh").unwrap().is_none());
+}
+
+#[test]
+fn update_reruns_the_change_after_a_conflict_on_an_existing_record() {
+    let t = Tmp::new();
+    let r = t.records();
+    let kv = t.kv();
+    r.update("w", |rec| {
+        rec.title = Some("orig".to_string());
+        true
+    })
+    .unwrap();
+    let calls = Cell::new(0);
+    let got = r
+        .update("w", |rec| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 1 {
+                put(&kv, Bucket::Sessions, "w", r#"{"kind":"concurrent"}"#);
+            }
+            rec.description = Some(format!("call {}", calls.get()));
+            true
+        })
+        .unwrap();
+    assert_eq!(calls.get(), 2);
+    assert_eq!(got.kind.as_deref(), Some("concurrent"));
+    assert_eq!(got.description.as_deref(), Some("call 2"));
+    assert_eq!(got.title, None);
+    let rec = r.read("w").unwrap().unwrap();
+    assert_eq!(rec.kind.as_deref(), Some("concurrent"));
+    assert_eq!(rec.description.as_deref(), Some("call 2"));
+}
+
+#[test]
+fn update_reruns_the_change_after_a_conflict_on_a_new_record() {
+    let t = Tmp::new();
+    let r = t.records();
+    let kv = t.kv();
+    let calls = Cell::new(0);
+    r.update("w", |rec| {
+        calls.set(calls.get() + 1);
+        if calls.get() == 1 {
+            put(&kv, Bucket::Sessions, "w", r#"{"kind":"concurrent"}"#);
+        }
+        rec.title = Some("mine".to_string());
+        true
+    })
+    .unwrap();
+    assert_eq!(calls.get(), 2);
+    let rec = r.read("w").unwrap().unwrap();
+    assert_eq!(rec.kind.as_deref(), Some("concurrent"));
+    assert_eq!(rec.title.as_deref(), Some("mine"));
+}
+
+#[test]
+fn update_gives_up_when_records_stay_busy() {
+    let t = Tmp::new();
+    let r = t.records();
+    let kv = t.kv();
+    put(&kv, Bucket::Sessions, "w", r#"{"kind":"task"}"#);
+    let start = Instant::now();
+    let err = r
+        .update("w", |rec| {
+            put(&kv, Bucket::Sessions, "w", r#"{"kind":"task"}"#);
+            rec.title = Some("x".to_string());
+            true
+        })
+        .err()
+        .unwrap();
+    assert_eq!(err, "session records are busy");
+    let took = start.elapsed();
+    assert!(took >= Duration::from_secs(4), "{took:?}");
+    assert!(took < Duration::from_secs(20), "{took:?}");
+}
+
+#[test]
 fn write_result_numbers_from_one() {
     let t = Tmp::new();
     let r = t.records();
@@ -158,27 +354,16 @@ fn write_result_numbers_from_one() {
     let rec = r.read("w").unwrap().unwrap();
     assert_eq!(rec.result_seq, 2);
     assert_eq!(rec.turn_base, None);
-    let file: Value =
-        serde_json::from_str(&fs::read_to_string(result_file(&r, "w", 1)).unwrap()).unwrap();
+    let kv = t.kv();
+    let file = raw(&kv, Bucket::Results, "w.1").unwrap();
     assert_eq!(file["seq"], 1);
     assert_eq!(file["kind"], "result");
     assert_eq!(file["text"], "first");
     assert!(file["at"].as_f64().unwrap() > 1.0e9);
-    let file: Value =
-        serde_json::from_str(&fs::read_to_string(result_file(&r, "w", 2)).unwrap()).unwrap();
+    let file = raw(&kv, Bucket::Results, "w.2").unwrap();
     assert_eq!(file["seq"], 2);
     assert_eq!(file["kind"], "died");
     assert_eq!(file["text"], "second");
-}
-
-#[test]
-fn write_result_modes() {
-    let t = Tmp::new();
-    let r = t.records();
-    r.write_result("w", ResultKind::Result, "x", always)
-        .unwrap();
-    assert_eq!(mode(&r.dir.join("results/w")), 0o700);
-    assert_eq!(mode(&result_file(&r, "w", 1)), 0o600);
 }
 
 #[test]
@@ -213,7 +398,7 @@ fn write_result_guard_false_writes_nothing() {
         false
     });
     assert_eq!(got, Ok(None));
-    assert!(!result_file(&r, "w", 1).exists());
+    assert!(result_keys(&t.kv(), "w").is_empty());
     assert!(r.results("w").unwrap().is_empty());
     let rec = r.read("w").unwrap().unwrap();
     assert_eq!(rec.result_seq, 0);
@@ -245,6 +430,73 @@ fn write_result_guard_sees_the_record_and_its_changes_are_saved() {
 }
 
 #[test]
+fn write_result_after_a_concurrent_record_change_reruns_and_keeps_one_result() {
+    let t = Tmp::new();
+    let r = t.records();
+    let kv = t.kv();
+    r.update("w", |rec| {
+        rec.headless = true;
+        true
+    })
+    .unwrap();
+    let calls = Cell::new(0);
+    let got = r.write_result("w", ResultKind::Result, "x", |_| {
+        calls.set(calls.get() + 1);
+        if calls.get() == 1 {
+            put(&kv, Bucket::Sessions, "w", r#"{"kind":"concurrent"}"#);
+        }
+        true
+    });
+    assert_eq!(got, Ok(Some(1)));
+    assert_eq!(calls.get(), 2);
+    assert_eq!(result_keys(&kv, "w"), ["w.1"]);
+    let rec = r.read("w").unwrap().unwrap();
+    assert_eq!(rec.kind.as_deref(), Some("concurrent"));
+    assert_eq!(rec.result_seq, 1);
+}
+
+#[test]
+fn write_result_guard_true_then_false_on_rerun_leaves_no_result() {
+    let t = Tmp::new();
+    let r = t.records();
+    let kv = t.kv();
+    r.update("w", |rec| {
+        rec.headless = true;
+        true
+    })
+    .unwrap();
+    let calls = Cell::new(0);
+    let got = r.write_result("w", ResultKind::Result, "x", |_| {
+        calls.set(calls.get() + 1);
+        if calls.get() == 1 {
+            put(&kv, Bucket::Sessions, "w", r#"{"kind":"concurrent"}"#);
+            true
+        } else {
+            false
+        }
+    });
+    assert_eq!(got, Ok(None));
+    assert_eq!(calls.get(), 2);
+    assert!(result_keys(&kv, "w").is_empty());
+    assert_eq!(r.read("w").unwrap().unwrap().result_seq, 0);
+}
+
+#[test]
+fn write_result_over_the_record_size_limit_fails_and_leaves_no_result() {
+    let t = Tmp::new();
+    let r = t.records();
+    let got = r.write_result("w", ResultKind::Result, "x", |rec| {
+        rec.description = Some("d".repeat(70000));
+        true
+    });
+    assert_eq!(
+        got,
+        Err("cannot write the session record: it is larger than 65536 bytes".to_string())
+    );
+    assert!(result_keys(&t.kv(), "w").is_empty());
+}
+
+#[test]
 fn write_result_caps_long_text() {
     let t = Tmp::new();
     let r = t.records();
@@ -252,19 +504,12 @@ fn write_result_caps_long_text() {
     let exact = "a".repeat(262144);
     r.write_result("w", ResultKind::Result, &exact, always)
         .unwrap();
-    let long = format!("{}{}", "b".repeat(262144), "c".repeat(100));
-    r.write_result("w", ResultKind::Result, &long, always)
+    r.write_result("w", ResultKind::Result, &"a".repeat(300000), always)
         .unwrap();
     let results = r.results("w").unwrap();
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].text, exact);
-    assert_eq!(
-        results[1].text.chars().count(),
-        262144 + marker.chars().count()
-    );
-    assert!(results[1].text.starts_with(&"b".repeat(262144)));
-    assert!(results[1].text.ends_with(marker));
-    assert!(!results[1].text.contains("cc"));
+    assert_eq!(results[1].text, format!("{exact}{marker}"));
 }
 
 #[test]
@@ -284,15 +529,54 @@ fn write_result_caps_characters_not_bytes() {
 }
 
 #[test]
-fn write_result_invalid_name() {
+fn write_result_keeps_the_result_json_within_the_value_limit() {
     let t = Tmp::new();
     let r = t.records();
-    assert!(r
-        .write_result("x/y", ResultKind::Result, "x", always)
-        .is_err());
-    assert!(r
-        .write_result("..", ResultKind::Result, "x", always)
-        .is_err());
+    let long = "\u{1}".repeat(200000);
+    r.write_result("w", ResultKind::Result, &long, always)
+        .unwrap();
+    let entry = t.kv().get(Bucket::Results, "w.1").unwrap().unwrap();
+    assert!(entry.value.len() <= 786432, "{}", entry.value.len());
+    let text = r.results("w").unwrap().remove(0).text;
+    assert!(text.ends_with("\n[truncated]"));
+    let body = text.strip_suffix("\n[truncated]").unwrap();
+    assert!(long.starts_with(body));
+    assert!(body.len() < long.len());
+}
+
+#[test]
+fn write_result_skips_past_an_orphan_key() {
+    let t = Tmp::new();
+    let r = t.records();
+    let kv = t.kv();
+    r.update("w", |rec| {
+        rec.result_seq = 1;
+        true
+    })
+    .unwrap();
+    put(
+        &kv,
+        Bucket::Results,
+        "w.3",
+        r#"{"seq":3,"kind":"result","text":"orphan","at":1.0}"#,
+    );
+    assert_eq!(
+        r.write_result("w", ResultKind::Result, "next", always),
+        Ok(Some(4))
+    );
+    assert_eq!(result_keys(&kv, "w"), ["w.3", "w.4"]);
+    assert_eq!(raw(&kv, Bucket::Results, "w.3").unwrap()["text"], "orphan");
+}
+
+#[test]
+fn result_seqs_are_numeric_and_own_keys_only() {
+    let t = Tmp::new();
+    let r = t.records();
+    let kv = t.kv();
+    for key in ["w.10", "w.9", "w.x", "w.1.2", "w2.1", "w.11"] {
+        put(&kv, Bucket::Results, key, "{}");
+    }
+    assert_eq!(r.result_seqs("w"), Ok(vec![9, 10, 11]));
 }
 
 #[test]
@@ -315,16 +599,38 @@ fn results_are_by_number_and_unacked_only() {
 }
 
 #[test]
-fn results_are_per_session() {
+fn results_skip_unreadable_values() {
+    let t = Tmp::new();
+    let r = t.records();
+    r.write_result("w", ResultKind::Result, "ok", always)
+        .unwrap();
+    put(&t.kv(), Bucket::Results, "w.2", "not json");
+    let seqs: Vec<u64> = r.results("w").unwrap().iter().map(|x| x.seq).collect();
+    assert_eq!(seqs, [1]);
+}
+
+#[test]
+fn results_are_per_session_and_a_dotted_name_is_its_own() {
     let t = Tmp::new();
     let r = t.records();
     r.write_result("a", ResultKind::Result, "ta", always)
         .unwrap();
     r.write_result("b", ResultKind::Died, "tb", always).unwrap();
+    r.write_result("a.b", ResultKind::Result, "tab", always)
+        .unwrap();
+    put(
+        &t.kv(),
+        Bucket::Results,
+        "a.b.3",
+        r#"{"seq":3,"kind":"result","text":"x","at":1.0}"#,
+    );
     assert_eq!(r.results("a").unwrap().len(), 1);
     assert_eq!(r.results("a").unwrap()[0].text, "ta");
+    assert_eq!(r.result_seqs("a"), Ok(vec![1]));
+    assert_eq!(r.result_seqs("a.b"), Ok(vec![1, 3]));
     assert_eq!(r.results("b").unwrap()[0].kind, ResultKind::Died);
     assert!(r.results("c").unwrap().is_empty());
+    assert_eq!(r.read("a").unwrap().unwrap().result_seq, 1);
 }
 
 #[test]
@@ -336,9 +642,7 @@ fn ack_deletes_up_to_seq() {
             .unwrap();
     }
     assert_eq!(r.ack("w", 2), Ok(()));
-    assert!(!result_file(&r, "w", 1).exists());
-    assert!(!result_file(&r, "w", 2).exists());
-    assert!(result_file(&r, "w", 3).exists());
+    assert_eq!(result_keys(&t.kv(), "w"), ["w.3"]);
     assert_eq!(r.ack("w", 2), Ok(()));
     assert_eq!(r.ack("w", 1), Ok(()));
     assert_eq!(r.ack("w", 3), Ok(()));
@@ -353,8 +657,30 @@ fn ack_beyond_the_last_result_fails_and_deletes_nothing() {
         .unwrap();
     r.write_result("w", ResultKind::Result, "y", always)
         .unwrap();
-    assert!(r.ack("w", 3).is_err());
+    assert_eq!(r.ack("w", 3), Err("no result 3 of w".to_string()));
     assert_eq!(r.results("w").unwrap().len(), 2);
+}
+
+#[test]
+fn ack_without_a_record_fails() {
+    let t = Tmp::new();
+    let r = t.records();
+    assert_eq!(
+        r.ack("nobody", 1),
+        Err("no session record nobody".to_string())
+    );
+}
+
+#[test]
+fn ack_counts_an_orphan_key_and_leaves_a_dotted_session_alone() {
+    let t = Tmp::new();
+    let r = t.records();
+    let kv = t.kv();
+    r.update("a", always).unwrap();
+    put(&kv, Bucket::Results, "a.1", "{}");
+    put(&kv, Bucket::Results, "a.b.1", "{}");
+    assert_eq!(r.ack("a", 1), Ok(()));
+    assert_eq!(result_keys(&kv, "a"), ["a.b.1"]);
 }
 
 #[test]
@@ -374,104 +700,124 @@ fn numbers_are_not_reused_after_an_ack() {
     assert_eq!(r.read("w").unwrap().unwrap().result_seq, 3);
 }
 
-#[test]
-fn results_dirs_are_not_records() {
-    let t = Tmp::new();
-    let r = t.records();
-    r.write_result("w", ResultKind::Result, "x", always)
-        .unwrap();
-    let names: Vec<String> = r.load_all().unwrap().into_iter().map(|(n, _)| n).collect();
-    assert_eq!(names, ["w"]);
+fn plain(t: &Tmp, name: &str, record: &str) {
+    let kv = t.kv();
+    put(&kv, Bucket::Sessions, name, record);
+    put(&kv, Bucket::Results, &format!("{name}.1"), "{}");
+    t.records().enqueue(name, "pending").unwrap();
 }
 
-fn write_old(r: &Records, name: &str, json: &str) {
-    fs::create_dir_all(&r.dir).unwrap();
-    let p = r.dir.join(format!("{name}.json"));
-    fs::write(&p, json).unwrap();
-    old(&p);
-    let d = r.dir.join("results").join(name);
-    fs::create_dir_all(&d).unwrap();
-    fs::write(d.join("1.json"), "{}").unwrap();
-    r.enqueue(name, "pending").unwrap();
+fn pruned(r: &Records, at: f64) -> Vec<String> {
+    let mut names = Vec::new();
+    r.prune(at, |n| names.push(n.to_string())).unwrap();
+    names.sort();
+    names
 }
 
-fn trigger_prune(r: &Records) {
-    r.update("fresh", always).unwrap();
+fn later() -> f64 {
+    now() + 8.0 * 86400.0
 }
 
 #[test]
-fn prune_removes_results_and_queue_with_the_record() {
+fn prune_removes_record_results_and_queue_of_an_old_record() {
     let t = Tmp::new();
     let r = t.records();
-    write_old(&r, "gone", r#"{"kind":"task"}"#);
-    write_old(&r, "other", r#"{"kind":"task"}"#);
-    fs::write(r.dir.join("other.json"), r#"{"kind":"task"}"#).unwrap();
-    trigger_prune(&r);
-    assert!(!r.dir.join("gone.json").exists());
-    assert!(!r.dir.join("results/gone").exists());
-    assert!(r.queued("gone").unwrap().is_empty());
-    assert!(r.dir.join("other.json").exists());
-    assert!(r.dir.join("results/other").exists());
-    assert_eq!(r.queued("other").unwrap().len(), 1);
-    assert!(r.dir.join("fresh.json").exists());
+    let kv = t.kv();
+    plain(&t, "gone", r#"{"kind":"task"}"#);
+    plain(&t, "mate", r#"{"kind":"mate"}"#);
+    assert_eq!(pruned(&r, later()), vec!["gone".to_string()]);
+    assert!(kv.get(Bucket::Sessions, "gone").unwrap().is_none());
+    assert!(result_keys(&kv, "gone").is_empty());
+    assert!(queue_keys(&kv, "gone").is_empty());
+    assert!(kv.get(Bucket::Sessions, "mate").unwrap().is_some());
+    assert_eq!(result_keys(&kv, "mate"), ["mate.1"]);
+    assert_eq!(queue_keys(&kv, "mate").len(), 1);
 }
 
 #[test]
-fn prune_keeps_a_live_headless_record_and_its_files() {
+fn prune_of_a_fresh_record_does_nothing() {
     let t = Tmp::new();
     let r = t.records();
-    write_old(&r, "w", r#"{"kind":"task","headless":true}"#);
-    trigger_prune(&r);
-    assert!(r.dir.join("w.json").exists());
-    assert!(r.dir.join("results/w/1.json").exists());
+    plain(&t, "w", r#"{"kind":"task"}"#);
+    assert_eq!(pruned(&r, now()), Vec::<String>::new());
+    assert!(r.read("w").unwrap().is_some());
+}
+
+#[test]
+fn prune_keeps_a_live_headless_record_and_its_keys() {
+    let t = Tmp::new();
+    let r = t.records();
+    let kv = t.kv();
+    plain(&t, "w", r#"{"kind":"task","headless":true}"#);
+    assert_eq!(pruned(&r, later()), Vec::<String>::new());
+    assert!(r.read("w").unwrap().is_some());
+    assert_eq!(result_keys(&kv, "w"), ["w.1"]);
     assert_eq!(r.queued("w").unwrap().len(), 1);
 }
 
 #[test]
-fn prune_removes_a_reaped_headless_record_with_its_files() {
+fn prune_removes_reaped_headless_and_mate_records_sorted() {
     let t = Tmp::new();
     let r = t.records();
-    write_old(&r, "w", r#"{"kind":"task","headless":true,"reaped":1}"#);
-    trigger_prune(&r);
-    assert!(!r.dir.join("w.json").exists());
-    assert!(!r.dir.join("results/w").exists());
-    assert!(r.queued("w").unwrap().is_empty());
+    let kv = t.kv();
+    plain(&t, "w", r#"{"kind":"task","headless":true,"reaped":1}"#);
+    plain(&t, "n", r#"{"kind":"mate","reaped":1}"#);
+    plain(&t, "m", r#"{"kind":"mate"}"#);
+    assert_eq!(pruned(&r, later()), vec!["n".to_string(), "w".to_string()]);
+    assert!(result_keys(&kv, "w").is_empty());
+    assert!(queue_keys(&kv, "w").is_empty());
+    assert!(r.read("m").unwrap().is_some());
 }
 
 #[test]
-fn prune_still_keeps_a_live_mate_and_removes_a_reaped_one() {
+fn prune_removes_an_unreadable_old_value() {
     let t = Tmp::new();
     let r = t.records();
-    write_old(&r, "m", r#"{"kind":"mate"}"#);
-    write_old(&r, "n", r#"{"kind":"mate","reaped":1}"#);
-    trigger_prune(&r);
-    assert!(r.dir.join("m.json").exists());
-    assert!(!r.dir.join("n.json").exists());
+    put(&t.kv(), Bucket::Sessions, "junk", "not json");
+    assert_eq!(pruned(&r, later()), vec!["junk".to_string()]);
+    assert!(t.kv().get(Bucket::Sessions, "junk").unwrap().is_none());
 }
 
 #[test]
-fn orphan_result_file_is_not_overwritten_and_can_be_acked() {
+fn prune_of_a_session_leaves_the_dotted_session_with_its_keys() {
     let t = Tmp::new();
     let r = t.records();
-    r.update("w", |rec| {
-        rec.headless = true;
-        true
-    })
-    .unwrap();
-    let d = r.dir.join("results/w");
-    fs::create_dir_all(&d).unwrap();
-    fs::write(
-        d.join("1.json"),
-        r#"{"seq":1,"kind":"result","text":"orphan","at":1.0}"#,
-    )
-    .unwrap();
-    assert_eq!(r.read("w").unwrap().unwrap().result_seq, 0);
-    let got = r.write_result("w", ResultKind::Result, "next", always);
-    assert_eq!(got, Ok(Some(2)));
-    assert!(d.join("1.json").exists());
-    assert!(d.join("2.json").exists());
-    assert_eq!(r.ack("w", 1), Ok(()));
-    assert!(!d.join("1.json").exists());
+    let kv = t.kv();
+    plain(&t, "a", r#"{"kind":"task"}"#);
+    plain(&t, "a.b", r#"{"kind":"task","headless":true}"#);
+    assert_eq!(pruned(&r, later()), vec!["a".to_string()]);
+    assert!(r.read("a.b").unwrap().is_some());
+    assert_eq!(result_keys(&kv, "a.b"), ["a.b.1"]);
+    assert_eq!(queue_keys(&kv, "a.b").len(), 1);
+    assert!(kv.get(Bucket::Results, "a.1").unwrap().is_none());
+    assert!(queue_keys(&kv, "a").iter().all(|k| k.starts_with("a.b.")));
+}
+
+#[test]
+fn update_after_prune_creates_a_fresh_record() {
+    let t = Tmp::new();
+    let r = t.records();
+    plain(&t, "w", r#"{"kind":"task","title":"old"}"#);
+    pruned(&r, later());
+    let rec = r
+        .update("w", |rec| {
+            rec.description = Some("new".to_string());
+            true
+        })
+        .unwrap();
+    assert_eq!(rec.title, None);
+    let rec = r.read("w").unwrap().unwrap();
+    assert_eq!(rec.description.as_deref(), Some("new"));
+    assert_eq!(rec.title, None);
+}
+
+#[test]
+fn update_does_not_prune() {
+    let t = Tmp::new();
+    let r = t.records();
+    plain(&t, "old", r#"{"kind":"task"}"#);
+    r.update("fresh", always).unwrap();
+    assert!(r.read("old").unwrap().is_some());
 }
 
 #[test]

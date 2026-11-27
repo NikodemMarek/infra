@@ -10,11 +10,14 @@ use serde_json::Value;
 
 use crate::agent::{latest_transcript, session_repo};
 use crate::cmd::event_pub;
+use crate::kv::nats_url;
 use crate::record::{now, Queued, Record, Records, ResultKind};
 use crate::systemd::Systemd;
 
 const DELIVER_WAIT: Duration = Duration::from_secs(10);
 const DELIVER_POLL: Duration = Duration::from_millis(200);
+const FINISH_WAIT: Duration = Duration::from_secs(60);
+const FINISH_RETRY: Duration = Duration::from_secs(2);
 const STDERR_TAIL: usize = 20;
 const INPUT_CLIP: usize = 200;
 /// Below this the context is mostly the system prompt: a summary would save little.
@@ -31,12 +34,13 @@ pub fn unit(name: &str) -> String {
 /// Writes the result of a turn of worker name (see `Records::write_result`) and, if it was written, publishes
 /// `session.result` for it.
 pub fn finish(
+    records: &Records,
     name: &str,
     kind: ResultKind,
     text: &str,
     guard: impl FnMut(&mut Record) -> bool,
 ) -> Result<Option<u64>, String> {
-    let seq = Records::open()?.write_result(name, kind, text, guard)?;
+    let seq = records.write_result(name, kind, text, guard)?;
     if let Some(seq) = seq {
         let payload = serde_json::json!({"type": "session.result", "session": name, "seq": seq});
         if let Err(e) = event_pub("session.result", &payload.to_string()) {
@@ -44,6 +48,26 @@ pub fn finish(
         }
     }
     Ok(seq)
+}
+
+/// `finish` on a fresh connection to the NATS server at url, retried every FINISH_RETRY while that fails for up to
+/// FINISH_WAIT; the last error if it never works.
+pub fn finish_retrying(
+    url: &str,
+    name: &str,
+    kind: ResultKind,
+    text: &str,
+    mut guard: impl FnMut(&mut Record) -> bool,
+) -> Result<Option<u64>, String> {
+    let deadline = Instant::now() + FINISH_WAIT;
+    loop {
+        let written = Records::connect(url)
+            .and_then(|records| finish(&records, name, kind, text, &mut guard));
+        match written {
+            Err(_) if Instant::now() < deadline => thread::sleep(FINISH_RETRY),
+            written => return written,
+        }
+    }
 }
 
 pub enum Delivery {
@@ -443,7 +467,7 @@ fn run_turn(
             0,
         ),
     };
-    let written = finish(name, kind, &text, |r| {
+    let written = finish_retrying(&nats_url(), name, kind, &text, |r| {
         if r.turn_base != Some(base) {
             return false;
         }
@@ -561,3 +585,7 @@ pub fn cmd_worker_compact(name: &str, seq: u64) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/worker.rs"]
+mod unit_tests;

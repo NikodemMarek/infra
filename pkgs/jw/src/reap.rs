@@ -449,11 +449,17 @@ fn idle_sessions(
     found
 }
 
+fn prune_records(store: &Records) {
+    if let Err(e) = store.prune(now(), |name| println!("pruned {name}")) {
+        eprintln!("jw: prune: {e}");
+    }
+}
+
 /// Stops the sessions whose work is finished (`jw done`, or their MRs are merged) once they are idle for
 /// FINISHED_IDLE and detached, and removes their merged workspaces; a session that ran `jw done` also loses the worktrees
 /// it created (`jw hook create`) that hold no work. A session whose MRs got merged is
 /// first asked to wrap up by `jw poll`. Then stops the detached Claude shpool sessions idle for IDLE_LIMIT, whose
-/// workspaces stay.
+/// workspaces stay. Last deletes the session records untouched for 7 days (`pruned NAME`).
 pub fn cmd_reap() -> Result<(), String> {
     let lock_path = format!("{}/jw-reap.lock", runtime_dir());
     let lock = OpenOptions::new()
@@ -475,7 +481,8 @@ pub fn cmd_reap() -> Result<(), String> {
     }
     let mut seen = HashSet::new();
     let started = now();
-    let records = Records::open()?.load_all()?;
+    let store = Records::open()?;
+    let records = store.load_all()?;
     let workspaces: HashMap<PathBuf, String> = records
         .iter()
         .filter_map(|(name, r)| {
@@ -513,6 +520,7 @@ pub fn cmd_reap() -> Result<(), String> {
             failed = true;
         }
     }
+    prune_records(&store);
     if failed {
         return Err(String::new());
     }
