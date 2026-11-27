@@ -2,8 +2,9 @@
 
 use std::fs;
 use std::io::Write;
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -16,8 +17,30 @@ pub fn fake_bin() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake")
 }
 
+/// A running `plan-review serve`, killed on drop.
+pub struct Server {
+    child: Child,
+    pub addr: String,
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// A 127.0.0.1 address nothing listens on (for the moment).
+pub fn free_addr() -> String {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    format!("127.0.0.1:{}", l.local_addr().unwrap().port())
+}
+
 pub struct Env {
     pub dir: PathBuf,
+    /// `host:port` of the server started by `Env::new`
+    pub addr: String,
+    server: Option<Server>,
     /// cwd of the commands, holds the plan files
     pub work: PathBuf,
     /// `$XDG_STATE_HOME`
@@ -33,6 +56,7 @@ pub struct Out {
 
 impl Drop for Env {
     fn drop(&mut self) {
+        self.server.take();
         let _ = fs::remove_dir_all(&self.dir);
     }
 }
@@ -43,16 +67,65 @@ impl Env {
         let base = fs::canonicalize(std::env::temp_dir()).unwrap();
         let dir = base.join(format!("plan-review-test-{}-{}", std::process::id(), n));
         let _ = fs::remove_dir_all(&dir);
-        let e = Env {
+        let mut e = Env {
             work: dir.join("work"),
             state: dir.join("state"),
             logs: dir.join("logs"),
             dir,
+            addr: String::new(),
+            server: None,
         };
         for d in [&e.work, &e.state, &e.logs, &e.dir.join("home")] {
             fs::create_dir_all(d).unwrap();
         }
+        let server = e.start_server(&[], &[]);
+        e.addr = server.addr.clone();
+        e.server = Some(server);
         e
+    }
+
+    /// `http://<addr>` of the server started by `Env::new`
+    pub fn origin(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    /// Starts `plan-review serve` on a free port with the default test environment
+    /// (minus `unset`, plus `envs`) and waits until it accepts connections.
+    pub fn start_server(&self, unset: &[&str], envs: &[(&str, &str)]) -> Server {
+        for _ in 0..3 {
+            let addr = free_addr();
+            let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_plan-review"));
+            c.current_dir(&self.work)
+                .env_clear()
+                .env("PATH", fake_bin())
+                .env("HOME", self.dir.join("home"))
+                .env("XDG_STATE_HOME", &self.state)
+                .env("FAKE_LOG_DIR", &self.logs)
+                .env("PLAN_REVIEW_ADDR", &addr)
+                .arg("serve")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            for k in unset {
+                c.env_remove(k);
+            }
+            c.envs(envs.iter().copied());
+            let mut server = Server {
+                child: c.spawn().unwrap(),
+                addr,
+            };
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_secs(3) {
+                if server.child.try_wait().unwrap().is_some() {
+                    break;
+                }
+                if TcpStream::connect(&server.addr).is_ok() {
+                    return server;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        panic!("plan-review serve did not start");
     }
 
     /// `<state>/plan-review`
@@ -80,6 +153,7 @@ impl Env {
             .env("HOME", self.dir.join("home"))
             .env("XDG_STATE_HOME", &self.state)
             .env("FAKE_LOG_DIR", &self.logs)
+            .env("PLAN_REVIEW_ADDR", &self.addr)
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

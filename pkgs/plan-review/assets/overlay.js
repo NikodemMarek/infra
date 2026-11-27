@@ -1,5 +1,5 @@
 (() => {
-  const PANEL = "http://127.0.0.1:4388";
+  const PANEL = "{{origin}}";
   const SKIP = "input, select, textarea, label, summary, [data-question]";
   const FIELDS = "input, select, textarea";
   let annotate = true;
