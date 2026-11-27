@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::fmt;
 use std::future::IntoFuture;
 use std::pin::pin;
@@ -46,6 +44,7 @@ impl Bucket {
 pub struct Entry {
     pub value: Vec<u8>,
     pub revision: u64,
+    #[allow(dead_code)]
     pub at: f64,
 }
 
@@ -171,11 +170,13 @@ impl Kv {
         }
     }
 
+    #[allow(dead_code)]
     pub fn put(&self, b: Bucket, key: &str, value: &[u8]) -> Result<u64, String> {
         self.block(self.store(b).put(key, value.to_vec().into()))?
             .map_err(|e| e.to_string())
     }
 
+    #[allow(dead_code)]
     pub fn delete(&self, b: Bucket, key: &str, revision: u64) -> Result<(), KvError> {
         let failure = match self
             .block(self.store(b).delete_expect_revision(key, Some(revision)))

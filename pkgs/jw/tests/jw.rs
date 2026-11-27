@@ -2276,27 +2276,16 @@ fn rn_result_wake_ignores_the_attached_check() {
     assert_ne!(o.stdout, "");
 }
 
-fn queue_dir(e: &Env, name: &str) -> std::path::PathBuf {
-    e.state.join("agent-sessions/queue").join(name)
-}
-
+/// Queue a message; `file` is "N-M.txt", N orders the entries like the time part of a real id.
 fn add_queue(e: &Env, name: &str, file: &str, text: &str) {
-    let d = queue_dir(e, name);
-    fs::create_dir_all(&d).unwrap();
-    fs::write(d.join(file), text).unwrap();
+    let (n, m) = file.trim_end_matches(".txt").split_once('-').unwrap();
+    let id = format!("{:020}-{m}", n.parse::<u64>().unwrap());
+    e.put_queue(name, &id, text);
 }
 
-/// The texts of the queue entries of name, by file name.
+/// The texts of the queue entries of name, by id.
 fn queue_texts(e: &Env, name: &str) -> Vec<String> {
-    let Ok(rd) = fs::read_dir(queue_dir(e, name)) else {
-        return vec![];
-    };
-    let mut files: Vec<_> = rd.map(|f| f.unwrap().path()).collect();
-    files.sort();
-    files
-        .iter()
-        .map(|p| fs::read_to_string(p).unwrap())
-        .collect()
+    e.queue(name)
 }
 
 fn read_result(e: &Env, name: &str, seq: u64) -> Value {
@@ -2699,8 +2688,190 @@ fn dm6_unreadable_unit_state_fails() {
     set_active(&e, "garbage");
     let o = e.jw(&e.root, &["msg", "C", "hi"]);
     o.fail("cannot tell whether C's turn runs");
-    assert!(queue_texts(&e, "C").is_empty());
     assert!(!e.logs.join("systemd-run.log").exists());
+    assert!(queue_texts(&e, "C").is_empty());
+}
+
+#[test]
+fn k3_msg_queues_the_text_under_an_id() {
+    let e = Env::new();
+    headless(&e, json!({"status": "busy", "turn_base": 0}));
+    set_active(&e, "active");
+    e.jw(&e.root, &["msg", "C", "first"]).ok();
+    e.jw(&e.root, &["msg", "C", "second"]).ok();
+    assert_eq!(
+        queue_texts(&e, "C"),
+        [
+            "Message from user:\n\n> first",
+            "Message from user:\n\n> second"
+        ]
+    );
+}
+
+#[test]
+fn k3_msg_to_another_session_with_a_dotted_name_prefix_is_not_ours() {
+    let e = Env::new();
+    headless(&e, json!({"status": "busy", "turn_base": 0}));
+    set_active(&e, "active");
+    e.put_queue("C.d", "00000000000000000001-1", "not for C");
+    e.jw(&e.root, &["msg", "C", "mine"]).ok();
+    assert_eq!(queue_texts(&e, "C"), ["Message from user:\n\n> mine"]);
+}
+
+#[test]
+fn k3_deadline_cancels_a_message_nobody_claimed() {
+    // active unit but no open turn: deliver retries until its 10 s deadline, then cancels
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    set_active(&e, &"active\n".repeat(80));
+    let t = std::time::Instant::now();
+    let o = e.jw(&e.root, &["msg", "C", "hi"]);
+    o.fail("cannot start a turn of C");
+    assert!(t.elapsed().as_secs() >= 9, "{:?}", t.elapsed());
+    assert!(queue_texts(&e, "C").is_empty());
+}
+
+#[test]
+fn k3_deadline_with_a_claimed_message_counts_as_queued() {
+    use common::kv::{Bucket, Kv};
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    set_active(&e, &"active\n".repeat(80));
+    let url = e.nats_url();
+    let claimer = std::thread::spawn(move || {
+        let kv = Kv::connect(&url).unwrap();
+        let start = std::time::Instant::now();
+        while start.elapsed().as_secs() < 8 {
+            let keys = kv.keys(Bucket::Queue).unwrap();
+            if let Some(k) = keys.iter().find(|k| k.starts_with("C.")) {
+                let entry = kv.get(Bucket::Queue, k).unwrap().unwrap();
+                kv.update(Bucket::Queue, k, &entry.value, entry.revision)
+                    .unwrap();
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        false
+    });
+    let o = e.jw(&e.root, &["msg", "C", "hi"]);
+    assert!(claimer.join().unwrap(), "the message never showed up");
+    o.ok();
+    assert!(o.stderr.contains("jw: queued for C"), "{}", o.stderr);
+    assert_eq!(queue_texts(&e, "C"), ["Message from user:\n\n> hi"]);
+}
+
+#[test]
+fn k3_turn_keeps_the_queue_entries_when_claude_dies() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    add_queue(&e, "C", "1-1.txt", "a");
+    add_queue(&e, "C", "2-1.txt", "b");
+    fs::write(e.logs.join("claude.cmd"), "kill -KILL $PPID").unwrap();
+    turn(&e);
+    assert_eq!(read_result(&e, "C", 1)["kind"], "died");
+    assert_eq!(queue_texts(&e, "C"), ["a", "b"]);
+}
+
+#[test]
+fn k3_turn_ignores_cancelled_entries() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    e.put_queue("C", "00000000000000000001-1", "");
+    add_queue(&e, "C", "2-1.txt", "real");
+    claude_out(&e, &[result_event("ok")]);
+    turn(&e).ok();
+    assert_eq!(run_logs(&e), 1);
+    assert_eq!(run_stdin(&e, 1), "real");
+}
+
+#[test]
+fn k3_turn_with_only_cancelled_entries_runs_nothing() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    e.put_queue("C", "00000000000000000001-1", "");
+    turn(&e).ok();
+    assert_eq!(run_logs(&e), 0);
+}
+
+#[test]
+fn k3_turn_does_not_take_another_sessions_entries() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    e.put_queue("C.d", "00000000000000000001-1", "other");
+    add_queue(&e, "C", "2-1.txt", "mine");
+    claude_out(&e, &[result_event("ok")]);
+    turn(&e).ok();
+    assert_eq!(run_stdin(&e, 1), "mine");
+    assert_eq!(e.queue("C.d"), ["other"]);
+}
+
+fn jw_down(e: &Env, cwd: &Path, args: &[&str]) -> (Out, String) {
+    let url = common::closed_url();
+    let o = e.jw_env(cwd, &[("NATS_URL", &url)], args);
+    (o, url)
+}
+
+#[test]
+fn k3_msg_with_nats_down_fails() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    let (o, url) = jw_down(&e, &e.root, &["msg", "C", "hi"]);
+    o.fail(&format!("jw: cannot reach NATS at {url}: "));
+    assert!(!e.logs.join("systemd-run.log").exists());
+}
+
+#[test]
+fn k3_worker_turn_with_nats_down_fails() {
+    let e = Env::new();
+    headless(&e, json!({"status": "idle"}));
+    let url = common::closed_url();
+    let jw = env!("CARGO_BIN_EXE_jw");
+    let o = e
+        .command("timeout", &e.root)
+        .args(["60", jw, "worker", "turn", "C"])
+        .env("NATS_URL", &url)
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains(&format!("jw: cannot reach NATS at {url}: ")),
+        "{err}"
+    );
+    assert_eq!(run_logs(&e), 0);
+}
+
+#[test]
+fn k3_headless_agent_with_nats_down_creates_no_workspace() {
+    let e = Env::new();
+    e.repo();
+    e.write_record("M", r#"{"kind":"mate"}"#);
+    let (o, url) = jw_down(
+        &e,
+        &e.root,
+        &["agent", "-d", "--reports-to", "M", "repo", "--", "brief"],
+    );
+    o.fail(&format!("jw: cannot reach NATS at {url}: "));
+    assert!(!e.root.join("repo.agents").exists());
+    assert!(!e.logs.join("systemd-run.log").exists());
+}
+
+#[test]
+fn k3_agent_with_nats_down_creates_no_workspace() {
+    let e = Env::new();
+    e.repo();
+    let (o, url) = jw_down(&e, &e.root, &["agent", "-d", "repo", "hi"]);
+    o.fail(&format!("jw: cannot reach NATS at {url}: "));
+    assert!(!e.root.join("repo.agents").exists());
+    assert!(!e.logs.join("claude.log").exists());
+}
+
+#[test]
+fn k3_new_works_with_nats_down() {
+    let e = Env::new();
+    e.repo();
+    let (o, _) = jw_down(&e, &e.root, &["new", "repo"]);
+    o.ok();
 }
 
 #[test]

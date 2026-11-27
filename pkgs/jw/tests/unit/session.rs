@@ -1,8 +1,14 @@
 use super::*;
 
+#[path = "../common/nats.rs"]
+#[allow(clippy::duplicate_mod)]
+mod nats;
+
 // One test: it sets process-wide env vars.
 #[test]
 fn track_worktree_behaviour() {
+    let server = nats::NatsServer::start();
+    env::set_var("NATS_URL", server.url());
     let base = fs::canonicalize(env::temp_dir())
         .unwrap()
         .join(format!("jw-session-test-{}", std::process::id()));
