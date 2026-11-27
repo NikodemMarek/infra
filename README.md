@@ -1,6 +1,86 @@
 # infra
 
-Nix flake monorepo: NixOS hosts, their packages, and the manifests of the k3s cluster `dijkstra` that some of those hosts form. Hosts are impermanent (root is wiped on boot). Secrets live in Bitwarden Secrets Manager: hosts get them as sops files built at deploy time, the cluster through External Secrets Operator. Flux reconciles the cluster. Agent rules are in `AGENTS.md`. Run the commands below from the repo root inside the dev shell.
+Nix flake monorepo: NixOS hosts (impermanent root), their packages and the k3s cluster `dijkstra`. Agent rules: `AGENTS.md`. Run commands from the repo root in the dev shell.
+
+## Overview
+
+### Hosts and deploy
+
+```mermaid
+flowchart LR
+  gh["GitHub: merge to main"]
+  subgraph ws["Workstation"]
+    yenn["yenn: laptop"]
+    alp["alp: installer ISO"]
+  end
+  subgraph tn["Tailnet"]
+    geralt["geralt: game streaming"]
+    roach["roach: k3s agent"]
+    regis["regis: k3s agent, ZFS, Garage"]
+    triss["triss: k3s server, Oracle Cloud"]
+  end
+  gh -->|"CI deploy-rs"| geralt & regis & triss
+  yenn -->|"host-deploy"| roach
+  yenn -->|"host-switch"| yenn
+  yenn -.->|"mkiso, writeiso"| alp
+  alp -.->|"boot, then install-remote"| tn
+```
+
+### Network
+
+```mermaid
+flowchart TB
+  web(["Internet users"])
+  out(["Internet"])
+  cf["Cloudflare"]
+  mv["Mullvad"]
+  full["full peers: yenn, ciri"]
+  ltd["limited peers: family1-4"]
+  subgraph cl["Cluster dijkstra"]
+    cfd["cloudflared"]
+    tr["Traefik: websecure, internal"]
+    wg["wireguard on triss: vpn.nkmrk.com:51820"]
+    dns["dns: 10.43.0.53"]
+  end
+  subgraph tn["Tailnet: k3s over tailscale0"]
+    triss["triss: server"]
+    regis["regis: agent"]
+    roach["roach: agent"]
+  end
+  web --> cf -->|"tunnel, 5 hostnames"| cfd --> tr
+  full & ltd -->|"UDP 51820"| wg
+  wg -->|"egress"| mv --> out
+  wg -->|"full: pod and service nets"| tr
+  wg -->|"limited: 100.97.10.25 :80 :443"| tr
+  wg --> dns
+  roach & regis -->|"join :6443"| triss
+```
+
+### Secrets and GitOps
+
+```mermaid
+flowchart LR
+  subgraph bws["Bitwarden Secrets Manager"]
+    ph["project hosts"]
+    pc["project cluster"]
+    pt["project tofu"]
+  end
+  gh["GitHub main"]
+  sb["secrets-build: sops file per host"]
+  hosts["hosts"]
+  eso["ExternalSecret secrets"]
+  pods["pods"]
+  tofu["OpenTofu"]
+  ext["Cloudflare, Tailscale, Oracle"]
+  flux["Flux"]
+  gh -->|"deploy.yml"| sb
+  ph --> sb --> hosts
+  ph -->|"ESO_BWS_TOKEN, via triss"| eso
+  pc --> eso --> pods
+  gh -->|"tofu.yml"| tofu
+  pt --> tofu --> ext
+  gh --> flux -->|"apply clusters/dijkstra"| pods
+```
 
 ## Layout
 
@@ -15,84 +95,103 @@ modules/host/          own NixOS modules: persist, secrets, eso-bws-token, agent
 pkgs/                  wrapped packages and own tools
 clusters/dijkstra/     Kubernetes manifests, reconciled by Flux
 tofu/                  OpenTofu: Cloudflare, Tailscale, Oracle Cloud
-.github/               CI (hosts build, deploy, tofu); renovate.json: weekly update PRs
+.github/               CI (hosts, deploy, tofu, cluster, images, lint); renovate.json: weekly update PRs
 ```
 
 ## Hosts
 
-| Host | Arch | Role |
-|------|------|------|
-| `yenn` | x86_64 | laptop (Hyprland), LUKS + btrfs; `host-switch`, not a deploy node |
-| `geralt` | x86_64 | headless game streaming (Wolf + Moonlight), docker, libvirt; usually off |
-| `roach` | x86_64 | k3s agent |
-| `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool`, data pool `tank`), NFS server, Garage (S3: Velero, nix cache) |
-| `triss` | aarch64 | k3s server, Oracle Cloud instance (qemu guest) |
-| `alp` | x86_64 | installer ISO (`mkiso`), not in `nixosConfigurations` |
+| Host | Arch | Role | Deploy |
+|------|------|------|--------|
+| `yenn` | x86_64 | laptop (Hyprland), LUKS + btrfs | `host-switch` (not a deploy node) |
+| `geralt` | x86_64 | headless game streaming (Wolf + Moonlight), docker, libvirt; usually off | CI |
+| `roach` | x86_64 | k3s agent | `host-deploy` |
+| `regis` | x86_64 | k3s agent, encrypted ZFS (`rpool`, data pool `tank`), NFS server, Garage (S3: Velero, nix cache) | CI |
+| `triss` | aarch64 | k3s server, Oracle Cloud instance (qemu guest) | CI |
+| `alp` | x86_64 | installer ISO (`mkiso`), not in `nixosConfigurations` | none |
 
-`geralt`, `regis`, `roach` and `triss` are deploy-rs nodes: ssh as `maintenance`, passwordless sudo only for deploy-rs activation. Break-glass for `triss`: `ssh maintenance@141.147.2.187`; there `k3s.yaml` is root-only (`sudo kubectl`).
+Deploy nodes: ssh as `maintenance` (passwordless sudo only for deploy-rs). `triss` break-glass: `ssh maintenance@141.147.2.187`, then `sudo kubectl`.
 
-`geralt` runs [Wolf](https://github.com/games-on-whales/wolf) (`host/features/optional/wolf.nix`, state `/etc/wolf`; the pairing PIN URL is in `docker logs -f wolf`). Wake it with `wake-geralt` on `yenn` (`.link` changes apply only when the NIC appears: reboot once after deploying them). It suspends after 30 min without a stream or SSH login (`host/geralt/idle-suspend.nix`, `journalctl -u idle-suspend`); pause: `sudo systemd-run --unit=stay-awake systemd-inhibit --what=sleep sleep 4h` (cancel: `sudo systemctl stop stay-awake`).
+### geralt
 
-`regis` runs Garage (`host/regis/garage.nix`). Buckets are declared in `buckets` there (website, quota, and for each key exactly which of `read`, `write`, `owner` it gets); keys are the lines `<name> <id> <secret>` of `regis/GARAGE_KEYS` in the project `hosts`. `garage-provision` (`journalctl -u garage-provision`) applies both at boot and on each deploy that changes `buckets` or `GARAGE_KEYS`; if it failed (e.g. Garage came up late), `sudo systemctl restart garage-provision`. It rejects a key file with a malformed or duplicate line before changing anything, creates missing buckets, imports missing keys, sets exact grants between declared buckets and keys, and deletes keys of `GARAGE_KEYS` that no bucket uses (a deleted id can't be imported again). Buckets and keys made by hand (`artifacts`) are left alone, and buckets are never deleted: to remove one, drop it from `buckets`, deploy, empty it and `garage bucket delete --yes <bucket>`. To add a bucket, add a line to `regis/GARAGE_KEYS` (id `printf 'GK%s\n' "$(openssl rand -hex 12)"`, secret `openssl rand -hex 32`), add the bucket and deploy `regis`. To remove a key, drop it from `buckets` and deploy, then remove its line. To rotate a key, add a new line under a new name, point the bucket at it, deploy, switch the consumer, then drop the old name from `buckets` (the next deploy deletes the old key) and later its line. Consumers keep their own copy: Velero in the `cluster` items `velero/access_key_id` and `velero/secret_access_key`, CI in the GitHub environment `nix-cache`.
+- Wolf: `host/features/optional/wolf.nix`, state `/etc/wolf`, pairing URL in `docker logs -f wolf`.
+- Wake with `wake-geralt` on `yenn`; reboot once after `.link` changes.
+- Suspends after 30 min idle (`host/geralt/idle-suspend.nix`). Pause: `sudo systemd-run --unit=stay-awake systemd-inhibit --what=sleep sleep 4h`; cancel: `sudo systemctl stop stay-awake`.
 
-### geralt hardware
+| Component | Details |
+|-----------|---------|
+| CPU | AMD Ryzen 9 3900X (12C/24T), stock AMD Wraith Prism RGB cooler |
+| Motherboard | Gigabyte B450M DS3H (AM4), BIOS F41 |
+| RAM | 32 GB, 2x Kingston FURY Beast 16 GB DDR4-3600 CL18 (KF3600C18D4/16GX) in DIMM 1 of channels A and B; 2 of 4 slots used, max 128 GB |
+| GPU | Gigabyte Radeon RX 5500 XT OC 4G (GV-R55XTOC-4GD, Navi 14) |
+| SSD | Crucial P1 1 TB NVMe (CT1000P1SSD8) |
+| Ethernet | onboard Realtek RTL8111/8168 1 GbE, Wake-on-LAN, MAC `b4:2e:99:a4:86:1c` |
+| WiFi | TP-Link Archer T2U Nano USB (RTL8811AU, driver `rtw88_8821au`) |
+| PSU | 750 W, Corsair RM750x (model unverified) |
 
-- CPU: AMD Ryzen 9 3900X (12C/24T), stock AMD Wraith Prism RGB cooler
-- Motherboard: Gigabyte B450M DS3H (AM4), BIOS F41
-- RAM: 32 GB, 2x Kingston FURY Beast 16 GB DDR4-3600 CL18 (KF3600C18D4/16GX) in DIMM 1 of channels A and B; 2 of 4 slots used, max 128 GB
-- GPU: Gigabyte Radeon RX 5500 XT OC 4G (GV-R55XTOC-4GD, Navi 14)
-- SSD: Crucial P1 1 TB NVMe (CT1000P1SSD8)
-- Ethernet: onboard Realtek RTL8111/8168 1 GbE, Wake-on-LAN, MAC `b4:2e:99:a4:86:1c`
-- WiFi: TP-Link Archer T2U Nano USB (RTL8811AU, driver `rtw88_8821au`)
-- PSU: 750 W, Corsair RM750x (model unverified)
+### yenn
 
-### yenn hardware
+| Component | Details |
+|-----------|---------|
+| Model | Framework Laptop 13 (AMD Ryzen AI 300 Series), board FRANMGCP05, BIOS 03.05 (2025-10-30) |
+| CPU | AMD Ryzen AI 5 340 (6C/12T), iGPU Radeon 840M |
+| RAM | 16 GB, 1x ADATA 16 GB DDR5-5600 SODIMM (AD5S560016G-SFW) in channel B; 1 of 2 slots used, max 64 GB |
+| SSD | WD_BLACK SN7100 1 TB NVMe |
+| Display | 13.5" 2256x1504 |
+| WiFi/Bluetooth | MediaTek MT7925 (`mt7925e`) |
+| Battery | 61 Wh (FRANGWA) |
+| Other | Goodix fingerprint reader, Framework webcam module (2nd gen), HDMI expansion card |
 
-- Model: Framework Laptop 13 (AMD Ryzen AI 300 Series), board FRANMGCP05, BIOS 03.05 (2025-10-30)
-- CPU: AMD Ryzen AI 5 340 (6C/12T), iGPU Radeon 840M
-- RAM: 16 GB, 1x ADATA 16 GB DDR5-5600 SODIMM (AD5S560016G-SFW) in channel B; 1 of 2 slots used, max 64 GB
-- SSD: WD_BLACK SN7100 1 TB NVMe
-- Display: 13.5" 2256x1504
-- WiFi/Bluetooth: MediaTek MT7925 (`mt7925e`)
-- Battery: 61 Wh (FRANGWA)
-- Other: Goodix fingerprint reader, Framework webcam module (2nd gen), HDMI expansion card
+### regis
 
-### regis hardware
+| Component | Details |
+|-----------|---------|
+| Model | TerraMaster F4-425 Pro (board M-TWLN01), BIOS BJFX-TWLX-108 (2026-02-02) |
+| CPU | Intel Core i3-N305 (8C/8T), iGPU Intel UHD (`i915`) |
+| RAM | 8 GB, 1x Shenzhen Zhongteng 8 GB DDR4-3200 SODIMM (no part number) in Controller0-ChannelA-DIMM0; 1 of 2 slots used, max 64 GB |
+| SSD | Samsung 990 PRO 1 TB NVMe (`rpool`) |
+| HDD | 2x Seagate IronWolf Pro 18 TB (ST18000NE000), ZFS mirror (`tank`); 2 of 4 bays used |
+| Ethernet | 2x onboard Realtek RTL8126 5 GbE (out-of-tree `r8126`), MACs `6c:bf:b5:05:77:88`, `6c:bf:b5:05:77:89` |
 
-- Model: TerraMaster F4-425 Pro (board M-TWLN01), BIOS BJFX-TWLX-108 (2026-02-02)
-- CPU: Intel Core i3-N305 (8C/8T), iGPU Intel UHD (`i915`)
-- RAM: 8 GB, 1x Shenzhen Zhongteng 8 GB DDR4-3200 SODIMM (no part number) in Controller0-ChannelA-DIMM0; 1 of 2 slots used, max 64 GB
-- SSD: Samsung 990 PRO 1 TB NVMe (`rpool`)
-- HDD: 2x Seagate IronWolf Pro 18 TB (ST18000NE000), ZFS mirror (`tank`); 2 of 4 bays used
-- Ethernet: 2x onboard Realtek RTL8126 5 GbE (out-of-tree `r8126`), MACs `6c:bf:b5:05:77:88`, `6c:bf:b5:05:77:89`
+#### Garage
+
+Buckets: `buckets` in `host/regis/garage.nix`. Keys: lines `<name> <id> <secret>` of `regis/GARAGE_KEYS` (project `hosts`). `garage-provision` applies both on deploy (`journalctl -u garage-provision`; retry `sudo systemctl restart garage-provision`).
+
+| Operation | Steps |
+|-----------|-------|
+| Add bucket or key | add a `GARAGE_KEYS` line (id `printf 'GK%s\n' "$(openssl rand -hex 12)"`, secret `openssl rand -hex 32`), add bucket or grant to `buckets`, deploy `regis` |
+| Remove key | drop it from `buckets`, deploy (key deleted, id can't be re-imported), remove its line |
+| Rotate key | add a line under a new name, point the bucket at it, deploy, switch the consumer, drop the old name, deploy, remove the old line |
+| Remove bucket | drop it from `buckets`, deploy, empty it, `garage bucket delete --yes <bucket>` |
+
+- Key copies: Velero in `cluster` items `velero/access_key_id`, `velero/secret_access_key`; CI in GitHub environment `nix-cache`.
 
 ## Dev shell
 
-`devenv` is loaded by direnv, or run `devenv shell`. Scripts that build host secrets need `BWS_ACCESS_TOKEN` (machine account `ci-hosts`, or a local token).
+Secret scripts need `BWS_ACCESS_TOKEN` (machine account `ci-hosts`, or a local token).
 
 | Script | What it does |
 |--------|--------------|
-| `host-switch [action]` | `nixos-rebuild <action>` (default `switch`) of the current host |
-| `host-deploy <node...>` | deploy-rs to the given nodes |
+| `host-switch [action]` | `nixos-rebuild <action>` (default `switch`) of this host |
+| `host-deploy <node...>` | deploy-rs to the nodes |
 | `install-remote <host> <user@ip>` | first install with nixos-anywhere + disko |
-| `secrets-build <outdir> <host...>` | build encrypted sops files from the project `hosts` |
-| `mkiso` / `writeiso /dev/XXX` | build the `alp` installer ISO / write it to a device |
+| `secrets-build <outdir> <host...>` | build sops files from the project `hosts` |
+| `mkiso` / `writeiso /dev/XXX` | build the `alp` ISO / write it |
 | `tofu <args>` | OpenTofu in `tofu/`; `fmt`, `version`, `validate`, `init -backend=false` need no token |
 
 ## Installing a new host
 
-1. Add `host/<name>/default.nix`, an entry in `nixosConfigurations` (and `deploy.nodes` for remote deploys) and a disko layout from `host/features/disko/` (custom: `host/regis/storage.nix`).
-2. Generate the ssh host key, which is also the host's sops identity:
+1. Add `host/<name>/default.nix`, a `nixosConfigurations` entry (and `deploy.nodes`) and a disko layout (`host/features/disko/`, `host/regis/storage.nix`).
+2. Generate the host key (also its sops identity):
    ```sh
    ssh-keygen -t ed25519 -N "" -f host/<name>/ssh_host_ed25519_key
    ssh-to-age < host/<name>/ssh_host_ed25519_key.pub
    ```
-   Commit only the `.pub`. Put the private half in the project `hosts` as `<name>/HOST_SSH_ED25519_PRIV` and delete the local file after installing (git-ignored).
-3. Add the age key to `.sops.yaml` (an anchor under `&hosts` and a `host/<name>/.+$` creation rule) and a `[profiles.<name>]` to `secretspec.toml`; create the secrets in the project `hosts` as `<name>/<KEY>`.
-4. Boot the target from the ISO (`mkiso`, `writeiso`). It joins tailscale with an auth key from `host/alp/key` (git-ignored, create it in the Tailscale console) and accepts `yenn`'s user key over ssh.
-5. A host with a ZFS pool needs `host/<name>/disk.key` (git-ignored; `regis`: `dd if=/dev/urandom of=host/regis/disk.key bs=32 count=1`).
-6. `install-remote <name> root@<ip>` builds the secrets, copies the host key and the disk key to the new disk and runs nixos-anywhere.
-7. Servers (importing `tailscale-server.nix`) join the tailnet on first boot as `tag:server` with `tailscale/TAILSCALE_AUTH_KEY` (project `hosts`). A k3s node is installed without `k3s.nix` first; then add its tailnet IP (`tailscale ip -4`) to `ips` in `host/features/optional/k3s.nix`, import it and `host-deploy` it.
+   Commit only `.pub`; store the private half as `<name>/HOST_SSH_ED25519_PRIV` in project `hosts`, delete the local file.
+3. Add the age key to `.sops.yaml` (anchor under `&hosts`, rule `host/<name>/.+$`) and `[profiles.<name>]` to `secretspec.toml`; create `<name>/<KEY>` items.
+4. Boot the ISO (`host/alp/key` is a git-ignored Tailscale auth key).
+5. ZFS host: create `host/<name>/disk.key` (git-ignored; `regis`: `dd if=/dev/urandom of=host/regis/disk.key bs=32 count=1`).
+6. `install-remote <name> root@<ip>`.
+7. Servers join as `tag:server` with `tailscale/TAILSCALE_AUTH_KEY`. K3s node: install without `k3s.nix`, add `tailscale ip -4` to `ips` in `host/features/optional/k3s.nix`, `host-deploy`.
 
 ## Updating hosts
 
@@ -102,144 +201,199 @@ host-switch test       # any nixos-rebuild action
 host-deploy geralt roach
 ```
 
-CI deploys on merge (`.github/workflows/deploy.yml`) and builds every host on PRs (`hosts.yml`). Offline hosts are skipped; re-running an old run redeploys that old commit. The deploy job reads the `ci` profile (ssh key, Tailscale OAuth client with scope `auth_keys`, tag `tag:ci`) from the project `hosts`; the GitHub environment `deploy` (branch `main`) holds `BWS_ACCESS_TOKEN` of `ci-hosts`.
+- CI deploys `geralt`, `regis`, `triss` on merge (`deploy.yml`) and builds every host on PRs (`hosts.yml`); re-running an old run redeploys that commit.
+- Deploy reads profile `ci` from project `hosts`; GitHub environment `deploy` holds `BWS_ACCESS_TOKEN` of `ci-hosts`.
 
 ## Secrets
 
-Modules never talk to sops directly:
-
-- `modules/host/secrets.nix` defines `config.secrets.<name>` with `owner`, `group`, `mode`, `neededForUsers` and `path` (default `/run/secrets/<name>`). Consumers read only `.path`. `profile` (default: the host's name) names the profile of a secret that lives elsewhere, e.g. `dijkstra`.
-- `host/features/global/sops.nix` is the only place that knows about sops-nix; it reads `<host>.yaml` from the `secrets` flake input. The age identity is the host's ssh key under `/persist/data/etc/ssh/`.
-- `secretspec.toml` is the inventory: the profile named after the host lists its secrets as uppercased names; evaluation fails if modules and profile diverge (names match `^[a-z0-9_]+$`). `ci` and `tofu` are used by no host.
-- Values live in the project `hosts`, named `<profile>/<KEY>` (case-insensitive). `tofu` has its own project with plain key names.
-
-`secrets-build <outdir> <host...>` keeps exactly the declared secrets, checks the ssh private keys against the `.pub` files and the host's age key against `.sops.yaml`, hashes `USERS_*_PASSWORD`, and writes `<outdir>/<host>.yaml` encrypted for the host. The `secrets` flake input is `path:./secrets-stub`; the scripts pass `--override-input secrets path:<outdir>`. By hand:
-
-```sh
-secrets-build /tmp/s geralt
-nixos-rebuild build --flake .#geralt --override-input secrets path:/tmp/s
-```
+- `config.secrets.<name>` (`modules/host/secrets.nix`): read only `.path`; `profile` picks another profile (e.g. `dijkstra`).
+- `host/features/global/sops.nix` reads `<host>.yaml` from the `secrets` input (`path:./secrets-stub`).
+- `secretspec.toml`: uppercased names per profile; evaluation fails on a mismatch.
+- Items: `<profile>/<KEY>` in project `hosts`; project `tofu` has plain names.
+- `secrets-build <outdir> <host...>` writes `<outdir>/<host>.yaml`; scripts pass `--override-input secrets path:<outdir>`. By hand:
+  ```sh
+  secrets-build /tmp/s geralt
+  nixos-rebuild build --flake .#geralt --override-input secrets path:/tmp/s
+  ```
 
 ### Adding a secret
 
-1. Declare it in the module and read its path (`neededForUsers = true` for anything read while users are created):
+1. Declare it and read its path (`neededForUsers = true` if read at user creation):
    ```nix
    secrets.myservice_token = { owner = "myservice"; mode = "0400"; };
    services.myservice.tokenFile = config.secrets.myservice_token.path;
    ```
-2. Add `MYSERVICE_TOKEN = { description = "...", required = true }` to `[profiles.<host>]` in `secretspec.toml` for every host importing the module.
-3. Create `<host>/MYSERVICE_TOKEN` in the project `hosts`.
-4. Check with `nix eval .#nixosConfigurations.geralt.config.secrets --apply builtins.attrNames`, then `host-deploy geralt`.
+2. Add `MYSERVICE_TOKEN = { description = "...", required = true }` to `[profiles.<host>]` in `secretspec.toml`.
+3. Create `<host>/MYSERVICE_TOKEN` in project `hosts`.
+4. Dry-run build (`<dir>` holds an empty `<host>.yaml`), then `host-deploy geralt`:
+   ```sh
+   mkdir -p /tmp/s && touch /tmp/s/geralt.yaml
+   nix build --dry-run .#nixosConfigurations.geralt.config.system.build.toplevel --override-input secrets path:/tmp/s
+   ```
 
 ## Persistence
 
-Root is rolled back on every boot; state survives only in `/persist`, managed by `modules/host/persist.nix` (impermanence).
+Root is rolled back every boot (`modules/host/persist.nix`); only `/persist` survives.
 
 | Option | Meaning |
 |--------|---------|
-| `persist.enable` | turn the rollback and bind mounts on |
-| `persist.deviceService`, `persist.rootPath` | device unit to wait for (e.g. `dev-nvme0n1p2.device`); device holding the root |
-| `persist.isCrypted` / `persist.isZfs` | also wait for `cryptsetup.target` / roll back ZFS instead of btrfs |
-| `persist.data.{directories,files}` | state worth keeping, under `/persist/data` |
-| `persist.generated.{directories,files}` | state that can be regenerated, under `/persist/generated` (always includes `/var/log`, `/var/lib/nixos`, `/var/lib/systemd`, `/etc/machine-id`) |
-| `persist.users.<user>.{data,generated}` | the same, relative to the user's home, e.g. `persist.users.nikodem.data.directories = [ "projects" ]` |
+| `persist.enable` | rollback and bind mounts on |
+| `persist.deviceService`, `persist.rootPath` | device unit (e.g. `dev-nvme0n1p2.device`); root device |
+| `persist.isCrypted` / `persist.isZfs` | wait for `cryptsetup.target` / ZFS rollback |
+| `persist.data.{directories,files}` | kept state, `/persist/data` |
+| `persist.generated.{directories,files}` | regenerable state, `/persist/generated` |
+| `persist.users.<user>.{data,generated}` | same, relative to the home |
 
-On btrfs the old `root` is kept in `old_roots/<timestamp>` for 30 days; on ZFS the rollback is `zfs rollback -r rpool/root@blank` (snapshot made by disko, `host/regis/storage.nix`).
+Rollback: btrfs keeps old roots in `old_roots/<timestamp>` 30 days; ZFS `zfs rollback -r rpool/root@blank` (`host/regis/storage.nix`).
 
 ## Packages
 
-`pkgs/<name>/default.nix` wraps an upstream package together with its config (`symlinkJoin` + `makeWrapper`; see `pkgs/rofi`). To add one: create `pkgs/<name>/`, register it in `pkgs/default.nix` (`<name> = pkgs.callPackage ./<name> {<name> = prev.<name>;};`) and use it as `pkgs.<name>`. Every derivation of that set is a flake package (`nix build .#<name>`; event handlers: `.#event-handlers.<name>`).
-
-Apps that keep state in `$HOME` (`bitwarden-cli`, `gh`, `glab`, `heroic`, `moonlight-qt`, `obsidian`, `prismlauncher`, `zen-browser`) take an optional `dataDir` (`.override {dataDir = "/persist/generated/home/<user>/<app>";}`): `jail` then points their state at a persisted path. `claude` is customised with `.extend {...}`, see `pkgs/claude/README.md`.
+- Add: `pkgs/<name>/default.nix`, register in `pkgs/default.nix` (`<name> = pkgs.callPackage ./<name> {<name> = prev.<name>;};`); build `nix build .#<name>` (handlers: `.#event-handlers.<name>`).
+- `dataDir` for `bitwarden-cli`, `gh`, `glab`, `heroic`, `moonlight-qt`, `obsidian`, `prismlauncher`, `zen-browser`: `.override {dataDir = "/persist/generated/home/<user>/<app>";}`.
+- `claude`: `.extend {...}`, see `pkgs/claude/README.md`.
 
 ### Tools
 
-Own programs (`nix build .#<name>`):
-
 | Package | What it is |
 |---------|------------|
-| `secrets-build`, `bws-project`, `bws`, `infra-tofu` | Bitwarden Secrets Manager tooling: host sops files, a project as JSON, the `bws` CLI, OpenTofu with the profile `tofu` |
-| `jj-upload`, `forge` | stacked merge/pull requests from a jj stack; the forge (GitLab, GitHub) client, incl. draft reviews (`forge pr review`: GitLab draft notes, GitHub pending review; the user publishes) |
-| `jw` | jj workspaces at `<repo>.agents/<name>` under `projectsRoot` (default `~/projects`); `jw agent` runs Claude in a new workspace and shpool session (with `--reports-to` a headless worker: a user unit per turn), `jw mate` starts a first mate in `<projectsRoot>/mate` (`jw --help`) |
-| `event-bus` | events over plain NATS (`$NATS_URL`): `event-pub TYPE` publishes JSON from stdin on `events.TYPE`; `event-subscribe HANDLER SUBJECT...` runs HANDLER per event |
-| `event-handlers` | user service, one `event-subscribe` per line of `pkgs/event-handlers/handlers` (subjects stay under `events.`) |
-| `agent-task`, `claude-hooks`, `claude-statusline`, `agent-skills` | agent tooling: task capture publishing `task.new`; claude's hooks, status line and skills |
-| `plan-review` | plan reviews: `plan-review publish <file> "<title>"` shows an agent's HTML plan in the browser, the feedback goes back to its session (see Plan reviews) |
-| `matrix-gateway`, `matrix-inbox`, `matrix-gateway-image` | Matrix bridge of the NATS hub (in the cluster) and its client on `yenn` that runs the signed `!host` commands; CI publishes the image to `ghcr.io/nikodemmarek/matrix-gateway` |
-| `tm`, `dictate`, `dictate-type`, `wallpaper` | task list CLI (`$TM_FILE`); microphone to text via the local whisper server; types the dictation into the focused window (SUPER+D toggles); the wallpaper image |
-| `jail` | a function: `jail <package> {ENV_VAR = "/abs/path";}` runs every binary with those env vars set |
+| `jj-upload`, `forge` | stacked MRs from jj; GitLab/GitHub client |
+| `jw` | agent workspaces and sessions (`jw --help`) |
+| `event-bus` | `event-pub TYPE`, `event-subscribe HANDLER SUBJECT...` over NATS |
+| `event-handlers` | user service running `pkgs/event-handlers/handlers` |
+| `agent-task`, `claude-hooks`, `claude-statusline`, `agent-skills` | task capture, Claude hooks, status line, skills |
+| `plan-review` | HTML plan reviews in the browser |
+| `matrix-gateway`, `matrix-inbox` | Matrix bridge of the hub; signed `!host` commands on `yenn` |
+
+### Agents and events
+
+```mermaid
+flowchart LR
+  user(["Matrix user"])
+  subgraph cl["Cluster"]
+    syn["Synapse: agents, mail, alerts rooms"]
+    gw["matrix-gateway"]
+    hub["NATS hub: nats on triss"]
+    src["mail-hook, Grafana alerts"]
+  end
+  subgraph yn["yenn"]
+    leaf["nats-server: rootless podman, JetStream"]
+    inbox["matrix-inbox"]
+    task["event-handler-task"]
+    jw["jw agent session"]
+  end
+  user --> syn --> gw
+  gw -->|"matrix.command.yenn, signed"| hub
+  src -->|"matrix.send"| hub
+  hub -->|"matrix.send"| gw
+  hub <-->|"leafnode over WireGuard"| leaf
+  leaf --> inbox --> task --> jw
+  inbox -->|"matrix.send reply"| leaf
+  gw -->|"post"| syn
+```
+
+- Leaf link (`pkgs/nats-server/nats.conf`) denies `events.>`, `$SYS.>`, `$JS.>`, `$KV.>`, `$O.>`, `_INBOX.>`: events stay on `yenn`.
+- `matrix-inbox` is a second `event-handlers` instance (`matrix.command.yenn`), verifies `pkgs/matrix-inbox/gateway.pub`.
+
+| Subject | Handler | Does |
+|---------|---------|------|
+| `events.task.new` | `task` | `jw agent -d`, then `task.started` or `task.failed` |
+| `events.task.failed` | `notify-normal` | desktop notification |
+| `events.backup.>` | `notify-critical` | critical notification |
+| `events.claude.waiting`, `events.session.result` | `report` | message to the supervisor session |
+| `events.forge.>` | `forge` | message to the MR's session |
+| `events.review.requested` | `review-intake` | notification that opens the review |
+| `events.review.submitted` | `review` | feedback message to the session |
 
 ### Plan reviews
 
-An agent renders a plan as a self-contained HTML page (the `visual-plan` skill) and runs `plan-review publish <file> "<title>"` (the session is `$AGENT_SESSION`). The user gets a desktop notification, opens the page, annotates elements, text and table cells, answers its form controls, types a message and sends; the session receives the feedback as a message, revises the page and publishes it again as the next revision. `plan-review list` prints the open and sent reviews with their URLs. The page and a JSON API (`POST /api/publish`, `GET /api/reviews`, `GET /api/feedback/<review>/<revision>`) are served on `127.0.0.1:4388` by the rootless podman container `plan-review` (`podman-plan-review.service`); state (revisions and feedback) is in its podman volume `plan-review` and only the server touches it. The commands `publish`, `list` and the event handler `notice` talk to the server over HTTP, so it must be running (`cannot reach the plan-review server` otherwise); the review.requested event carries the page token, and the feedback message points at `curl -s http://127.0.0.1:4388/api/feedback/<review>/<revision> | jq -r .text` for the untruncated text.
+```mermaid
+flowchart LR
+  s["agent session"]
+  srv["plan-review container: 127.0.0.1:4388"]
+  nats["local NATS"]
+  eh["event-handlers"]
+  u(["user: browser"])
+  s -->|"publish, list: HTTP"| srv
+  srv -->|"review.requested"| nats --> eh
+  eh -->|"notification, Open"| u
+  u -->|"annotations, message"| srv
+  srv -->|"review.submitted"| nats
+  eh -->|"notice: GET feedback, jw msg"| s
+```
+
+- `plan-review publish <file> "<title>"` (session `$AGENT_SESSION`); `plan-review list` shows reviews.
+- Server: `podman-plan-review.service`, `127.0.0.1:4388`, volume `plan-review`; API `POST /api/publish`, `GET /api/reviews`, `GET /api/feedback/<review>/<revision>`. It must run, else `cannot reach the plan-review server`.
+- Full feedback: `curl -s http://127.0.0.1:4388/api/feedback/<review>/<revision> | jq -r .text`.
 
 ## External infrastructure
 
-OpenTofu in `tofu/` manages what lives outside the repo. State is in the private bucket `tofu-state` on Oracle Cloud (no locking: one apply at a time); secrets come from the project `tofu`.
+OpenTofu in `tofu/`; state in bucket `tofu-state` on Oracle Cloud (no locking), secrets from project `tofu`.
 
-- Managed: Cloudflare zone `nkmrk.com` (DNS in `tofu/cloudflare.tf`, mail Worker and Email Routing of `t.nkmrk.com` in `tofu/mail.tf`; not in the dashboard), the tailnet policy and DNS settings, Oracle Cloud `triss` (instance, VCN, subnet, security list, internet gateway, route table), the state bucket and the budget.
-- Manual: API tokens and keys, the Tailscale OAuth clients, the cloudflared tunnel, Mullvad, Matrix users, GitHub.
-
-Merging to `main` plans and applies (GitHub environment `tofu`, `BWS_ACCESS_TOKEN` of a read-only machine account). A plan that deletes or replaces anything fails the job: apply it locally after reading the plan, not while the workflow runs.
-
-- To stop managing a resource use `removed { from = ... lifecycle { destroy = false } }`, never just delete the block.
-- Drift: `tofu plan -detailed-exitcode` (exit 2 means changes). Providers come from the OpenTofu registry, pinned in the committed `tofu/.terraform.lock.hcl` (Renovate bumps it); to upgrade by hand: `tofu init -upgrade -backend=false`, commit the lock file.
-- Importing: `import` blocks in `tofu/imports-<provider>.tf`, `tofu plan -generate-config-out=generated.tf` (git-ignored), move the resources into `tofu/<provider>.tf`, apply, delete the imports file.
-- Tailscale: edit the policy only in `tofu/tailscale-policy.json` (console edits are reverted; its `tests` block rejects a policy that breaks server connectivity). Break-glass if an apply locks the cluster out: the console's JSON editor (Access controls).
-- Oracle Cloud: the public IP of `triss` is ephemeral and not managed. `oci.tf` holds every rule of the default security list and route table (console-added ones are removed); keep TCP 22, UDP 51820 (WireGuard hostPort) and the default route. The budget mails as soon as the tenancy spends anything.
+- Managed: Cloudflare zone `nkmrk.com` (`tofu/cloudflare.tf`, mail in `tofu/mail.tf`), tailnet policy and DNS, Oracle `triss` with its network, the state bucket, the budget.
+- Manual: API tokens, Tailscale OAuth clients, cloudflared tunnel, Mullvad, Matrix users, GitHub.
+- Merge to `main` plans and applies (environment `tofu`); a plan with deletes or replaces fails: apply it locally.
+- Stop managing: `removed { from = ... lifecycle { destroy = false } }`.
+- Drift: `tofu plan -detailed-exitcode`; lock upgrade: `tofu init -upgrade -backend=false`.
+- Import: `tofu/imports-<provider>.tf`, `tofu plan -generate-config-out=generated.tf`, move into `tofu/<provider>.tf`, apply, delete the imports file.
+- Tailscale policy: only `tofu/tailscale-policy.json`; lock-out break-glass: console JSON editor.
+- Oracle: `oci.tf` holds all rules; keep TCP 22, UDP 51820, default route.
 
 ## Cluster
 
-`clusters/dijkstra` is a k3s cluster over tailscale: `triss` is the server (traefik and cloud controller disabled), `roach` and `regis` are agents joining it through its tailscale address. Node config is `host/features/optional/k3s.nix` plus the per-host `services.k3s` blocks; the token is `dijkstra/K3S_TOKEN` in the project `hosts`.
-Flux, bootstrapped in `clusters/dijkstra/flux-system`, watches `main` of the GitHub repo and applies `./clusters/dijkstra`. The domain is the Flux variable `DOMAIN` (`flux-system/kustomization.yaml`); resources with shell `$` carry the `kustomize.toolkit.fluxcd.io/substitute: disabled` annotation.
+- k3s over tailscale: `triss` server, `roach`/`regis` agents; `host/features/optional/k3s.nix`, token `dijkstra/K3S_TOKEN` (project `hosts`).
+- Flux applies `main` to `./clusters/dijkstra`; variable `DOMAIN`; resources with shell `$` need `kustomize.toolkit.fluxcd.io/substitute: disabled`.
 
 ### Cluster apps
 
-Each app is a directory under `clusters/dijkstra/`; shared: `storageclass.yaml`.
-
 | App | What it is | Notes |
 |-----|------------|-------|
-| `arrstack` | sonarr, radarr, lidarr, prowlarr, bazarr, qbittorrent (via gluetun/Mullvad), beets, flaresolverr | scaled by KEDA |
-| `cloudflare` | cloudflared tunnel | only hostnames in `cloudflared.yaml` are public |
-| `cnpg` | CloudNativePG operator | webhooks `failurePolicy: Fail`, see Break-glass |
-| `dns` | split-DNS for `nkmrk.com` at `10.43.0.53` (also `<service>.<namespace>.svc.cluster.local`) | |
-| `immich`, `navidrome` | photos; Navidrome with `audiomuse-ai` | databases `immich-postgres`, `audiomuse-postgres` (see Backups); AudioMuse-AI settings live in its own DB (web UI) |
-| `mail-hook` | mail to `t.nkmrk.com` (Cloudflare Email Worker `tofu/mail-worker.js`) as posts in `#mail` | `mail-hook/mail_hook_token` (project `cluster`) must equal `TF_VAR_mail_hook_token` (project `tofu`): rotate both, then `tofu apply` |
-| `matrix` | private non-federated Synapse (`matrix.nkmrk.com`), mautrix bridges (`whatsapp`, `meta`), `gateway` (`matrix-gateway`, bot `@agents`, rooms `#agents`, `#mail`, `#alerts`) | create users: `kubectl -n matrix exec -it deploy/synapse -- register_new_matrix_user -c /config/homeserver.yaml http://localhost:8008` (secret `matrix/registration_shared_secret`); DB `matrix-postgres`; anything on the hub can post into `#agents` as `@agents`: never type secrets there |
-| `monitoring` | VictoriaMetrics (single, `victoria-metrics-single`) and kube-state-metrics on `triss`, 1 year retention, PVC `victoria-metrics` (`backup: skip`) | write endpoint `http://100.97.10.25:8428/api/v1/write`, open to the whole tailnet and every pod; VM scrapes the kubelet and cAdvisor of every node, plus any pod or Service annotated `prometheus.io/scrape: "true"` (optional `prometheus.io/port`, `prometheus.io/path`); targets: `kubectl -n monitoring port-forward svc/victoria-metrics-single-server 8428` then `/targets`; Loki (plain manifests, `monitoring/loki`) keeps logs 7 days on a 20Gi volume (`backup: skip`), push endpoint `http://100.97.10.25:3100/loki/api/v1/push`, same open access; every host runs Alloy (`host/features/global/monitoring.nix`): journald, `/var/log/pods` on k3s nodes (query strings stripped from Traefik and Jellyfin lines) and node metrics; Grafana at `grafana.${DOMAIN}` (internal), user `admin`, password `monitoring/grafana_admin_password` in BW project `cluster`; dashboards are vendored JSON in `monitoring/grafana/dashboards` |
-| `nats` | hub `yenn` joins as a leafnode over WireGuard (its local server runs in rootless podman with JetStream, which stays local); single replica on `triss`, no JetStream | a new client namespace must be added to the NetworkPolicy |
-| `omniverse` | git-sync, WebDAV, radicale (CalDAV) | calendar subscriptions: secret `omniverse/calendar_subscriptions`; refresh now: `kubectl -n omniverse create job --from=cronjob/calendar-subscriptions refresh-now` |
-| `wireguard` | VPN server on `triss`, egress via Mullvad (`wireguard/mullvad_*` in project `cluster`; without it peers have no internet) | limited peers `10.13.13.2-127` reach only `*.nkmrk.com`, the cluster DNS and the internet; full peers `10.13.13.128-254` also the pod and service networks. New peer: add a `[Peer]` with the next free `10.13.13.N/32` to `wg0.conf`; client `DNS = 10.43.0.53`, `MTU = 1200`, `Endpoint = vpn.nkmrk.com:51820`. `yenn` is a peer (`host/yenn/wireguard.nix`): tunnel down means no internet (`sudo networkctl down wg0` / `up`) |
+| `arrstack` | sonarr, radarr, lidarr, prowlarr, bazarr, qbittorrent (gluetun/Mullvad), beets, flaresolverr | KEDA-scaled |
+| `cloudflare` | cloudflared tunnel | public hostnames in `cloudflared.yaml` |
+| `cnpg` | CloudNativePG operator | see Break-glass |
+| `dns` | split DNS for `nkmrk.com` at `10.43.0.53` | |
+| `immich`, `navidrome` | photos; Navidrome + `audiomuse-ai` | DBs `immich-postgres`, `audiomuse-postgres` |
+| `mail-hook` | mail to `t.nkmrk.com` as posts in `#mail` | `tofu/mail-worker.js` |
+| `matrix` | Synapse, mautrix `whatsapp`/`meta`, `gateway` | DB `matrix-postgres` |
+| `monitoring` | VictoriaMetrics, kube-state-metrics, Loki, Grafana | |
+| `nats` | hub on `triss`, no JetStream | new client namespace: add to NetworkPolicy |
+| `omniverse` | git-sync, WebDAV, radicale | |
+| `wireguard` | VPN on `triss`, Mullvad egress | |
 
-Others: `cert-manager` (Let's Encrypt wildcard), `cron`, `external-secrets`, `intel-gpu-plugin`, `jellyfin` (with seerr), `keda`, `ollama`, `openebs`, `proxy` (traefik, gateway), `velero`, `webdav` (books).
+Others: `cert-manager`, `cron`, `external-secrets`, `intel-gpu-plugin`, `jellyfin` (with seerr), `keda`, `ollama`, `openebs`, `proxy` (traefik, gateway), `velero`, `webdav`.
 
-Internal services (`<name>.nkmrk.com`, gateway `internal` listener, full WireGuard peers only, HTTPS): a new name needs an HTTPRoute on `sectionName: internal` and an entry in the `dns` Corefile. `bazarr` and `prowlarr` go through the KEDA interceptor (`keda/httproute.yaml`), so their host is also listed in their `HTTPScaledObject`.
+Internal service (`<name>.nkmrk.com`, listener `internal`): HTTPRoute with `sectionName: internal` plus an entry in the `dns` Corefile; via KEDA (`bazarr`, `prowlarr`) also its `HTTPScaledObject` host.
+
+#### App notes
+
+- wireguard: Mullvad items `wireguard/mullvad_*`; peers `10.13.13.2-127` limited, `10.13.13.128-254` full; new peer: next free `10.13.13.N/32` in `wg0.conf`, client `DNS = 10.43.0.53`, `MTU = 1200`, `Endpoint = vpn.nkmrk.com:51820`; `yenn` is a peer: `sudo networkctl down wg0` / `up`.
+- matrix: new user: `kubectl -n matrix exec -it deploy/synapse -- register_new_matrix_user -c /config/homeserver.yaml http://localhost:8008` (`matrix/registration_shared_secret`); bot `@agents`, rooms `#agents`, `#mail`, `#alerts`; never type secrets in `#agents`.
+- mail-hook: `mail-hook/mail_hook_token` (`cluster`) must equal `TF_VAR_mail_hook_token` (`tofu`).
+- omniverse: `omniverse/calendar_subscriptions`; refresh: `kubectl -n omniverse create job --from=cronjob/calendar-subscriptions refresh-now`.
+- monitoring: write `http://100.97.10.25:8428/api/v1/write`, Loki push `http://100.97.10.25:3100/loki/api/v1/push`; scrape pods with `prometheus.io/scrape: "true"` (`prometheus.io/port`, `prometheus.io/path`); targets: `kubectl -n monitoring port-forward svc/victoria-metrics-single-server 8428`, `/targets`; Alloy on every host (`host/features/global/monitoring.nix`); Grafana `grafana.${DOMAIN}`, user `admin`, `monitoring/grafana_admin_password`, dashboards in `monitoring/grafana/dashboards`; PVCs `victoria-metrics`, Loki `backup: skip`.
 
 ### Kubernetes secrets
 
-The Secret `secrets` of a namespace comes from the ExternalSecret in `clusters/dijkstra/<ns>/external-secret.yaml`, which reads the project `cluster` through the ClusterSecretStore `bitwarden` (read-only machine account `eso`). BWS secrets are named `<ns>/<key>`, lowercase (the case matters here). The ESO access token is `dijkstra/ESO_BWS_TOKEN` in the project `hosts`, applied by `triss` (`services.eso-bws-token`).
+ExternalSecret `clusters/dijkstra/<ns>/external-secret.yaml` builds Secret `secrets` from project `cluster` (ClusterSecretStore `bitwarden`, account `eso`); items `<ns>/<key>`, lowercase. Token: `dijkstra/ESO_BWS_TOKEN` (project `hosts`), applied by `triss` (`services.eso-bws-token`).
 
-1. Create the secret `<ns>/<key>` in the project `cluster`.
-2. Add `- secretKey: <key>` with `remoteRef: {key: <ns>/<key>}` to the `data` of the ExternalSecret.
-3. Reference it in the manifests as secret `secrets`, key `<key>`.
+1. Create item `<ns>/<key>` in project `cluster`.
+2. Add `- secretKey: <key>` with `remoteRef: {key: <ns>/<key>}` to the ExternalSecret `data`.
+3. Reference secret `secrets`, key `<key>`.
 
-Composed values (e.g. the appservice registrations of `matrix`) are rendered in `spec.target.template`. Changes apply within 15 minutes; to apply now (then delete the pod if the app reads the secret at startup):
+Sync now (then delete the pod if it reads the secret at startup):
 
 ```sh
 kubectl -n <ns> annotate externalsecret secrets force-sync=$(date +%s) --overwrite
 ```
 
-After rotating the ESO token, deploy `triss` and restart `eso-bws-token.service` there.
-
-A fresh cluster: k3s and `triss` (applies the ESO token), `flux bootstrap`, then `kubectl apply -f` `clusters/dijkstra/cert-manager/` and `clusters/dijkstra/external-secrets/{namespace,helm,sdk-server}.yaml` by hand (Flux fails on the whole tree until the ExternalSecret, ClusterSecretStore and Certificate CRDs exist), wait until their HelmReleases are Ready, then reconcile.
+- Rotated ESO token: deploy `triss`, restart `eso-bws-token.service`.
+- Fresh cluster: k3s and `triss`, `flux bootstrap`, `kubectl apply -f` `clusters/dijkstra/cert-manager/` and `clusters/dijkstra/external-secrets/{namespace,helm,sdk-server}.yaml`, wait for Ready, reconcile.
 
 ### Nix cache
 
-CI shares a binary cache in the Garage bucket `nix-cache` on `regis`: `http://nix-cache:3902`, read anonymously over Garage's web endpoint, reachable only over the tailnet and the cluster (the workflows map `nix-cache` to `100.100.215.91` in `/etc/hosts`). Paths are signed with `nix-cache-1`; hosts trust it through `host/features/global/nix.nix` (all but `triss`), the workflows through `extra_nix_config` in `hosts.yml` and `deploy.yml`.
-
-- Only `hosts.yml` uploads, from the builds with placeholder secrets on push to `main`, over the S3 API on port 3900. The GitHub environment `nix-cache` (`main` only) holds exactly `NIX_CACHE_SIGNING_KEY`, `NIX_CACHE_ACCESS_KEY_ID` and `NIX_CACHE_SECRET_ACCESS_KEY`, nothing else. The repo secrets `TS_CACHE_OAUTH_CLIENT_ID` and `TS_CACHE_OAUTH_SECRET` are a Tailscale OAuth client (scope `auth_keys`, tag `tag:ci-cache` only). `deploy.yml` only reads.
-- Accepted risk: a push to `main` can sign paths that every host trusts, including `yenn` and `roach`. Recovery: generate `nix-cache-2`, replace the public key in all three places and the `NIX_CACHE_SIGNING_KEY` secret (and Bitwarden), empty the bucket, then redeploy every host: `deploy.yml` covers `geralt`, `regis` and `triss`; run `host-switch` on `yenn` and `host-deploy roach`.
-- The bucket has a 200 GiB quota. If it is full or broken, empty it with a temporary key; the next push to `main` uploads everything again. The `garage` commands run on `regis`; `aws` runs anywhere on the tailnet with the id and secret that `key create` printed:
+- Bucket `nix-cache` on `regis`: `http://nix-cache:3902` (workflows map it to `100.100.215.91`), key `nix-cache-1`; trust in `host/features/global/nix.nix` (not `triss`), `hosts.yml`, `deploy.yml`.
+- `hosts.yml` uploads on push to `main` (S3 port 3900); environment `nix-cache` holds `NIX_CACHE_SIGNING_KEY`, `NIX_CACHE_ACCESS_KEY_ID`, `NIX_CACHE_SECRET_ACCESS_KEY`; repo secrets `TS_CACHE_OAUTH_CLIENT_ID`, `TS_CACHE_OAUTH_SECRET` (`tag:ci-cache`).
+- Signing key leak: `nix-cache-2` in all three places plus the secret and Bitwarden, empty the bucket, redeploy all (`host-switch` on `yenn`, `host-deploy roach`).
+- Quota 200 GiB. Wipe (`garage` on `regis`, `aws` on the tailnet with the printed id and secret):
   ```sh
   garage key create wipe
   garage bucket allow --read --write nix-cache --key wipe
@@ -250,17 +404,40 @@ CI shares a binary cache in the Garage bucket `nix-cache` on `regis`: `http://ni
 
 ### Backups
 
-Velero backs up the cluster daily at 18:00 Europe/Warsaw (schedule `daily-openebs`), keeping each backup 30 days, to Garage on `regis` (`host/regis/garage.nix`): a single-node S3 store on `tank/garage`, bucket `velero` at `http://100.100.215.91:3900`, reachable only over `tailscale0` and `cni0`. Velero's key is the line `velero` of `regis/GARAGE_KEYS` in the project `hosts`, copied as `velero/access_key_id` and `velero/secret_access_key` in the project `cluster` (rotate both).
+```mermaid
+flowchart LR
+  subgraph cl["Cluster"]
+    pg["CNPG: pg_dump pre-hook"]
+    vol["pod volumes"]
+    velero["Velero: daily 18:00, kopia"]
+  end
+  subgraph rg["regis"]
+    garage["Garage: bucket velero, tank/garage"]
+    photos["/mnt/photos"]
+  end
+  subgraph yn["yenn: restic-backups-offsite"]
+    rclone["rclone sync to staging"]
+    restic["restic"]
+  end
+  ssd[("offsite LUKS SSD: /mnt/offsite/restic")]
+  pg --> velero
+  vol --> velero
+  velero -->|"S3 :3900"| garage
+  garage -->|"rclone, key offsite"| rclone --> restic
+  photos -->|"NFS read-only"| restic
+  restic --> ssd
+```
 
-- Backed up: every namespace except `kube-system`, `velero` and `flux-system`, without Secrets (they come from Bitwarden), and pod volumes through kopia, except `local-storage` (media on tank), emptyDir and PVCs labelled `backup: skip` (`velero/volume-policy.yaml`).
-- The beets library (`library.db`) is on its own PVC `beets-data`: `velero restore` that PVC, after deleting a leftover `library.db-journal` next to it (sqlite would roll it back onto the restored file).
-- Grafana alerts post to Matrix `#alerts` (`monitoring/grafana/helm.yaml`), among them a stale (BackupStale) or failed (BackupFailed) Velero backup.
-
-Off-pool copy: whenever the backup SSD is plugged into `yenn` (GPT partition `offsite`, LUKS2, btrfs label `offsite`), `restic-backups-offsite` (`host/yenn/offsite-backup.nix`) mirrors the bucket `velero` with rclone into `/mnt/offsite/staging/velero` and backs that up, together with `/mnt/photos` of `regis` (read-only NFS at `/mnt/regis/photos`), into the restic repository `/mnt/offsite/restic`. It starts when the drive appears and then hourly, but runs at most every 20 hours and not between 17:00 and 20:00 (the Velero run). Keeps 7 daily, 4 weekly and 6 monthly snapshots; each run checks a random 5% of the data. The restic repository is created once by hand (`restic init`) when the drive is prepared; the run aborts if it is missing, so an unmounted drive never fills the root filesystem. It also aborts when the bucket `velero` or the photos are empty, so a rebuilt, empty source never replaces the copy. The LUKS key and the restic password are the same value, `yenn/OFFSITE_KEY` in the project `hosts`; `yenn/OFFSITE_S3_ENV` holds the credentials of the read-only Garage key `offsite`. A notification arrives when there has been no successful run for 7 days. Status: `journalctl -u restic-backups-offsite`, `sudo restic-offsite snapshots`.
+- Velero schedule `daily-openebs`: 18:00 Europe/Warsaw, 30 days, bucket `velero` at `http://100.100.215.91:3900` (`tailscale0`, `cni0` only); key = line `velero` of `regis/GARAGE_KEYS`, copied to `velero/access_key_id`, `velero/secret_access_key` (project `cluster`).
+- Not backed up: `kube-system`, `velero`, `flux-system`, Secrets, `local-storage`, emptyDir, PVCs `backup: skip` (`velero/volume-policy.yaml`).
+- Beets `library.db` is on PVC `beets-data`: delete a stale `library.db-journal` before restoring it.
+- Alerts to `#alerts`: BackupStale, BackupFailed.
+- Off-pool SSD (partition `offsite`, LUKS2, btrfs) on `yenn`: `restic-backups-offsite` (`host/yenn/offsite-backup.nix`), hourly, at most every 20 h, not 17:00-20:00; keeps 7 daily, 4 weekly, 6 monthly; checks 5%.
+- It aborts if the repo (`restic init` once), bucket `velero` or photos are missing or empty.
+- LUKS key = restic password = `yenn/OFFSITE_KEY` (project `hosts`); `yenn/OFFSITE_S3_ENV` = read-only Garage key `offsite`.
+- Status: `journalctl -u restic-backups-offsite`, `sudo restic-offsite snapshots`; notice after 7 days without a run.
 
 #### Restore
-
-App volumes are provisioned dynamically (openebs-zfs on `regis`, openebs-hostpath on `triss`, both Retain), so a plain Velero restore works. To restore one app:
 
 ```sh
 flux suspend kustomization flux-system -n flux-system
@@ -272,50 +449,47 @@ velero restore describe <restore> --details
 flux resume kustomization flux-system -n flux-system
 ```
 
-- Delete only the backed-up `openebs-*` PVCs. Keep the `backup: skip` and static `local-storage` ones: Velero restores their PV as is, so a deleted one stays Pending.
-- A PVC shared by several Deployments (`arrstack-config-pvc`, `omniverse-pvc`) is restored through only one of their pods; the others start on the empty volume and write to it first. Restore those with kopia (below).
-- Don't delete the namespace: the static media PVs would go Released with a stale `claimRef` and the restored PVCs wouldn't bind.
-- Arrstack apps are scaled by KEDA: first `kubectl -n arrstack delete httpscaledobject --all` (Flux is suspended, so it doesn't recreate them).
-- The replaced volumes stay as Released PVs (Retain). Once the app works, `kubectl delete pv <pv>`, then `kubectl -n openebs delete zfsvolume <pv>` (destroys the dataset; openebs-zfs) or remove `/var/openebs/local/<pv>` on `triss`.
+- Delete only backed-up `openebs-*` PVCs; keep `backup: skip` and `local-storage` ones.
+- Shared PVCs (`arrstack-config-pvc`, `omniverse-pvc`): restore with kopia.
+- Never delete the namespace: media PVs go Released.
+- Arrstack: first `kubectl -n arrstack delete httpscaledobject --all`.
+- Afterwards `kubectl delete pv <pv>`, then `kubectl -n openebs delete zfsvolume <pv>` or remove `/var/openebs/local/<pv>` on `triss`.
 
 ##### Restore a volume with kopia
 
-For shared volumes, or when a Velero restore fails:
-
-1. Suspend Flux (it resets `replicas`), scale the app to 0, and delete its HTTPScaledObject if KEDA scales it:
+1. Suspend Flux, scale the app to 0 (delete its HTTPScaledObject if KEDA scales it):
    ```sh
    flux suspend kustomization flux-system -n flux-system
    kubectl -n <namespace> scale deploy/<app> --replicas=0
    ```
-2. On the node holding the volume, connect read-only to the namespace's repository (Velero's static default password, secret `velero/velero-repo-credentials`, works without the cluster):
+2. On the volume's node, connect read-only (password from `velero/velero-repo-credentials`):
    ```sh
    sudo nix run nixpkgs#kopia -- repository connect s3 --endpoint 100.100.215.91:3900 --disable-tls --bucket velero --prefix kopia/<namespace>/ --region garage --access-key <GK...> --secret-access-key <secret> --password static-passw0rd --readonly
    ```
-3. Find the snapshot ID (without the cluster: `kopia snapshot list --all`):
+3. Find the snapshot ID (offline: `kopia snapshot list --all`):
    ```sh
    kubectl -n velero get podvolumebackups -l velero.io/backup-name=<backup> -o custom-columns=VOL:.spec.volume,POD:.spec.pod.name,SNAP:.status.snapshotID
    ```
-4. Find the volume's directory `<path>` and a place `<aside>` for its current contents outside it (`<pv>` is the PVC's `spec.volumeName`):
-   - `triss`: `<path>` is `/var/openebs/local/<pv>`, `<aside>` is `/var/openebs/local/<pv>.pre-restore`.
-   - `regis`: mount the dataset (unmounted while the app is down); `<path>` is `/mnt/restore`, `<aside>` is `/mnt/openebs/pre-restore-<pv>` (outside the dataset so its quota doesn't count both copies):
+4. Pick `<path>` and `<aside>` (`<pv>` = PVC `spec.volumeName`):
+   - `triss`: `<path>` `/var/openebs/local/<pv>`, `<aside>` `/var/openebs/local/<pv>.pre-restore`.
+   - `regis`: `<path>` `/mnt/restore`, `<aside>` `/mnt/openebs/pre-restore-<pv>`; mount the dataset:
      ```sh
      sudo mkdir -p /mnt/restore && sudo mount -t zfs rpool/openebs/<pv> /mnt/restore
      ```
-5. Restore into an empty directory, because leftover SQLite `-wal`/`-shm` files corrupt a restored database:
+5. Restore into an empty directory (SQLite `-wal`/`-shm` corrupt otherwise); on `regis` then `sudo umount /mnt/restore`:
    ```sh
    sudo mkdir <aside>
    sudo find <path> -mindepth 1 -maxdepth 1 -exec mv -t <aside> {} +
    sudo nix run nixpkgs#kopia -- snapshot restore <snapshotID> <path>
    sudo nix run nixpkgs#kopia -- repository disconnect
    ```
-   On `regis`, `sudo umount /mnt/restore` afterwards.
-6. `flux resume kustomization flux-system -n flux-system`, check the app, then delete `<aside>`.
+6. `flux resume kustomization flux-system -n flux-system`, check the app, delete `<aside>`.
 
 #### Restore from the off-pool drive
 
-Restore on `regis` with the drive plugged into `regis`. Never plug it into `yenn` during a restore: `yenn` would back up the empty fresh bucket and write an empty `latest` snapshot (or run `sudo systemctl mask --runtime restic-backups-offsite.service` there first).
+Restore on `regis`. **Never plug the drive into `yenn` during a restore** (or `sudo systemctl mask --runtime restic-backups-offsite.service` there).
 
-Unlock and mount the drive, typing the value of `yenn/OFFSITE_KEY` at the prompts (it is both the LUKS key and the restic password), and pick a snapshot ID, not `latest`:
+Unlock with `yenn/OFFSITE_KEY` (LUKS and restic), mount, pick a snapshot ID, not `latest`:
 
 ```sh
 sudo nix run nixpkgs#cryptsetup -- open /dev/disk/by-partlabel/offsite offsite
@@ -323,15 +497,15 @@ sudo mkdir -p /mnt/offsite && sudo mount -o ro /dev/mapper/offsite /mnt/offsite
 sudo nix run nixpkgs#restic -- -r /mnt/offsite/restic snapshots
 ```
 
-Bucket `velero` (the cluster's backups and kopia repositories):
+Bucket `velero`:
 
-1. Suspend Flux and make the backup location read-only first, otherwise Velero's garbage collection deletes the restored backups older than 30 days:
+1. Suspend Flux and set the backup location ReadOnly before restoring:
    ```sh
    flux suspend kustomization flux-system -n flux-system
    kubectl -n velero patch backupstoragelocation default --type merge -p '{"spec":{"accessMode":"ReadOnly"}}'
    ```
-2. Make sure Garage on `regis` is up; `garage-provision` recreates the bucket and the keys.
-3. Mount the repository (the FUSE mount stays in the foreground; it is readable by root only) and, in another terminal, upload the staging copy with the read-write `velero` key (`<GK...>`, `<secret>` from the `velero` line of `regis/GARAGE_KEYS`):
+2. Garage on `regis` must be up (`garage-provision` recreates bucket and keys).
+3. Mount the repository (foreground, Ctrl-C to stop), upload from another terminal with the read-write `velero` key:
    ```sh
    sudo mkdir -p /mnt/restic && sudo nix run nixpkgs#restic -- -r /mnt/offsite/restic mount /mnt/restic
    ```
@@ -340,30 +514,27 @@ Bucket `velero` (the cluster's backups and kopia repositories):
      nix run nixpkgs#rclone -- copy /mnt/restic/ids/<id>/mnt/offsite/staging/velero \
      ':s3,provider=Other,endpoint="http://localhost:3900",region=garage,env_auth=true:velero'
    ```
-   Stop the mount with Ctrl-C afterwards.
-4. `velero backup get` lists the restored backups; continue with "Restore" above.
+4. `velero backup get`, then "Restore" above.
 5. Set `accessMode` back to `ReadWrite` (same patch), `flux resume kustomization flux-system -n flux-system`.
 
-Photos (`/mnt/photos` on `regis`):
+Photos (`/mnt/photos`):
 
-1. Suspend Flux and stop Immich:
+1. Suspend Flux, stop Immich:
    ```sh
    flux suspend kustomization flux-system -n flux-system
    kubectl -n immich scale deploy/immich --replicas=0
    ```
-2. Restore into the photos directory:
+2. Restore:
    ```sh
    sudo nix run nixpkgs#restic -- -r /mnt/offsite/restic restore <id>:/mnt/regis/photos --target /mnt/photos
    ```
-3. `kubectl -n immich scale deploy/immich --replicas=1`, then `flux resume kustomization flux-system -n flux-system`. The Immich database comes back with Velero ("Postgres databases").
+3. `kubectl -n immich scale deploy/immich --replicas=1`, `flux resume kustomization flux-system -n flux-system`; the database comes back with Velero ("Postgres databases").
 
-Afterwards: `sudo umount /mnt/offsite && sudo cryptsetup close offsite`.
-
-Single files while the drive is plugged into `yenn` as usual: `sudo restic-offsite restore <id> --include <path> --target <dir>`.
+Afterwards: `sudo umount /mnt/offsite && sudo cryptsetup close offsite`. Single files with the drive on `yenn`: `sudo restic-offsite restore <id> --include <path> --target <dir>`.
 
 #### Postgres databases
 
-Three CloudNativePG clusters hold app databases; live PGDATA is not a consistent backup, so a pre-hook writes a `pg_dump -Fc` to the PVC root before Velero copies it. Restore only from that dump, never with `velero restore` of the namespace (it would recreate operator-owned objects).
+A pre-hook writes `pg_dump -Fc` to each PVC root. Restore only from the dump, never `velero restore` of the namespace.
 
 | Cluster | Namespace | Database / owner | Dump | App |
 |---|---|---|---|---|
@@ -373,22 +544,22 @@ Three CloudNativePG clusters hold app databases; live PGDATA is not a consistent
 
 ##### Restore a database
 
-Shown for Immich; substitute the row above for another database. Run from the workstation. `<pod>` is the primary: `kubectl -n immich get cluster immich-postgres -o jsonpath='{.status.currentPrimary}'` (usually `immich-postgres-1`).
+Shown for Immich. `<pod>` is the primary: `kubectl -n immich get cluster immich-postgres -o jsonpath='{.status.currentPrimary}'`.
 
-1. Make sure the Cluster from git is healthy (`kubectl -n immich get cluster immich-postgres`); if missing, let Flux recreate it (a hand-written bootstrap must set `database: immich` and `owner: immich`, else CNPG creates an empty `app` database).
-2. Suspend Flux and stop Immich:
+1. Check the Cluster is healthy (`kubectl -n immich get cluster immich-postgres`); a hand-made bootstrap needs `database: immich`, `owner: immich`.
+2. Suspend Flux, stop Immich:
    ```sh
    flux suspend kustomization flux-system -n flux-system
    kubectl -n immich scale deploy/immich --replicas=0
    ```
-3. Connect read-only to the `immich` repository (step 2 of "Restore a volume with kopia", without `sudo`) and find the snapshot of volume `pgdata` of `<pod>` (step 3 there).
-4. Restore it to a scratch directory and copy the dump into the pod:
+3. Connect to repository `immich` and find the `pgdata` snapshot of `<pod>` (steps 2-3 of "Restore a volume with kopia", no `sudo`).
+4. Restore to a scratch directory, copy the dump into the pod:
    ```sh
    nix run nixpkgs#kopia -- snapshot restore <snapshotID> ./immich-pgdata
    nix run nixpkgs#kopia -- repository disconnect
    kubectl -n immich cp -c postgres ./immich-pgdata/immich.dump <pod>:/var/lib/postgresql/data/restore.dump
    ```
-5. In the pod (`kubectl -n immich exec -it <pod> -c postgres -- bash`):
+5. In the pod (`kubectl -n immich exec -it <pod> -c postgres -- bash`); the second `pg_restore` replays `ALTER DATABASE ... SET`:
    ```sh
    dropdb --force immich && createdb -O immich immich
    pg_restore -d immich --exit-on-error --single-transaction /var/lib/postgresql/data/restore.dump
@@ -396,11 +567,9 @@ Shown for Immich; substitute the row above for another database. Run from the wo
    psql -d immich -c ANALYZE
    rm /var/lib/postgresql/data/restore.dump
    ```
-   Without `--create`, `pg_restore` drops database-level settings such as `vchordrq.probes`; the second `pg_restore` replays them.
-6. `flux resume kustomization flux-system -n flux-system`, check Immich, then delete `./immich-pgdata`.
-
+6. `flux resume kustomization flux-system -n flux-system`, check Immich, delete `./immich-pgdata`.
 
 ##### Break-glass
 
-- Operator down: the CNPG webhooks use `failurePolicy: Fail` and everything is one `flux-system` Kustomization, so every apply fails. Suspend it (`flux suspend kustomization flux-system -n flux-system`), roll the operator back with `helm -n cnpg-system rollback cloudnative-pg` (or fix the release), then resume.
-- PVC full: raise `spec.storage.size` in the cluster's `postgres.yaml` (openebs-zfs allows expansion).
+- CNPG operator down blocks every apply (webhooks `failurePolicy: Fail`): `flux suspend kustomization flux-system -n flux-system`, `helm -n cnpg-system rollback cloudnative-pg`, resume.
+- PVC full: raise `spec.storage.size` in the cluster's `postgres.yaml`.
