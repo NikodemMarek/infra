@@ -27,7 +27,6 @@
   prismlauncher = pkgs.callPackage ./prismlauncher {inherit (prev) prismlauncher;};
   glab = pkgs.callPackage ./glab {inherit (prev) glab;};
   gh = pkgs.callPackage ./gh {inherit (prev) gh;};
-  nats-server = pkgs.callPackage ./nats-server {inherit (prev) nats-server;};
   # No nixpkgs `claude` (it wraps `claude-code`). The nulls pin the "use the
   # bundled default" arguments so a same-named top-level package (e.g. `skills`)
   # is never auto-injected by callPackage.
@@ -44,6 +43,8 @@
   jj-upload = pkgs.callPackage ./jj-upload {inherit (prev) jujutsu;};
   jw = pkgs.callPackage ./jw {inherit (prev) jujutsu;};
   plan-review = pkgs.callPackage ./plan-review {};
+  plan-review-image = pkgs.callPackage ./plan-review/image.nix {};
+  nats-server-image = pkgs.callPackage ./nats-server/image.nix {};
   forge = pkgs.callPackage ./forge {inherit (prev) jujutsu;};
   jail = pkgs.callPackage ./jail {};
   bitwarden-cli = pkgs.callPackage ./bitwarden-cli {inherit (prev) bitwarden-cli;};
