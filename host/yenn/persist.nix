@@ -17,6 +17,7 @@
         ".local/share/zoxide"
         ".local/share/direnv"
         ".local/share/claude"
+        ".local/share/containers"
         ".local/share/nvim"
         ".local/state/agent-sessions"
         ".local/share/fish"

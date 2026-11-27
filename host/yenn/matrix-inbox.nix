@@ -11,7 +11,10 @@ in {
   systemd.user.services.matrix-inbox = {
     description = "Run signed commands from the matrix-gateway";
     wantedBy = ["default.target"];
-    unitConfig.ConditionUser = "nikodem";
+    unitConfig = {
+      ConditionUser = "nikodem";
+      StartLimitIntervalSec = 0;
+    };
     environment = {
       PATH = lib.mkForce config.systemd.user.services.event-handlers.environment.PATH;
       inherit (config.systemd.user.services.event-handlers.environment) SSH_AUTH_SOCK;

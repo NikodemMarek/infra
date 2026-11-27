@@ -175,6 +175,7 @@ in {
   services = {
     agents = {
       enable = true;
+      user = "nikodem";
       ghPackage = gh;
       glabPackage = glab;
       jwPackage = jw;

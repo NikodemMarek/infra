@@ -13,6 +13,8 @@
     prompt_prefix = ""
   '';
 
+  imageRef = image: "${image.imageName}:${image.imageTag}";
+
   jwReapPath = lib.makeBinPath [
     cfg.jwPackage
     cfg.ghPackage
@@ -27,15 +29,39 @@ in {
     jwPackage = lib.mkPackageOption pkgs "jw" {};
     ghPackage = lib.mkPackageOption pkgs "gh" {};
     glabPackage = lib.mkPackageOption pkgs "glab" {};
+    user = lib.mkOption {
+      type = lib.types.str;
+      description = "User whose rootless podman runs the nats-server and plan-review containers";
+    };
   };
 
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [pkgs.shpool pkgs.natscli pkgs.plan-review];
 
+    virtualisation.oci-containers = {
+      backend = "podman";
+      containers = {
+        nats = {
+          imageStream = pkgs.nats-server-image;
+          image = imageRef pkgs.nats-server-image;
+          cmd = ["--name" config.networking.hostName];
+          volumes = ["nats:/data"];
+          networks = ["host"];
+          podman.user = cfg.user;
+        };
+        plan-review = {
+          imageStream = pkgs.plan-review-image;
+          image = imageRef pkgs.plan-review-image;
+          volumes = ["plan-review:/state"];
+          networks = ["host"];
+          podman.user = cfg.user;
+        };
+      };
+    };
+
     systemd = {
       # units ship with the packages; NixOS ignores their [Install]
-      packages = [pkgs.nats-server pkgs.event-handlers pkgs.plan-review];
-      services.nats.wantedBy = ["multi-user.target"];
+      packages = [pkgs.event-handlers];
 
       user = {
         # jw runs agent sessions in shpool sessions
@@ -66,8 +92,6 @@ in {
               SSH_AUTH_SOCK = "%t/ssh-agent";
             };
           };
-
-          plan-review.wantedBy = ["default.target"];
 
           jw-reap = {
             description = "Publish MR activity of agent sessions, stop finished or long-idle ones and remove their merged workspaces";
