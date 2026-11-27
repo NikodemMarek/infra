@@ -27,15 +27,27 @@ in {
     jwPackage = lib.mkPackageOption pkgs "jw" {};
     ghPackage = lib.mkPackageOption pkgs "gh" {};
     glabPackage = lib.mkPackageOption pkgs "glab" {};
+    user = lib.mkOption {
+      type = lib.types.str;
+      description = "The user whose rootless podman runs the containers; needs a fixed uid and lingering";
+    };
   };
 
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [pkgs.shpool pkgs.natscli pkgs.plan-review];
 
+    virtualisation.oci-containers.containers.nats = {
+      imageStream = pkgs.nats-server-image;
+      image = "${pkgs.nats-server-image.imageName}:${pkgs.nats-server-image.imageTag}";
+      cmd = ["--name" config.networking.hostName];
+      volumes = ["nats:/data"];
+      networks = ["host"];
+      podman.user = cfg.user;
+    };
+
     systemd = {
       # units ship with the packages; NixOS ignores their [Install]
-      packages = [pkgs.nats-server pkgs.event-handlers pkgs.plan-review];
-      services.nats.wantedBy = ["multi-user.target"];
+      packages = [pkgs.event-handlers pkgs.plan-review];
 
       user = {
         # jw runs agent sessions in shpool sessions

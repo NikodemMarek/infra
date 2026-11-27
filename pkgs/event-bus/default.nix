@@ -5,7 +5,7 @@
   jq,
   coreutils,
 }:
-# Events over plain NATS (local nats-server, no JetStream, $NATS_URL or 127.0.0.1:4222).
+# Events over plain NATS (local nats-server, which has JetStream but the events don't use it, $NATS_URL or 127.0.0.1:4222).
 # `event-pub TYPE` reads a JSON object from stdin (empty means {}), sets its `type` to
 # TYPE and publishes it on `events.TYPE`.
 # `event-subscribe HANDLER SUBJECT...` subscribes to the subjects and runs HANDLER for
