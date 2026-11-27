@@ -1,6 +1,6 @@
 ---
 name: coordinator
-description: The coordinator's default flow for a non-trivial task (explore, plan, plan gate, contract-first build, verify and review, stacks) and its helper sessions. Main session only (not the first mate): load it at the start of any non-trivial task, before delegating, and before starting a helper session.
+description: The coordinator's default flow for a non-trivial task (explore, plan, plan gate, contract-first build, verify and review, stacks) and its helper sessions. Main session only: load it at the start of any non-trivial task, before delegating, and before starting a helper session.
 ---
 
 # Coordinator: default flow

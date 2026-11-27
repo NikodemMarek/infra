@@ -130,7 +130,6 @@
       config = runCommand "claude-config" {} ''
         mkdir -p "$out/agents" "$out/skills"
         cp ${instructions} "$out/CLAUDE.md"
-        cp ${./mate.md} "$out/mate.md"
         ${lib.concatStringsSep "\n" (lib.mapAttrsToList (n: p: ''cp "${p}" "$out/agents/${n}.md"'') agents)}
         ${lib.concatStringsSep "\n" (
           lib.mapAttrsToList (n: p: ''cp -rL "${p}" "$out/skills/${n}"'') skills
@@ -145,7 +144,6 @@
       entries =
         [
           "CLAUDE.md"
-          "mate.md"
           "settings.json"
         ]
         ++ map (n: "agents/${n}.md") (lib.attrNames agents)
