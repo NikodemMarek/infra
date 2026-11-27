@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TITLE</title>
+<style>
+:root{color-scheme:light dark;--bg:#fff;--fg:#1d2330;--mut:#5b6475;--card:#f4f6fa;--bd:#c9d0dd;--acc:#1f5fbf;--warn:#b42318;--n1:#e6eefb;--n2:#e8f5ec;--n3:#fdf0dc;}
+@media (prefers-color-scheme:dark){:root{--bg:#12151c;--fg:#e4e8f0;--mut:#9aa4b8;--card:#1b2030;--bd:#38405a;--acc:#7aa7ff;--warn:#ff8a7a;--n1:#1d2a47;--n2:#1b3326;--n3:#3a2e17;}}
+body{background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif;margin:0 auto;max-width:60rem;padding:1rem}
+h1{font-size:1.5rem}h2{margin-top:1.8rem;font-size:1.15rem;border-bottom:1px solid var(--bd);padding-bottom:.2rem}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:.6rem 1rem;margin:.6rem 0}
+.tag{font-size:.75rem;padding:.1rem .45rem;border-radius:4px;background:var(--warn);color:var(--bg);margin-left:.4rem;vertical-align:middle}
+table{border-collapse:collapse;width:100%;margin:.6rem 0;font-size:.92rem}
+caption{text-align:left;font-weight:600;padding:.3rem 0}
+th,td{border:1px solid var(--bd);padding:.35rem .5rem;text-align:left;vertical-align:top}
+th{background:var(--card)}
+svg{width:100%;height:auto;max-width:100%}
+svg text{fill:var(--fg);font:12px system-ui,sans-serif}
+.nb{stroke:var(--bd);stroke-width:1.5}.n1{fill:var(--n1)}.n2{fill:var(--n2)}.n3{fill:var(--n3)}
+.grp{fill:none;stroke:var(--bd);stroke-width:1.5;stroke-dasharray:6 4}
+.gl{font-weight:700;font-size:13px}.ln{stroke:var(--mut);stroke-width:1.5;fill:none}
+.el{fill:var(--mut)!important;font-size:11px}
+.gone rect{fill:var(--card);stroke:var(--warn);stroke-dasharray:5 3;stroke-width:1.5}
+.gone text{opacity:.7;text-decoration:line-through}.gone .to{text-decoration:none;opacity:1;fill:var(--acc)}
+.q{margin:.5rem 0}.q label{display:block;margin:.15rem 0}
+textarea{width:100%;box-sizing:border-box;background:var(--bg);color:var(--fg);border:1px solid var(--bd)}
+code{background:var(--card);padding:0 .25rem;border-radius:3px}
+.mut{color:var(--mut)}
+</style></head><body>
+
+<section id="summary">
+<h1>TITLE <span class="tag">Stakes: high</span></h1>
+<p>One or two sentences: what changes and why.</p>
+</section>
+
+<!-- Revisions only. Replace this table on each revision; never stack history. -->
+<section id="notes-sec">
+<h2>Your notes → what changed</h2>
+<table id="notes-table"><caption>Your notes and the plan's answer</caption>
+<tr><th>Your note</th><th>What changed</th></tr>
+<tr><td>NOTE</td><td>ANSWER</td></tr>
+</table>
+</section>
+
+<section id="target-sec">
+<h2>Target</h2>
+<svg id="diagram-target" viewBox="0 0 900 300" role="img" aria-label="target layout">
+<g id="t-host"><title>HOST</title><rect class="grp" x="10" y="10" width="600" height="280" rx="10"/><text class="gl" x="22" y="28">HOST</text></g>
+<g id="t-a"><title>COMPONENT A</title><rect class="nb n1" x="30" y="50" width="180" height="60" rx="8"/><text x="42" y="72" font-weight="600">COMPONENT A</text><text x="42" y="90">where it runs</text></g>
+<g id="t-b"><title>COMPONENT B</title><rect class="nb n2" x="400" y="50" width="180" height="60" rx="8"/><text x="412" y="72" font-weight="600">COMPONENT B</text><text x="412" y="90">new</text></g>
+<path class="ln" d="M210 80 H400"/><text class="el" x="260" y="74">what flows</text>
+</svg>
+</section>
+
+<section id="beforeafter-sec">
+<h2>Before → after</h2>
+<svg id="diagram-beforeafter" viewBox="0 0 900 170" role="img" aria-label="before and after">
+<text class="gl" x="10" y="20">Kept or changed</text>
+<g id="b-kept"><title>KEPT</title><rect class="nb n1" x="10" y="30" width="205" height="55" rx="6"/><text x="20" y="52" font-weight="600">KEPT</text><text x="20" y="70">what changes in it</text></g>
+<text class="gl" x="10" y="110">Removed</text>
+<g class="gone" id="b-gone"><title>REMOVED</title><rect x="10" y="120" width="205" height="45" rx="6"/><text x="20" y="140" font-weight="600">REMOVED</text><text class="to" x="20" y="158">to REPLACEMENT</text></g>
+</svg>
+</section>
+
+<section id="timeline-sec">
+<h2>Phases</h2>
+<svg id="diagram-timeline" viewBox="0 0 900 100" role="img" aria-label="phase timeline">
+<g id="p-1"><title>PHASE 1</title><rect class="nb n3" x="5" y="15" width="140" height="70" rx="6"/><text x="13" y="38" font-weight="600">P1</text><text x="13" y="56">3-6 word label</text></g>
+<g id="p-2"><title>PHASE 2</title><rect class="nb n2" x="155" y="15" width="140" height="70" rx="6"/><text x="163" y="38" font-weight="600">P2</text><text x="163" y="56">3-6 word label</text></g>
+<path class="ln" d="M145 50 H155"/>
+</svg>
+</section>
+
+<section id="options-sec">
+<h2>OPTIONS</h2>
+<table id="options-table"><caption>CAPTION</caption>
+<tr><th>Criterion</th><th>Option A</th><th>Option B (chosen)</th></tr>
+<tr><td>CRITERION</td><td>short</td><td>short</td></tr>
+</table>
+</section>
+
+<section id="risks-sec">
+<h2>Risks</h2>
+<ul id="risks">
+<li>One line each, at most five.</li>
+</ul>
+</section>
+
+<details id="contract"><summary>Contract and assumptions</summary><p>Only if the plan has them.</p></details>
+
+<section id="questions-sec">
+<h2>Questions</h2>
+<div class="card" id="q-decision"><b>1. Approve PLAN?</b>
+<div class="q">
+<label><input type="radio" name="d" value="approve" data-question="decision"> Approve (recommended)</label>
+<label><input type="radio" name="d" value="revise" data-question="decision"> Revise</label>
+</div></div>
+<div class="card" id="q2-sec"><b>2. OPEN POINT?</b>
+<div class="q">
+<label><input type="radio" name="q2" value="a" data-question="q2_key"> Option a</label>
+<label><input type="radio" name="q2" value="b" data-question="q2_key"> Option b</label>
+</div></div>
+<div class="card"><label for="comment"><b>Comments</b></label>
+<textarea id="comment" rows="3" data-question="comment"></textarea></div>
+</section>
+</body></html>
