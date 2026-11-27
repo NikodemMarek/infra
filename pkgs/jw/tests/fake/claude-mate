@@ -1,0 +1,25 @@
+#!/bin/sh
+if [ "$1" != -p ]; then
+	{
+		for a in "$@"; do
+			echo "arg=$a"
+		done
+		echo "pwd=$(pwd -P)"
+		env | sed 's/^/env=/'
+	} > "$FAKE_LOG_DIR/claude-mate.log"
+	exit 0
+fi
+
+n=1
+while [ -e "$FAKE_LOG_DIR/claude-mate-run-$n.log" ]; do
+	n=$((n + 1))
+done
+{
+	for a in "$@"; do
+		echo "arg=$a"
+	done
+	echo "pwd=$(pwd -P)"
+	env | sed 's/^/env=/'
+} > "$FAKE_LOG_DIR/claude-mate-run-$n.log"
+cat > "$FAKE_LOG_DIR/claude-mate-run-$n.stdin"
+exit 0

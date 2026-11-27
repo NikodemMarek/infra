@@ -1536,10 +1536,6 @@ fn mate_home(e: &Env) -> std::path::PathBuf {
     e.root.join("mate")
 }
 
-fn mate_prompt(e: &Env) -> String {
-    e.dir.join("claude/mate.md").to_str().unwrap().to_string()
-}
-
 /// The mate repo with a commit on bookmark `main`, as Env::repo makes `repo`.
 fn mate_repo(e: &Env) -> std::path::PathBuf {
     let home = mate_home(e);
@@ -1629,11 +1625,13 @@ fn m1_mate_fresh_start() {
         "{lines:?}"
     );
 
-    let log = e.log("claude.log");
-    assert_eq!(
-        claude_args(&log),
-        ["--append-system-prompt-file", mate_prompt(&e).as_str()]
-    );
+    let log = e.log("claude-mate.log");
+    assert!(claude_args(&log).is_empty(), "{:?}", claude_args(&log));
+    assert!(!claude_argv(&log).contains(&"--append-system-prompt-file"));
+    assert!(claude_argv(&log)
+        .windows(2)
+        .any(|w| w == ["--permission-mode", "bypassPermissions"]));
+    assert!(!e.logs.join("claude.log").exists());
     assert_eq!(
         log.lines().find_map(|l| l.strip_prefix("pwd=")),
         Some(ws.to_str().unwrap())
@@ -1699,6 +1697,19 @@ fn m5_agent_still_uses_ttl() {
     assert!(starts[0].contains("--ttl 1d"), "{}", starts[0]);
     assert_eq!(e.record(&name)["kind"], "task");
     assert!(!claude_args(&e.log("claude.log")).contains(&"--append-system-prompt-file"));
+    assert!(!e.logs.join("claude-mate.log").exists());
+}
+
+#[test]
+fn m5b_agent_child_env_drops_claude_config_dir() {
+    let e = Env::new();
+    e.repo();
+    e.jw(&e.root, &["agent", "-d", "repo", "hi"]).ok();
+    let log = e.log("claude.log");
+    assert!(
+        !log.lines().any(|l| l.starts_with("env=CLAUDE_CONFIG_DIR=")),
+        "{log}"
+    );
 }
 
 #[test]
@@ -1717,16 +1728,10 @@ fn m6_resume_session_mate() {
     out.ok();
     assert_eq!(started_in(&out, "mate"), name);
     assert_eq!(mate_start(&e, &ws), name);
-    let log = e.log("claude.log");
-    assert_eq!(
-        claude_args(&log),
-        [
-            "--append-system-prompt-file",
-            mate_prompt(&e).as_str(),
-            "--resume",
-            "mate-id"
-        ]
-    );
+    let log = e.log("claude-mate.log");
+    assert_eq!(claude_args(&log), ["--resume", "mate-id"]);
+    assert!(!claude_argv(&log).contains(&"--append-system-prompt-file"));
+    assert!(!e.logs.join("claude.log").exists());
     assert!(claude_env(&log).contains(&format!("AGENT_SESSION={name}").as_str()));
     let r = e.record(name);
     assert_eq!(r["kind"], "mate");
@@ -1772,13 +1777,8 @@ fn m8_picker_resume_mate_workspace() {
     assert_eq!(started_in(&out, "mate"), name);
     assert_eq!(mate_start(&e, &ws), name);
     assert_eq!(
-        claude_args(&e.log("claude.log")),
-        [
-            "--append-system-prompt-file",
-            mate_prompt(&e).as_str(),
-            "--resume",
-            "mate-id"
-        ]
+        claude_args(&e.log("claude-mate.log")),
+        ["--resume", "mate-id"]
     );
     assert_eq!(e.record(name)["kind"], "mate");
 }
@@ -1866,13 +1866,8 @@ fn m11_resume_taken_mate_gets_new_name() {
     let new = started_in(&out, "mate");
     assert_eq!(mate_start(&e, &ws), new);
     assert_eq!(
-        claude_args(&e.log("claude.log")),
-        [
-            "--append-system-prompt-file",
-            mate_prompt(&e).as_str(),
-            "--resume",
-            "old-id"
-        ]
+        claude_args(&e.log("claude-mate.log")),
+        ["--resume", "old-id"]
     );
 }
 
@@ -1913,13 +1908,8 @@ fn m13_resume_mate_with_gone_workspace() {
     assert!(ws.join(".jj").is_dir(), "workspace not recreated");
     assert_eq!(mate_start(&e, &ws), name);
     assert_eq!(
-        claude_args(&e.log("claude.log")),
-        [
-            "--append-system-prompt-file",
-            mate_prompt(&e).as_str(),
-            "--resume",
-            "mate-id"
-        ]
+        claude_args(&e.log("claude-mate.log")),
+        ["--resume", "mate-id"]
     );
     assert_eq!(e.record(&name)["kind"], "mate");
 }
