@@ -145,7 +145,7 @@ pub fn cmd_msg(a: MsgArgs) -> Result<(), String> {
         return Err("empty message".to_string());
     }
     let origin = a.sender.unwrap_or_else(sender);
-    if let Some(record) = Records::new().read(&a.name).filter(|r| r.headless) {
+    if let Some(record) = Records::open()?.read(&a.name)?.filter(|r| r.headless) {
         if record.reaped.is_some() {
             return Err(format!("session {} is reaped", a.name));
         }

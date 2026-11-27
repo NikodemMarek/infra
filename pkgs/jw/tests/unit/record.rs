@@ -87,7 +87,7 @@ fn new_fields_round_trip() {
         true
     })
     .unwrap();
-    let rec = r.read("w").unwrap();
+    let rec = r.read("w").unwrap().unwrap();
     assert!(rec.headless);
     assert_eq!(rec.turn_base, Some(4));
     assert_eq!(rec.result_seq, 4);
@@ -108,7 +108,7 @@ fn new_fields_of_the_wrong_type_are_ignored() {
         r#"{"kind":"task","headless":"yes","turn_base":"x","result_seq":"y"}"#,
     )
     .unwrap();
-    let rec = r.read("w").unwrap();
+    let rec = r.read("w").unwrap().unwrap();
     assert_eq!(rec.kind.as_deref(), Some("task"));
     assert!(!rec.headless);
     assert_eq!(rec.turn_base, None);
@@ -151,7 +151,7 @@ fn write_result_numbers_from_one() {
         r.write_result("w", ResultKind::Died, "second", always),
         Ok(Some(2))
     );
-    let rec = r.read("w").unwrap();
+    let rec = r.read("w").unwrap().unwrap();
     assert_eq!(rec.result_seq, 2);
     assert_eq!(rec.turn_base, None);
     let file: Value =
@@ -189,7 +189,7 @@ fn write_result_closes_the_open_turn() {
     .unwrap();
     r.write_result("w", ResultKind::Result, "x", always)
         .unwrap();
-    let rec = r.read("w").unwrap();
+    let rec = r.read("w").unwrap().unwrap();
     assert_eq!(rec.turn_base, None);
     assert_eq!(rec.result_seq, 1);
     assert!(rec.headless);
@@ -210,8 +210,8 @@ fn write_result_guard_false_writes_nothing() {
     });
     assert_eq!(got, Ok(None));
     assert!(!result_file(&r, "w", 1).exists());
-    assert!(r.results("w").is_empty());
-    let rec = r.read("w").unwrap();
+    assert!(r.results("w").unwrap().is_empty());
+    let rec = r.read("w").unwrap().unwrap();
     assert_eq!(rec.result_seq, 0);
     assert_eq!(rec.turn_base, Some(0));
     assert_eq!(rec.status, None);
@@ -233,7 +233,7 @@ fn write_result_guard_sees_the_record_and_its_changes_are_saved() {
         open
     });
     assert_eq!(got, Ok(Some(1)));
-    let rec = r.read("w").unwrap();
+    let rec = r.read("w").unwrap().unwrap();
     assert_eq!(rec.status.as_deref(), Some("idle"));
     assert_eq!(rec.title.as_deref(), Some("T"));
     assert_eq!(rec.result_seq, 1);
@@ -251,7 +251,7 @@ fn write_result_caps_long_text() {
     let long = format!("{}{}", "b".repeat(262144), "c".repeat(100));
     r.write_result("w", ResultKind::Result, &long, always)
         .unwrap();
-    let results = r.results("w");
+    let results = r.results("w").unwrap();
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].text, exact);
     assert_eq!(
@@ -270,7 +270,7 @@ fn write_result_caps_characters_not_bytes() {
     let long = "ż".repeat(262144 + 5);
     r.write_result("w", ResultKind::Result, &long, always)
         .unwrap();
-    let text = &r.results("w")[0].text;
+    let text = &r.results("w").unwrap()[0].text;
     assert!(text.starts_with(&"ż".repeat(262144)));
     assert!(text.ends_with("\n[truncated]"));
     assert_eq!(
@@ -295,18 +295,18 @@ fn write_result_invalid_name() {
 fn results_are_by_number_and_unacked_only() {
     let t = Tmp::new();
     let r = t.records();
-    assert!(r.results("w").is_empty());
+    assert!(r.results("w").unwrap().is_empty());
     for i in 1..=11 {
         r.write_result("w", ResultKind::Result, &format!("t{i}"), always)
             .unwrap();
     }
-    let seqs: Vec<u64> = r.results("w").iter().map(|x| x.seq).collect();
+    let seqs: Vec<u64> = r.results("w").unwrap().iter().map(|x| x.seq).collect();
     assert_eq!(seqs, (1..=11).collect::<Vec<u64>>());
-    let first = &r.results("w")[0];
+    let first = &r.results("w").unwrap()[0];
     assert_eq!(first.kind, ResultKind::Result);
     assert_eq!(first.text, "t1");
     r.ack("w", 9).unwrap();
-    let seqs: Vec<u64> = r.results("w").iter().map(|x| x.seq).collect();
+    let seqs: Vec<u64> = r.results("w").unwrap().iter().map(|x| x.seq).collect();
     assert_eq!(seqs, [10, 11]);
 }
 
@@ -317,10 +317,10 @@ fn results_are_per_session() {
     r.write_result("a", ResultKind::Result, "ta", always)
         .unwrap();
     r.write_result("b", ResultKind::Died, "tb", always).unwrap();
-    assert_eq!(r.results("a").len(), 1);
-    assert_eq!(r.results("a")[0].text, "ta");
-    assert_eq!(r.results("b")[0].kind, ResultKind::Died);
-    assert!(r.results("c").is_empty());
+    assert_eq!(r.results("a").unwrap().len(), 1);
+    assert_eq!(r.results("a").unwrap()[0].text, "ta");
+    assert_eq!(r.results("b").unwrap()[0].kind, ResultKind::Died);
+    assert!(r.results("c").unwrap().is_empty());
 }
 
 #[test]
@@ -338,7 +338,7 @@ fn ack_deletes_up_to_seq() {
     assert_eq!(r.ack("w", 2), Ok(()));
     assert_eq!(r.ack("w", 1), Ok(()));
     assert_eq!(r.ack("w", 3), Ok(()));
-    assert!(r.results("w").is_empty());
+    assert!(r.results("w").unwrap().is_empty());
 }
 
 #[test]
@@ -350,7 +350,7 @@ fn ack_beyond_the_last_result_fails_and_deletes_nothing() {
     r.write_result("w", ResultKind::Result, "y", always)
         .unwrap();
     assert!(r.ack("w", 3).is_err());
-    assert_eq!(r.results("w").len(), 2);
+    assert_eq!(r.results("w").unwrap().len(), 2);
 }
 
 #[test]
@@ -366,8 +366,8 @@ fn numbers_are_not_reused_after_an_ack() {
         r.write_result("w", ResultKind::Result, "z", always),
         Ok(Some(3))
     );
-    assert_eq!(r.results("w")[0].seq, 3);
-    assert_eq!(r.read("w").unwrap().result_seq, 3);
+    assert_eq!(r.results("w").unwrap()[0].seq, 3);
+    assert_eq!(r.read("w").unwrap().unwrap().result_seq, 3);
 }
 
 #[test]
@@ -376,7 +376,7 @@ fn results_dirs_are_not_records() {
     let r = t.records();
     r.write_result("w", ResultKind::Result, "x", always)
         .unwrap();
-    let names: Vec<String> = r.load_all().into_iter().map(|(n, _)| n).collect();
+    let names: Vec<String> = r.load_all().unwrap().into_iter().map(|(n, _)| n).collect();
     assert_eq!(names, ["w"]);
 }
 
@@ -462,7 +462,7 @@ fn orphan_result_file_is_not_overwritten_and_can_be_acked() {
         r#"{"seq":1,"kind":"result","text":"orphan","at":1.0}"#,
     )
     .unwrap();
-    assert_eq!(r.read("w").unwrap().result_seq, 0);
+    assert_eq!(r.read("w").unwrap().unwrap().result_seq, 0);
     let got = r.write_result("w", ResultKind::Result, "next", always);
     assert_eq!(got, Ok(Some(2)));
     assert!(d.join("1.json").exists());

@@ -17,8 +17,10 @@ fn track_worktree_behaviour() {
     };
     let s = |p: &Path| p.to_str().unwrap().to_string();
     let wts = || {
-        Records::new()
+        Records::open()
+            .unwrap()
             .read("s1")
+            .unwrap()
             .map(|r| r.worktrees)
             .unwrap_or_default()
     };
@@ -48,7 +50,8 @@ fn track_worktree_behaviour() {
     }
     assert!(!base.join("state/agent-sessions/s1.json").exists());
 
-    Records::new()
+    Records::open()
+        .unwrap()
         .update("s1", |r| {
             r.title = Some("Keep".into());
             r.status = Some("busy".into());
@@ -61,7 +64,7 @@ fn track_worktree_behaviour() {
         track_worktree(&s(d)).unwrap();
     }
     assert_eq!(wts(), vec![s(&b), s(&a)]);
-    let r = Records::new().read("s1").unwrap();
+    let r = Records::open().unwrap().read("s1").unwrap().unwrap();
     assert_eq!(r.title.as_deref(), Some("Keep"));
     assert_eq!(r.status.as_deref(), Some("busy"));
     assert_eq!(r.workspace.as_deref(), Some("/ws"));

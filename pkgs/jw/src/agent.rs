@@ -82,7 +82,7 @@ pub fn cmd_agent(a: AgentArgs) -> Result<(), String> {
         .reports_to
         .map(|name| {
             let name = session_name(Some(&name))?;
-            match Records::new().read(&name) {
+            match Records::open()?.read(&name)? {
                 Some(_) => Ok(name),
                 None => Err(format!("no session record {name}")),
             }
@@ -166,10 +166,10 @@ fn start_headless(
     let revision = revision.filter(|r| !r.is_empty());
     let resolve_in = revision.as_ref().and_then(|_| resolve_dir(home));
     fetch(home);
+    let records = Records::open()?;
     let name = {
         let _lock = naming_lock(&runtime_dir())?;
-        let records = Records::new();
-        let name = fresh_name(home, |name| records.read(name).is_some());
+        let name = fresh_name(home, |name| Ok(records.read(name)?.is_some()))?;
         let revision = revision.as_deref().unwrap_or("trunk()");
         let dir = add_workspace(home, revision, &name, resolve_in.as_deref())?;
         records
@@ -185,7 +185,7 @@ fn start_headless(
     };
     if let Err(e) = worker::deliver(&name, &text) {
         // reap retires the workspace of a done record
-        let marked = Records::new().update(&name, |r| {
+        let marked = records.update(&name, |r| {
             r.status = Some("done".to_string());
             r.status_at = Some(now());
             r.waiting_for = None;
@@ -276,15 +276,15 @@ fn naming_lock(rundir: &str) -> Result<fs::File, String> {
 }
 
 /// s-<time>, with a suffix while the name is in use or the repo at home has a workspace of it.
-fn fresh_name(home: &str, in_use: impl Fn(&str) -> bool) -> String {
+fn fresh_name(home: &str, in_use: impl Fn(&str) -> Result<bool, String>) -> Result<String, String> {
     let base = Local::now().format("s-%m%d-%H%M%S").to_string();
     let mut name = base.clone();
     let mut i = 2;
-    while in_use(&name) || Path::new(&format!("{home}.agents/{name}")).exists() {
+    while in_use(&name)? || Path::new(&format!("{home}.agents/{name}")).exists() {
         name = format!("{base}-{i}");
         i += 1;
     }
-    name
+    Ok(name)
 }
 
 /// The words of a claude command line: the first mate also gets its role prompt; bypass mode unless ask_permissions.
@@ -328,18 +328,19 @@ fn launch(
     let name = {
         let _lock = naming_lock(&rundir)?;
         let taken = Shpool.list()?;
-        let records = Records::new();
+        let records = Records::open()?;
         let name = match naming {
             Naming::Resume(name) if valid_name(name) && !taken.contains_key(name) => {
                 name.to_string()
             }
             _ => fresh_name(home, |name| {
-                taken.contains_key(name) || records.read(name).is_some()
-            }),
+                Ok(taken.contains_key(name) || records.read(name)?.is_some())
+            })?,
         };
+        let existing = records.read(&name)?.is_some();
         let dir = make_dir(&name)?;
         let mut fields = match naming {
-            Naming::Resume(_) if records.read(&name).is_some() => Record {
+            Naming::Resume(_) if existing => Record {
                 workspace: Some(dir.clone()),
                 ..Record::default()
             },
@@ -350,7 +351,7 @@ fn launch(
         }
         // a failure to write the record must not stop the session
         let recorded = records.update(&name, |r| {
-            r.merge(fields);
+            r.merge(fields.clone());
             // a (re)started session is not finished
             r.clear_marks();
             r.ask_permissions = ask_permissions;
@@ -597,8 +598,8 @@ pub(crate) fn latest_transcript(home: &str, workspace: &str) -> Result<Option<St
 
 /// (home, workspace) of the record of session name; the repo comes from the workspace path if it is gone.
 pub(crate) fn session_repo(name: &str) -> Result<(String, String), String> {
-    let record = Records::new()
-        .read(name)
+    let record = Records::open()?
+        .read(name)?
         .ok_or_else(|| format!("no session record {name}"))?;
     let ws = record.workspace.as_deref();
     if let Some((home, _, path)) = agent_workspace(ws) {
@@ -625,7 +626,7 @@ pub(crate) fn session_repo(name: &str) -> Result<(String, String), String> {
 }
 
 fn not_headless(name: &str) -> Result<(), String> {
-    if Records::new().read(name).is_some_and(|r| r.headless) {
+    if Records::open()?.read(name)?.is_some_and(|r| r.headless) {
         return Err(format!("{name} is a headless worker; use jw msg"));
     }
     Ok(())
@@ -692,7 +693,7 @@ pub fn cmd_resume(a: ResumeArgs) -> Result<(), String> {
         eprintln!("jw: {root} is gone, recreated it as {dir} on trunk");
         Ok(dir)
     };
-    let record = Records::new().read(&name);
+    let record = Records::open()?.read(&name)?;
     let mate = record
         .as_ref()
         .is_some_and(|r| r.kind.as_deref() == Some(MATE_KIND));

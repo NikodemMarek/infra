@@ -48,8 +48,8 @@ fn is_https(url: &str) -> bool {
 
 pub fn cmd_session_get(a: SessionGetArgs) -> Result<(), String> {
     let name = session_name(a.session.as_deref())?;
-    let record = Records::new()
-        .read(&name)
+    let record = Records::open()?
+        .read(&name)?
         .ok_or_else(|| format!("no session record {name}"))?;
     println!(
         "{}",
@@ -74,8 +74,8 @@ pub fn cmd_session_list(a: SessionListArgs) -> Result<(), String> {
         return Err(format!("invalid session name: '{name}'"));
     }
     let running = Shpool.list()?;
-    let records = Records::new();
-    for (name, record) in records.load_all() {
+    let records = Records::open()?;
+    for (name, record) in records.load_all()? {
         if a.reports_to.is_some() && record.reports_to != a.reports_to {
             continue;
         }
@@ -86,7 +86,7 @@ pub fn cmd_session_list(a: SessionListArgs) -> Result<(), String> {
             } else {
                 running.contains_key(&name)
             },
-            unacked: records.result_seqs(&name),
+            unacked: records.result_seqs(&name)?,
             record: &record,
         };
         println!(
@@ -99,7 +99,7 @@ pub fn cmd_session_list(a: SessionListArgs) -> Result<(), String> {
 
 pub fn cmd_session_results(a: SessionResultsArgs) -> Result<(), String> {
     let name = session_name(a.session.as_deref())?;
-    for result in Records::new().results(&name) {
+    for result in Records::open()?.results(&name)? {
         println!(
             "{}",
             serde_json::to_string(&result).map_err(|e| e.to_string())?
@@ -109,7 +109,7 @@ pub fn cmd_session_results(a: SessionResultsArgs) -> Result<(), String> {
 }
 
 pub fn cmd_session_ack(a: SessionAckArgs) -> Result<(), String> {
-    Records::new().ack(&a.name, a.seq)
+    Records::open()?.ack(&a.name, a.seq)
 }
 
 pub fn cmd_session_set(a: SessionSetArgs) -> Result<(), String> {
@@ -128,8 +128,8 @@ pub fn cmd_session_set(a: SessionSetArgs) -> Result<(), String> {
         workspace: a.workspace,
         ..Record::default()
     };
-    Records::new().update(&name, |r| {
-        r.merge(fields);
+    Records::open()?.update(&name, |r| {
+        r.merge(fields.clone());
         if restarted {
             r.clear_marks();
         }
@@ -156,7 +156,7 @@ pub fn cmd_session_status(a: SessionStatusArgs) -> Result<(), String> {
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
     let waiting_for: String = waiting_for.trim().chars().take(200).collect();
-    Records::new().set_status(
+    Records::open()?.set_status(
         &name,
         &state,
         (!waiting_for.is_empty()).then_some(waiting_for),
@@ -173,14 +173,14 @@ pub fn track_worktree(dir: &str) -> Result<(), String> {
         .filter(|d| d.is_dir())
         .and_then(|d| d.into_os_string().into_string().ok())
         .ok_or_else(|| format!("not an absolute directory: {dir}"))?;
-    Records::new().update(&name, |r| {
+    Records::open()?.update(&name, |r| {
         let known = r.worktrees.len();
         r.worktrees.retain(|w| Path::new(w).exists());
         let pruned = r.worktrees.len() != known;
         if r.worktrees.contains(&real) {
             return pruned;
         }
-        r.worktrees.push(real);
+        r.worktrees.push(real.clone());
         true
     })?;
     Ok(())
@@ -188,7 +188,7 @@ pub fn track_worktree(dir: &str) -> Result<(), String> {
 
 pub fn cmd_done() -> Result<(), String> {
     let name = agent_session_name()?;
-    Records::new().update(&name, |r| {
+    Records::open()?.update(&name, |r| {
         r.status = Some("done".to_string());
         r.status_at = Some(now());
         r.waiting_for = None;

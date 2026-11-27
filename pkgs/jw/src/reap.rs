@@ -233,7 +233,7 @@ fn kept_sessions(records: &[(String, Record)]) -> HashSet<String> {
 /// sessions, which are killed along with their background jobs. Directories jj cannot read (failing to load) are deleted
 /// only after asking once for all of them; with --yes they are kept, as they may hold unsnapshotted edits.
 pub fn cmd_prune(a: PruneArgs) -> Result<(), String> {
-    let kept = kept_sessions(&Records::new().load_all());
+    let kept = kept_sessions(&Records::open()?.load_all()?);
     let mut broken: Vec<(String, String, String, Vec<String>)> = vec![];
     for repo in repos() {
         let home = format!("{}/{repo}", root());
@@ -308,10 +308,12 @@ fn report_stopped(killed: &[Stopped], path: &str, seen: &mut HashSet<String>) {
     }
 }
 
-fn mark_record(name: &str, mark: impl FnOnce(&mut Record)) {
-    let updated = Records::new().update(name, |r| {
-        mark(r);
-        true
+fn mark_record(name: &str, mut mark: impl FnMut(&mut Record)) {
+    let updated = Records::open().and_then(|records| {
+        records.update(name, |r| {
+            mark(r);
+            true
+        })
     });
     if let Err(e) = updated {
         eprintln!("jw: {name}: {}", write_error(&e));
@@ -473,7 +475,7 @@ pub fn cmd_reap() -> Result<(), String> {
     }
     let mut seen = HashSet::new();
     let started = now();
-    let records = Records::new().load_all();
+    let records = Records::open()?.load_all()?;
     let workspaces: HashMap<PathBuf, String> = records
         .iter()
         .filter_map(|(name, r)| {
