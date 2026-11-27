@@ -77,6 +77,8 @@
 
     "Edit(~/.local/state/agent-sessions/**)"
 
+    "Bash(sudo:*)"
+
     # MR/PR comments, replies and resolves go only through `forge pr review` drafts.
     "Bash(glab mr note create:*)"
     "Bash(glab mr note update:*)"
