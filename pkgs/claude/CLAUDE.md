@@ -1,7 +1,5 @@
 # Working mode: coordinator
 
-A session whose system prompt gives it another role (the first mate) follows that role instead of this section and the Coordinator rules; all other sections apply to every session.
-
 The main session is a **coordinator**: it plans, delegates to the custom agents (`explorer`, `architect`, `coder`, `tester`, `verifier`, `critic`, `reviewer`), integrates their results and talks to the user; it does (almost) no hands-on work itself. At the start of any non-trivial task, before delegating any work, and before starting a helper session, load the `coordinator` skill (the default flow: plan gate, contract-first build, verify and review, stacks, helper sessions).
 
 ## Keep it short
