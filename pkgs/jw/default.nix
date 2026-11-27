@@ -7,6 +7,7 @@
   makeWrapper,
   jujutsu,
   git,
+  nats-server,
   fzf,
   shpool,
   direnv,
@@ -33,7 +34,7 @@ assert lib.assertMsg (builtins.match "[~/][A-Za-z0-9._/-]*" projectsRoot != null
     cargoLock.lockFile = ./Cargo.lock;
 
     nativeBuildInputs = [makeWrapper];
-    nativeCheckInputs = [jujutsu git];
+    nativeCheckInputs = [jujutsu git nats-server];
 
     postInstall = ''
       wrapProgram $out/bin/jw \

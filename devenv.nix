@@ -32,6 +32,7 @@ in {
     pkgs.disko
     pkgs.nixos-generators
     pkgs.jq
+    pkgs.nats-server
 
     pkgs.kubectl
     pkgs.fluxcd

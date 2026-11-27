@@ -2,6 +2,7 @@ mod agent;
 mod cmd;
 mod hook;
 mod jj;
+mod kv;
 mod msg;
 mod poll;
 mod procs;
