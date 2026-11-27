@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
-use std::process::{self, Command, Stdio};
+use std::process;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -12,8 +12,8 @@ use crate::procs::{claude_sessions, in_use, live_claudes, session_procs, Claude}
 use crate::record::{now, write_error, Record, Records};
 use crate::shpool::Shpool;
 use crate::workspace::{
-    agent_workspace, ask_lost, basename, confirm, is_dir, is_gitlab, realpath, recent, remove,
-    remove_broken, repos, root,
+    agent_workspace, ask_lost, basename, confirm, is_dir, realpath, recent, remove, remove_broken,
+    repos, root,
 };
 use crate::worktree;
 use crate::PruneArgs;
@@ -230,9 +230,8 @@ fn kept_sessions(records: &[(String, Record)]) -> HashSet<String> {
 
 /// Removes the workspaces whose stack is merged into trunk and that hold nothing else (`jj stack status`), not
 /// modified within the last hour. Those in use go too if the only users are idle Claude sessions in detached shpool
-/// sessions, which are killed along with their background jobs. gitlab-context's (gl-*) are left to `gitlab-context gc`,
-/// which knows when they are reused. Directories jj cannot read (failing to load) are deleted only after asking once
-/// for all of them; with --yes they are kept, as they may hold unsnapshotted edits.
+/// sessions, which are killed along with their background jobs. Directories jj cannot read (failing to load) are deleted
+/// only after asking once for all of them; with --yes they are kept, as they may hold unsnapshotted edits.
 pub fn cmd_prune(a: PruneArgs) -> Result<(), String> {
     let kept = kept_sessions(&Records::new().load_all());
     let mut broken: Vec<(String, String, String, Vec<String>)> = vec![];
@@ -252,11 +251,7 @@ pub fn cmd_prune(a: PruneArgs) -> Result<(), String> {
         };
         for name in names {
             let d = format!("{home}.agents/{name}");
-            if kept.contains(&name)
-                || is_gitlab(&name)
-                || !is_dir(&format!("{d}/.jj"))
-                || recent(&d)
-            {
+            if kept.contains(&name) || !is_dir(&format!("{d}/.jj")) || recent(&d) {
                 continue;
             }
             if !in_use(&d, &HashSet::new()) && !Jj::in_dir(&d).loads() {
@@ -280,13 +275,6 @@ pub fn cmd_prune(a: PruneArgs) -> Result<(), String> {
                 }
             }
         }
-    }
-    if which("gitlab-context") {
-        // it logs what it removes
-        let _ = Command::new("gitlab-context")
-            .args(["gc", "--all"])
-            .stdout(Stdio::null())
-            .status();
     }
     if broken.is_empty() {
         return Ok(());
@@ -372,7 +360,6 @@ fn reap_record(
     if r.reaped.is_some() || !(done || !r.mrs.is_empty()) {
         return;
     }
-    let gitlab = is_gitlab(&ws_name);
     let removed = format!("removed {}.agents/{ws_name}", basename(&home));
     if done {
         match stop_sessions(&path, FINISHED_IDLE) {
@@ -381,26 +368,21 @@ fn reap_record(
             Err(_) => return,
         }
         drop_worktrees(&r.worktrees, workspaces, deadline);
-        if !gitlab {
-            match retire(&home, &ws_name, true, FINISHED_IDLE) {
-                Ok(killed) => {
-                    report_stopped(&killed, &path, seen);
-                    println!("{removed}");
-                }
-                Err(e) => {
-                    report_stopped(&e.killed, &path, seen);
-                    if e.error.is_empty() {
-                        println!("kept {path}");
-                    } else {
-                        println!("kept {path}: {}", e.error);
-                    }
+        match retire(&home, &ws_name, true, FINISHED_IDLE) {
+            Ok(killed) => {
+                report_stopped(&killed, &path, seen);
+                println!("{removed}");
+            }
+            Err(e) => {
+                report_stopped(&e.killed, &path, seen);
+                if e.error.is_empty() {
+                    println!("kept {path}");
+                } else {
+                    println!("kept {path}: {}", e.error);
                 }
             }
         }
         mark_record(name, |r| r.reaped = Some(now));
-        return;
-    }
-    if gitlab {
         return;
     }
     if r.notified.is_none() && !claude_sessions(&path).is_empty() {

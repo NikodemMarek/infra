@@ -19,8 +19,8 @@ use crate::session::session_name;
 use crate::shpool::Shpool;
 use crate::worker;
 use crate::workspace::{
-    add_workspace, agent_workspace, basename, dirname, fetch, is_dir, is_gitlab, layout, locate,
-    pick, realpath, repo_home, repos, resolve_dir, root,
+    add_workspace, agent_workspace, basename, dirname, fetch, is_dir, layout, locate, pick,
+    realpath, repo_home, repos, resolve_dir, root,
 };
 use crate::{AgentArgs, AttachArgs, ResumeArgs};
 
@@ -570,7 +570,7 @@ fn resume_rows(
         let Some((root, title)) = transcript(&format!("{base}/{id}.jsonl"), home) else {
             continue;
         };
-        if is_gitlab(basename(&root)) || workspace.is_some_and(|w| w != root) {
+        if workspace.is_some_and(|w| w != root) {
             continue;
         }
         let when = DateTime::<Local>::from(mtime).format("%m-%d %H:%M");
