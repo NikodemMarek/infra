@@ -57,7 +57,6 @@
   agent-skills = pkgs.callPackage ./agent-skills {};
   claude-hooks = pkgs.callPackage ./claude-hooks {};
   claude-statusline = pkgs.callPackage ./claude-statusline {};
-  agent-inbox = pkgs.callPackage ./agent-inbox {};
   matrix-inbox = pkgs.callPackage ./matrix-inbox {};
   agent-task = pkgs.callPackage ./agent-task {};
   stay-awake = pkgs.callPackage ./stay-awake {};

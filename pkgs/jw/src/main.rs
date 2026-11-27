@@ -22,7 +22,7 @@ use clap::{Args, Parser, Subcommand};
 /// jw: quick jj workspaces for the repos under one root (~/projects unless the package sets another), at <repo>.agents/<name> (the layout the claude wrapper uses too).
 ///
 /// new, cd, rm and clone print the directory to go to on stdout; the `jw` fish function cds there.
-/// pick prints the chosen repo's name on stdout. Everything else goes to stderr.
+/// Everything else goes to stderr.
 ///
 /// agent always starts Claude in a new workspace (s-*, like `jw new`) in a shpool session of the same name.
 /// resume continues one of the repo's earlier Claude sessions the same way, in the workspace it ran in; resume --session NAME
@@ -60,8 +60,6 @@ enum Command {
     ReportNotice,
     /// print the jj workspace and stack of the current directory as JSON
     Info,
-    /// pick a repo (the current one first) and print its name
-    Pick,
     /// run Claude in a new workspace of a repo (default: this one; outside a repo the one the prompt starts with, else pick one): in a shpool session, or with --reports-to as a headless worker that needs a prompt
     #[command(visible_alias = "a")]
     Agent(AgentArgs),
@@ -74,7 +72,7 @@ enum Command {
     Attach(AttachArgs),
     /// send a message to a Claude session: delivered right away, between the tool calls of a busy session or as a new turn of an idle one; fails if an interactive session is not running (a headless worker queues it for its next turn or starts one)
     Msg(MsgArgs),
-    /// read, list or update the records of agent sessions (kind, title, description, url, workspace, mrs, worktrees that jw hook create records), a JSON file in $XDG_STATE_HOME/agent-sessions that agent-inbox and the notifications show
+    /// read, list or update the records of agent sessions (kind, title, description, url, workspace, mrs, worktrees that jw hook create records), a JSON file in $XDG_STATE_HOME/agent-sessions that the notifications show
     Session {
         #[command(subcommand)]
         action: SessionAction,
@@ -297,7 +295,6 @@ fn main() {
         Command::ForgeNotice => poll::cmd_forge_notice(),
         Command::ReportNotice => report::cmd_report_notice(),
         Command::Info => workspace::cmd_info(),
-        Command::Pick => workspace::cmd_pick(),
         Command::Agent(a) => agent::cmd_agent(a),
         Command::Resume(a) => agent::cmd_resume(a),
         Command::Mate => agent::cmd_mate(),

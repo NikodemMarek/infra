@@ -4,7 +4,7 @@ README.md is the reference (sections Layout, Hosts, Dev shell, Installing a new 
 
 ## Repo
 
-- Keep the repo generic. Workflow-specific config (e.g. agent-inbox tabs keyed on handler kinds) belongs in dotfiles.
+- Keep the repo generic. Workflow-specific config belongs in dotfiles.
 - Manifests carry no explanatory comments: the why goes in the commit message. Elsewhere comment only a non-obvious why.
 - No test suites for small glue scripts (wrappers, handlers, loops). Libraries and CLIs (Rust, Python) get tests.
 - One-time data migrations are done by hand (`kubectl exec`/`cp`), not with initContainers, hooks or jobs in the repo.
@@ -16,10 +16,10 @@ README.md is the reference (sections Layout, Hosts, Dev shell, Installing a new 
 - Industry standard over clever repo-local: tofu state lives in a remote backend (S3-compatible object storage), not encrypted in git; GitHub is out of tofu scope. Small cluster glue is a stock upstream image plus a ConfigMap (Redpanda Connect, as in `mail-hook`), not an own nix image that needs a deploy and tag pinning per change.
 - Tests use `example.com`, never the real domain; manifests take the real domain from one source (`${DOMAIN}`).
 - The projects root differs per host: take it as an option (jw `projectsRoot`, claude `projectsDir`), never hardcode `$HOME/projects`.
-- Every session starts through `jw agent` (agents and the task event handler included) or `jw mate` (a supervisor session); `jw agent` always creates a fresh jj workspace on top of `jw new` (start point revision or bookmark, default `trunk()`); no raw shpool/claude launchers, agent-inbox shows only jw sessions. Session status has one source of truth: the jw session record written by the agent hooks, not Claude's registry.
+- Every session starts through `jw agent` (agents and the task event handler included) or `jw mate` (a supervisor session); `jw agent` always creates a fresh jj workspace on top of `jw new` (start point revision or bookmark, default `trunk()`); no raw shpool/claude launchers, so every session has a jw record. Session status has one source of truth: the jw session record written by the agent hooks, not Claude's registry.
 - Stack queries are `jj stack <verb>` (e.g. `jj stack status`), not new `jj upload` verbs; bare `jj stack` is the log alias (`pkgs/jujutsu/config.toml`).
-- The event router is the hub for agent/session communication (task dispatch, messages, notifications): producers (agent-inbox, quick-capture) only publish an event, the handler does the work.
-- agent-inbox is one app: new screens are tabs, not views (Tab cycles filter tabs, Shift-Tab goes back); the detail pane carries rich context (MR description) under readable titles. "Chat with Claude" means replying to a stopped agent session from the inbox. Quick-capture popups are a minimal launcher extension (rofi/fuzzel), not a TUI.
+- The event router is the hub for agent/session communication (task dispatch, messages, notifications): producers (quick-capture) only publish an event, the handler does the work.
+- Quick-capture popups are a minimal launcher extension (rofi/fuzzel), not a TUI.
 
 ## Check
 
@@ -117,11 +117,11 @@ Cluster:
 Sessions:
 
 - The jw job script runs `exec direnv exec . claude ...`, so sessions already have the dev shell env (`KUBECONFIG`): don't export it by hand. `<repo>.agents/*` needs no `direnv allow`; `devenv.nix` edits need a session restart.
-- A `jw agent --reports-to` worker is headless: a jw session (record, workspace) run as transient `jw-worker-NAME` user units, one `claude -p` per turn, not in shpool. agent-inbox sees it only mid-turn; `jw msg` queues for it, `--interactive` gives the shpool session instead. A worker that ends a turn with open MRs (context from 50k tokens) is `/compact`ed 2 min later unless a message came in, so forge event turns start from a summary (`jw-compact-NAME-SEQ` timer, `jw worker compact`). Interactive sessions can't be compacted this way: `/compact` over the messaging socket arrives as plain text.
+- A `jw agent --reports-to` worker is headless: a jw session (record, workspace) run as transient `jw-worker-NAME` user units, one `claude -p` per turn, not in shpool. `jw msg` queues for it, `--interactive` gives the shpool session instead. A worker that ends a turn with open MRs (context from 50k tokens) is `/compact`ed 2 min later unless a message came in, so forge event turns start from a summary (`jw-compact-NAME-SEQ` timer, `jw worker compact`). Interactive sessions can't be compacted this way: `/compact` over the messaging socket arrives as plain text.
 - Every session `jw` starts or resumes runs claude with `--permission-mode bypassPermissions` (headless turns too), so the PermissionRequest hook never fires. `jw agent --ask-permissions` (kept in the record as `ask_permissions`) opts out: a headless turn runs `--permission-prompts none` (deny and report), an interactive session gets Claude's settings default. GitLab event sessions are started by `pkgs/event-handlers/claude`, not jw, and keep deny-and-report. `skipDangerousModePermissionPrompt` in `pkgs/claude/settings.nix` stops a detached session blocking on bypass mode's one-time dialog. `crossSessionInbound = "accept"` there lets `jw msg` reach bypass sessions: by default they hold peer messages that attest no sender permission mode (`jw msg` sends none) until the user approves each.
 - Claude `/resume` filters by cwd and shows nothing in `<repo>.agents/s-*`: use `jw resume [repo]`.
 - SendMessage cannot reach a just-started session: use `jw msg` or the event router.
-- An event's `type` is its NATS subject and agent-inbox keys on it: route an event to a new consumer with a line in `pkgs/event-handlers/handlers` (exactly `<subject> <handler>`, no arguments), never by republishing it on another subject.
+- An event's `type` is its NATS subject: route an event to a new consumer with a line in `pkgs/event-handlers/handlers` (exactly `<subject> <handler>`, no arguments), never by republishing it on another subject.
 - jw's `Record` keeps only the keys it declares: an older jw that writes a record drops newer keys.
 - In a jj repo without a remote `trunk()` resolves to `root()`: `add_workspace` refuses it and `jj stack status` calls an empty stack merged, so prune/reap would retire its workspaces. The mate repo aliases `trunk()` to `main`, and kept (mate) sessions are skipped by name.
 - `jw agent` passes everything after the repo to the prompt: an option written there is silently prompt text unless `agent.rs` lists it as "options go before the repo".

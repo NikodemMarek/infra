@@ -10,9 +10,6 @@ events.backup.> event-handler-notify-critical
 events.task.new event-handler-task
 events.claude.waiting event-handler-report
 events.session.result event-handler-report
-events.claude.> event-handler-inbox
-events.sudo.> event-handler-inbox
-events.task.failed event-handler-inbox
 events.forge.> event-handler-forge
 events.review.requested event-handler-review-intake
 events.review.submitted event-handler-review

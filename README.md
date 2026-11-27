@@ -163,9 +163,9 @@ Own programs (`nix build .#<name>`):
 | `jw` | jj workspaces at `<repo>.agents/<name>` under `projectsRoot` (default `~/projects`); `jw agent` runs Claude in a new workspace and shpool session (with `--reports-to` a headless worker: a user unit per turn), `jw mate` starts a first mate in `<projectsRoot>/mate` (`jw --help`) |
 | `event-bus` | events over plain NATS (`$NATS_URL`): `event-pub TYPE` publishes JSON from stdin on `events.TYPE`; `event-subscribe HANDLER SUBJECT...` runs HANDLER per event |
 | `event-handlers` | user service, one `event-subscribe` per line of `pkgs/event-handlers/handlers` (subjects stay under `events.`) |
-| `agent-inbox`, `agent-task`, `claude-hooks`, `claude-statusline`, `agent-skills` | agent tooling: terminal inbox of Claude prompts, sudo requests and tasks; task capture publishing `task.new`; claude's hooks, status line and skills |
+| `agent-task`, `claude-hooks`, `claude-statusline`, `agent-skills` | agent tooling: task capture publishing `task.new`; claude's hooks, status line and skills |
 | `plan-review` | plan reviews: `plan-review publish <file> "<title>"` shows an agent's HTML plan in the browser, the feedback goes back to its session (see Plan reviews) |
-| `matrix-gateway`, `matrix-inbox`, `matrix-gateway-image` | Matrix bridge of the NATS hub (in the cluster) and its client on `yenn`; CI publishes the image to `ghcr.io/nikodemmarek/matrix-gateway` |
+| `matrix-gateway`, `matrix-inbox`, `matrix-gateway-image` | Matrix bridge of the NATS hub (in the cluster) and its client on `yenn` that runs the signed `!host` commands; CI publishes the image to `ghcr.io/nikodemmarek/matrix-gateway` |
 | `tm`, `dictate`, `dictate-type`, `wallpaper` | task list CLI (`$TM_FILE`); microphone to text via the local whisper server; types the dictation into the focused window (SUPER+D toggles); the wallpaper image |
 | `jail` | a function: `jail <package> {ENV_VAR = "/abs/path";}` runs every binary with those env vars set |
 

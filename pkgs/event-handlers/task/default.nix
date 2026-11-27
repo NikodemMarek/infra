@@ -6,7 +6,7 @@
   jw,
 }:
 # event handler: a task.new event starts an agent session with `jw agent -d`
-# and reports task.started, or task.failed with what is needed to retry.
+# and reports task.started, or task.failed with the reason.
 # Event data is untrusted: image paths are kept only if they are regular files
 # (no symlinks) under $XDG_RUNTIME_DIR/agent-task/, where the capture tool puts
 # them, so an event cannot make the session read arbitrary files.
@@ -64,16 +64,11 @@ writeShellApplication {
 
     failed() {
       local body
-      # id, repo and prompt come from the event on stdin: argv strings are capped at 128 KiB
+      # repo comes from the event on stdin: argv strings are capped at 128 KiB
       body=$(jq -c --arg title "$title" --arg reason "$1" '
-        ((.id | strings) // "") as $id
-        | ((.repo | strings) // "") as $repo
-        | {type: "task.failed"}
-        + (if $id != "" then {id: $id, key: $id} else {} end)
-        + {project: (if $repo != "" then $repo else "task" end), title: $title, reason: $reason, prompt: ((.prompt | strings) // ""), images: $ARGS.positional}
-        + (if $repo != "" then {repo: $repo} else {} end)
-        + {timeout: 86400}
-      ' --args "''${images[@]}" <<<"$event")
+        ((.repo | strings) // "") as $repo
+        | {type: "task.failed", project: (if $repo != "" then $repo else "task" end), title: $title, reason: $reason}
+      ' <<<"$event")
       post task.failed "$body"
       exit 0
     }
@@ -123,12 +118,9 @@ writeShellApplication {
       failed "''${reason:-jw exited with $rc}"
     fi
 
-    body=$(jq -c --arg project "$started_repo" --arg title "$title" --arg shpool "$session" '
-      ((.id | strings) // "") as $id
-      | {type: "task.started"}
-      + (if $id != "" then {id: $id} else {} end)
-      + {project: $project, title: $title, shpool: $shpool}
-    ' <<<"$event")
+    body=$(jq -nc --arg project "$started_repo" --arg title "$title" --arg shpool "$session" '
+      {type: "task.started", project: $project, title: $title, shpool: $shpool}
+    ')
     post task.started "$body"
   '';
 }

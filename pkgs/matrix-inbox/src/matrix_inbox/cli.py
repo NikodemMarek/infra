@@ -1,4 +1,4 @@
-"""`matrix-inbox-post`, `matrix-inbox-answer` and `matrix-inbox-command`: event-handlers entry points."""
+"""`matrix-inbox-command`: the event-handlers entry point."""
 
 import os
 import socket
@@ -6,21 +6,14 @@ import sys
 import time
 from typing import NoReturn
 
-from .data import ParseError, loads
 from .handlers import (
     BusError,
 )
 from .handlers import (
-    answer as answer_reply,
-)
-from .handlers import (
     command as run_command,
 )
-from .handlers import (
-    post as post_event,
-)
-from .io import NatsBus, ProcessLocal, ProcessTasks, SeenDir
-from .signed import load_key, open_command, open_reply
+from .io import NatsBus, ProcessTasks, SeenDir
+from .signed import load_key, open_command
 
 
 def _fail(message: str, code: int) -> NoReturn:
@@ -44,37 +37,6 @@ def _host() -> str:
 def _read_stdin() -> bytes:
     with open(0, "rb", closefd=False) as f:
         return f.read()
-
-
-def post() -> None:
-    _no_args("matrix-inbox-post", "the event JSON object")
-    try:
-        event = loads(_read_stdin())
-    except ParseError as e:
-        _fail(f"matrix-inbox-post: {e}", 1)
-    if not isinstance(event, dict):
-        _fail("matrix-inbox-post: stdin is not a JSON object", 1)
-    try:
-        post_event(event, _host(), _bus())
-    except BusError as e:
-        _fail(f"matrix-inbox-post: {e}", 1)
-
-
-def answer() -> None:
-    _no_args("matrix-inbox-answer", "the signed reply line")
-    try:
-        key = load_key(os.environ.get("MATRIX_GATEWAY_KEY", ""))
-    except ValueError:
-        _fail(
-            "matrix-inbox-answer: set MATRIX_GATEWAY_KEY to the gateway's public key", 2
-        )
-    reply = open_reply(_read_stdin().decode("utf-8", errors="replace"), key)
-    if reply is None:
-        _fail("matrix-inbox-answer: dropping an unsigned or invalid reply", 1)
-    try:
-        answer_reply(reply, _host(), ProcessLocal(), _bus())
-    except BusError as e:
-        _fail(f"matrix-inbox-answer: {e}", 1)
 
 
 def command() -> None:

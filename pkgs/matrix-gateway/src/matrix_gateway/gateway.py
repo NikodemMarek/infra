@@ -1,4 +1,4 @@
-"""The relay: Matrix room events to NATS replies and NATS requests to Matrix posts."""
+"""The relay: Matrix room commands to NATS and NATS requests to Matrix posts."""
 
 import logging
 from typing import Protocol
@@ -12,15 +12,12 @@ from .logic import (
     content,
     parse_command,
     parse_send,
-    route,
-    seal,
     seal_command,
-    strip_fallback,
 )
 
 DEVICE_ID = "matrix-gateway"
 
-NOTICE_NOT_A_REPLY = "Reply to a message that asks for an answer, or send !<host> <task> as a new message."
+NOTICE_NOT_A_COMMAND = "Send !<host> <task> to start a task."
 NOTICE_BUS = "Failed: message bus unavailable."
 
 log = logging.getLogger("matrix_gateway")
@@ -45,7 +42,6 @@ class Matrix(Protocol):
     def sync(
         self, room: str, since: str | None, timeout_ms: int
     ) -> tuple[str, list[Obj]]: ...
-    def get_event(self, room: str, event_id: str) -> Obj | None: ...
     def send(
         self, room: str, content: Obj, txn: str, event_type: str = "m.room.message"
     ) -> str: ...
@@ -71,14 +67,13 @@ class Gateway:
         self._user = user
         self._password = password
         self._key = key
-        self._bot = ""
         self._room = ""
         self._post_rooms: dict[str, str] = {}
         self._since: str | None = None
 
     def start(self) -> None:
-        self._bot = self._matrix.login(self._user, self._password, DEVICE_ID)
-        server = self._bot.partition(":")[2]
+        bot = self._matrix.login(self._user, self._password, DEVICE_ID)
+        server = bot.partition(":")[2]
         self._room = self._matrix.resolve_alias(
             "#agents:" + server
         ) or self._matrix.create_room("agents", self._owner)
@@ -108,31 +103,9 @@ class Gateway:
             or get_str(relates, "rel_type") == "m.replace"
         ):
             return
-        parent_id = get_str(get_obj(relates, "m.in_reply_to") or {}, "event_id")
-        if parent_id is None:
-            self._on_top_level(ev, event_id, get_str(body, "body") or "")
-            return
-        parent = self._matrix.get_event(self._room, parent_id)
-        target = route(parent, self._bot) if parent is not None else None
-        if parent is None or target is None:
-            self._notice(event_id, NOTICE_NOT_A_REPLY)
-            return
-        to, ref = target
-        text = strip_fallback(get_str(body, "body") or "").strip()
-        parent_body = get_str(get_obj(parent, "content") or {}, "body") or ""
-        try:
-            self._bus.publish(
-                "matrix.reply." + to,
-                seal(self._key, to, ref, text, parent_body, event_id),
-            )
-        except BusError as e:
-            log.warning("publishing a reply failed: %s", e)
-            self._notice(event_id, NOTICE_BUS)
-
-    def _on_top_level(self, ev: Obj, event_id: str, body: str) -> None:
-        command = parse_command(body)
+        command = parse_command(get_str(body, "body") or "")
         if command is None:
-            self._notice(event_id, NOTICE_NOT_A_REPLY)
+            self._notice(event_id, NOTICE_NOT_A_COMMAND)
             return
         ts = get_int(ev, "origin_server_ts")
         if ts is None:

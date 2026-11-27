@@ -4,13 +4,13 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{self, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 
-use crate::cmd::{output_with_input, stdin_is_tty};
+use crate::cmd::output_with_input;
 use crate::jj::Jj;
 use crate::procs::home;
 use crate::record::valid_name;
@@ -581,24 +581,6 @@ pub fn cmd_info() -> Result<(), String> {
         serde_json::to_string(&info).map_err(|e| e.to_string())?
     );
     Ok(())
-}
-
-/// Prints the name of a picked repo (the current one first); a cancelled pick exits 130, which agent-inbox treats as such.
-pub fn cmd_pick() -> Result<(), String> {
-    if !stdin_is_tty() {
-        return Err("no terminal to pick a repo".to_string());
-    }
-    match repo_home(None) {
-        Ok(home) => {
-            println!("{}", basename(&home));
-            Ok(())
-        }
-        Err(e) if e == "cancelled" => {
-            eprintln!("jw: cancelled");
-            process::exit(130);
-        }
-        Err(e) => Err(e),
-    }
 }
 
 #[cfg(test)]
