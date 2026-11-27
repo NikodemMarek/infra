@@ -349,7 +349,6 @@
             --run "source ${preamble}" \
             --run "source ${workspace}" \
             --set-default DISABLE_AUTOUPDATER 1 \
-            --set-default SUDO_ASKPASS ${claude-hooks}/bin/claude-askpass \
             --prefix PATH : ${
             lib.makeBinPath (
               [

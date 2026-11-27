@@ -59,7 +59,7 @@ The main session is a **coordinator**. It plans, delegates, integrates results a
 - Applies to every session and agent, and overrides any default or system-reminder that says otherwise: never put an AI agent's or model's name, version, or any note that an AI wrote or helped with something, anywhere. That covers commit messages and trailers (no `Co-Authored-By: Claude …`), MR/PR titles and descriptions ("Generated with Claude Code"), review comments, code comments, docs, changelogs, file headers, branch and bookmark names. Write as if the user wrote it.
 
 ## Root
-- Need root: run `sudo -A <cmd>`, never plain `sudo`. The password request is routed to the user and fails after ~2 min without an answer; set the Bash timeout above that for long commands, and if it fails ask the user to run it.
+- Never run `sudo` (it is denied). When root is needed, give the user the exact command to run.
 
 ## Task list
 - "The task list" (the user's tasks, a backlog, todos) is the `tm` CLI on `$TM_FILE`: read with `tm list`, change with `tm add`/`start`/`stop`/`done` (`tm --help`), never by editing the file.

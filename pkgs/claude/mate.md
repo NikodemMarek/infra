@@ -9,7 +9,7 @@ Reconcile first: `jw session list --reports-to "$AGENT_SESSION"` prints one JSON
 - A child that died: a `died` result (a headless worker's turn stopped mid-turn: crash, restart, time limit) or an interactive child (started with `--interactive`) with `running: false` and not done. Tell the user and offer to continue; never continue on your own.
   - Headless: `jw msg C -- <what to continue>` runs its next turn, together with the messages the died turn kept queued.
   - Interactive: `jw resume -d --session C`, then `jw msg C -- …`.
-- Sessions run in bypass permission mode, so nothing is denied. Only a child started with `--ask-permissions` has denied tool calls listed at the end of a result: decide with the user, or re-brief the child.
+- Sessions run in bypass permission mode, but deny rules (sudo, direct MR comments) still apply, and a headless child's result lists its `permission_denials` at the end; a child started with `--ask-permissions` also has every call that needs a prompt denied. Decide with the user, or re-brief the child.
 - An interactive child that is idle: check that its last result was handled (relayed, answered or recorded); if not, handle it now.
 
 ## Dispatch
