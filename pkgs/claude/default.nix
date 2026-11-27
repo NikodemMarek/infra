@@ -33,6 +33,8 @@
   dataDir ? "$HOME/.local/share/claude",
   # trusted without the trust prompt, with every repo below it; shell-expanded at runtime
   projectsDir ? "$HOME/projects",
+  # the architect's memory repo, holding the ADRs; shell-expanded at runtime, must start with $HOME/ (rendered as ~/, so permission rules match)
+  memoryDir ? "$HOME/.local/share/claude/memory",
   # cross-repo knowledge file imported by CLAUDE.md; must start with $HOME/ (rendered as ~/, so permission rules match). null -> $dataDir/knowledge.md
   knowledgeFile ? null,
 }: let
@@ -76,6 +78,7 @@
     "extraPackages"
     "dataDir"
     "projectsDir"
+    "memoryDir"
     "knowledgeFile"
   ];
 
@@ -91,17 +94,15 @@
       extraPackages,
       dataDir,
       projectsDir,
+      memoryDir,
       knowledgeFile,
     }: let
       # "$HOME/.local/share/claude" -> "~/.local/share/claude" (for prose in the markdown files)
       # The deny rules in the settings use the `~/` form, so a dataDir outside $HOME would silently disable them.
       prettyDataDir = assert lib.assertMsg (lib.hasPrefix "$HOME/" dataDir) "claude: dataDir must start with $HOME/ (got ${dataDir})";
         "~" + lib.removePrefix "$HOME" dataDir;
-      prettyMemoryDir = "${prettyDataDir}/memory";
-      prettyProjectsDir =
-        if lib.hasPrefix "$HOME/" projectsDir
-        then "~" + lib.removePrefix "$HOME" projectsDir
-        else assert lib.assertMsg (lib.hasPrefix "/" projectsDir) "claude: projectsDir must start with $HOME/ or / (got ${projectsDir})"; projectsDir;
+      prettyMemoryDir = assert lib.assertMsg (lib.hasPrefix "$HOME/" memoryDir) "claude: memoryDir must start with $HOME/ (got ${memoryDir})";
+        "~" + lib.removePrefix "$HOME" memoryDir;
       resolvedKnowledgeFile =
         if knowledgeFile == null
         then "${dataDir}/knowledge.md"
@@ -110,6 +111,10 @@
         if lib.hasPrefix "$HOME/" resolvedKnowledgeFile
         then "~" + lib.removePrefix "$HOME" resolvedKnowledgeFile
         else throw "claude: knowledgeFile must start with $HOME/ (got ${resolvedKnowledgeFile})";
+      prettyProjectsDir =
+        if lib.hasPrefix "$HOME/" projectsDir
+        then "~" + lib.removePrefix "$HOME" projectsDir
+        else assert lib.assertMsg (lib.hasPrefix "/" projectsDir) "claude: projectsDir must start with $HOME/ or / (got ${projectsDir})"; projectsDir;
 
       settingsFile = writeText "claude-settings.json" (builtins.toJSON settings);
 
@@ -229,8 +234,8 @@
 
         __claude_setup() {
           export CLAUDE_CONFIG_DIR="''${CLAUDE_CONFIG_DIR:-${dataDir}}"
-          # unconditional: the agents' prose has this path baked in at build time
-          export CLAUDE_MEMORY_DIR="$CLAUDE_CONFIG_DIR/memory"
+          # unconditional: the agents' prose and the permission rules have this path baked in at build time
+          export CLAUDE_MEMORY_DIR="${memoryDir}"
           export CLAUDE_PROJECTS_DIR="${projectsDir}"
           ${coreutils}/bin/mkdir -p "$CLAUDE_CONFIG_DIR/agents" "$CLAUDE_CONFIG_DIR/skills" "$CLAUDE_MEMORY_DIR"
           if [ ! -e "$CLAUDE_MEMORY_DIR/.git" ] && command -v git >/dev/null 2>&1; then
@@ -370,7 +375,7 @@
           # Overlay-friendly customisation, e.g.
           #   prev.claude.extend { skills.foo = ./foo; settings.permissions.allow = [ "..." ]; }
           # attrsets (settings, agents, skills) deep-merge, extraPackages concatenates,
-          # instructions/dataDir/projectsDir/knowledgeFile are replaced. Results carry `extend` again.
+          # instructions/dataDir/projectsDir/memoryDir/knowledgeFile are replaced. Results carry `extend` again.
           extend = cfg: let
             unknown = lib.subtractLists knownKeys (lib.attrNames cfg);
           in
@@ -379,6 +384,7 @@
                 instructions = cfg.instructions or instructions;
                 dataDir = cfg.dataDir or dataDir;
                 projectsDir = cfg.projectsDir or projectsDir;
+                memoryDir = cfg.memoryDir or memoryDir;
                 knowledgeFile = cfg.knowledgeFile or knowledgeFile;
                 settings = deepMerge settings (cfg.settings or {});
                 # `null` entries remove an agent/skill, e.g. `skills.commit = null;`
@@ -413,5 +419,5 @@ in
       if settings == null
       then import ./settings.nix
       else settings;
-    inherit extraPackages dataDir projectsDir knowledgeFile;
+    inherit extraPackages dataDir projectsDir memoryDir knowledgeFile;
   }
