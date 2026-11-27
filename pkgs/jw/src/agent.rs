@@ -37,9 +37,12 @@ pub fn sh_quote(word: &str) -> String {
 /// The environment without the variables that tie a session to the caller's own (repo key, nested-claude
 /// marker). CLAUDE_CODE_* from a calling Claude (session id, child marker, messaging socket) would make the new Claude
 /// a child of the caller: it writes into the caller's transcript and never registers, so jw msg cannot reach it.
+/// CLAUDE_CONFIG_DIR is dropped too: claude-mate sets its own, which a session started from the mate must not inherit
+/// (the claude wrapper defaults to the coordinator's).
 fn agent_env() -> BTreeMap<String, String> {
-    const DROP: [&str; 7] = [
+    const DROP: [&str; 8] = [
         "CLAUDECODE",
+        "CLAUDE_CONFIG_DIR",
         "CLAUDE_PID",
         "CLAUDE_EFFORT",
         "AI_AGENT",
@@ -287,15 +290,10 @@ fn fresh_name(home: &str, in_use: impl Fn(&str) -> bool) -> String {
     name
 }
 
-/// The words of a claude command line: the first mate also gets its role prompt; bypass mode unless ask_permissions.
+/// The words of a claude command line: the first mate runs claude-mate (its own config dir and role prompt); bypass
+/// mode unless ask_permissions.
 fn claude_argv(mate: bool, ask_permissions: bool, args: &[&str]) -> Vec<String> {
-    let mut argv = vec!["claude".to_string()];
-    if mate {
-        argv.extend([
-            "--append-system-prompt-file".to_string(),
-            format!("{}/mate.md", claude_dir()),
-        ]);
-    }
+    let mut argv = vec![if mate { "claude-mate" } else { "claude" }.to_string()];
     if !ask_permissions {
         argv.extend([
             "--permission-mode".to_string(),
@@ -310,7 +308,7 @@ fn claude_argv(mate: bool, ask_permissions: bool, args: &[&str]) -> Vec<String> 
 /// it unless detach. make_dir(name) returns the directory to run in; it is called under the lock, once the name is
 /// chosen. The name is the session's identity: AGENT_SESSION, the record name and the shpool session name are equal,
 /// and jw finds a live Claude's shpool session by its AGENT_SESSION. reports_to is the session the new record names as
-/// its supervisor. A first mate (mate) has its role prompt, the record kind MATE_KIND and no shpool ttl. Claude runs in
+/// its supervisor. A first mate (mate) runs claude-mate, has the record kind MATE_KIND and no shpool ttl. Claude runs in
 /// bypass mode unless ask_permissions, which the record keeps.
 #[allow(clippy::too_many_arguments)]
 fn launch(
