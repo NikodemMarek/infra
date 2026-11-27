@@ -117,6 +117,7 @@ ShellRoot {
         Slider {
             id: slider
             Layout.fillWidth: true
+            implicitHeight: 20
             from: 0
             to: 100
             value: parent.value
