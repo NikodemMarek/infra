@@ -1,19 +1,16 @@
 use std::collections::VecDeque;
 use std::env;
-use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::path::{Path, PathBuf};
-use std::process::{self, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
 use crate::agent::{latest_transcript, session_repo};
 use crate::cmd::event_pub;
-use crate::record::{now, Record, Records, ResultKind};
+use crate::record::{now, Queued, Record, Records, ResultKind};
 use crate::systemd::Systemd;
 
 const DELIVER_WAIT: Duration = Duration::from_secs(10);
@@ -64,33 +61,8 @@ fn jw_exe() -> Result<String, String> {
     Ok(jw.to_string_lossy().into_owned())
 }
 
-fn enqueue(queue: &Path, name: &str, text: &str) -> Result<PathBuf, String> {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    let path = queue.join(format!("{nanos}-{}.txt", process::id()));
-    DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(queue)
-        .and_then(|()| {
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&path)?
-                .write_all(text.as_bytes())
-                .inspect_err(|_| {
-                    let _ = fs::remove_file(&path);
-                })
-        })
-        .map_err(|e| format!("cannot queue the message for {name}: {e}"))?;
-    Ok(path)
-}
-
 /// Waits until a turn of worker name runs or is started; Err is the last reason it could not.
-fn start_turn(records: &Records, name: &str, record: Record) -> Result<Delivery, String> {
-    let workspace = record.workspace.ok_or("the record has no workspace")?;
+fn wait_for_turn(records: &Records, name: &str) -> Result<Delivery, String> {
     let unit_name = unit(name);
     let argv = vec![
         jw_exe()?,
@@ -98,96 +70,71 @@ fn start_turn(records: &Records, name: &str, record: Record) -> Result<Delivery,
         "turn".to_string(),
         name.to_string(),
     ];
-    let mut open = record.turn_base == Some(record.result_seq);
     let deadline = Instant::now() + DELIVER_WAIT;
     loop {
-        let last: String;
-        match Systemd.is_active(&unit_name) {
+        let record = records.update(name, |_| false)?;
+        let open = record.turn_base == Some(record.result_seq);
+        let last = match Systemd.is_active(&unit_name) {
             None => return Err(format!("cannot tell whether {name}'s turn runs")),
             Some(true) if open => return Ok(Delivery::Queued),
             // the runner is starting or exiting
-            Some(true) => last = format!("the turn of {name} is ending"),
+            Some(true) => format!("the turn of {name} is ending"),
             Some(false) => {
+                let workspace = record.workspace.ok_or("the record has no workspace")?;
                 match Systemd.run(&unit_name, &workspace, &["RuntimeMaxSec=4h"], &argv) {
                     Ok(()) => return Ok(Delivery::Started),
-                    Err(e) => last = e,
+                    Err(e) => e,
                 }
             }
-        }
+        };
         if Instant::now() >= deadline {
             return Err(last);
         }
         thread::sleep(DELIVER_POLL);
-        let current = records.update(name, |_| false)?;
-        open = current.turn_base == Some(current.result_seq);
     }
 }
 
-/// Queues text for worker name and makes sure a turn will run it.
+/// Queues text for worker name and makes sure a turn will run it. A turn that opened before the message was queued
+/// takes it before it closes, unless the turn dies: then the message waits for the next one. One that claimed it
+/// already is Queued too.
 pub fn deliver(name: &str, text: &str) -> Result<Delivery, String> {
     let records = Records::open()?;
-    let entry = enqueue(&records.queue_dir(name), name, text)?;
-    // the turn runner reads the queue under the records lock: an entry is either in its turn or seen as open here
-    let record = records.update(name, |_| false).inspect_err(|_| {
-        let _ = fs::remove_file(&entry);
-    })?;
-    let e = match start_turn(&records, name, record) {
-        Ok(delivery) => return Ok(delivery),
-        Err(e) => e,
-    };
-    // under the lock the runner cannot open a turn between the check and the removal; a turn open now has the entry
-    // or takes it next, so it stays
-    let mut queued = false;
-    let cleaned = records.update(name, |r| {
-        queued = r.turn_base == Some(r.result_seq) && Systemd.is_active(&unit(name)) == Some(true);
-        if !queued {
-            let _ = fs::remove_file(&entry);
+    let (id, revision) = records.enqueue(name, text)?;
+    wait_for_turn(&records, name).or_else(|last| {
+        let cannot = format!("cannot start a turn of {name}: {last}");
+        match records.cancel(name, &id, revision) {
+            Ok(false) => Ok(Delivery::Queued),
+            Ok(true) => Err(cannot),
+            Err(e) => Err(format!("{cannot}; the message may still run: {e}")),
         }
-        false
-    });
-    if cleaned.is_err() {
-        let _ = fs::remove_file(&entry);
-    }
-    if queued {
-        return Ok(Delivery::Queued);
-    }
-    Err(format!("cannot start a turn of {name}: {e}"))
-}
-
-fn read_queue(dir: &Path) -> Result<Vec<(PathBuf, String)>, String> {
-    let mut paths: Vec<PathBuf> = fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .collect();
-    paths.sort();
-    paths
-        .into_iter()
-        .map(|path| {
-            let text = fs::read_to_string(&path)
-                .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-            Ok((path, text))
-        })
-        .collect()
+    })
 }
 
 struct Turn {
     /// The result_seq the turn starts at.
     base: u64,
-    /// The queued messages by age.
-    entries: Vec<(PathBuf, String)>,
+    /// The queued messages the turn runs, by age.
+    claimed: Vec<Queued>,
 }
 
-/// Opens a turn on the queued messages of worker name; None, and no open turn, if the queue is empty.
+fn claim_queued(records: &Records, name: &str) -> Result<Vec<Queued>, String> {
+    let mut claimed = vec![];
+    for q in records.queued(name)? {
+        if records.claim(name, &q)? {
+            claimed.push(q);
+        }
+    }
+    Ok(claimed)
+}
+
+/// Opens a turn on the queued messages of worker name; None, and no open turn, if the queue is empty. A message
+/// queued between the last claim and closing the turn is seen by the check after it.
 fn open_turn(records: &Records, name: &str) -> Result<Option<Turn>, String> {
-    let queue = records.queue_dir(name);
-    let mut queued = Ok(vec![]);
-    let mut base = 0;
-    records.update(name, |r| {
-        queued = read_queue(&queue);
-        match &queued {
-            Ok(entries) if !entries.is_empty() => {
+    loop {
+        let claimed = claim_queued(records, name)?;
+        if !claimed.is_empty() {
+            let mut base = 0;
+            records.update(name, |r| {
                 base = r.result_seq;
                 r.turn_base = Some(base);
                 if r.status.as_deref() != Some("done") {
@@ -195,13 +142,14 @@ fn open_turn(records: &Records, name: &str) -> Result<Option<Turn>, String> {
                     r.status_at = Some(now());
                 }
                 true
-            }
-            Ok(_) => r.turn_base.take().is_some(),
-            Err(_) => false,
+            })?;
+            return Ok(Some(Turn { base, claimed }));
         }
-    })?;
-    let entries = queued?;
-    Ok((!entries.is_empty()).then_some(Turn { base, entries }))
+        records.update(name, |r| r.turn_base.take().is_some())?;
+        if records.queued(name)?.is_empty() {
+            return Ok(None);
+        }
+    }
 }
 
 fn clip(value: Option<&Value>) -> String {
@@ -411,24 +359,24 @@ fn prepare(name: &str) -> Result<(String, Option<String>), String> {
     Ok((workspace, resume))
 }
 
-/// Whether the worker with this record and queue is idle at result seq: not done, no open turn, nothing queued.
-fn idle_at(record: &Record, queue: &Path, seq: u64) -> bool {
+/// Whether the worker with this record is idle at result seq: not done, no open turn, nothing queued.
+fn idle_at(record: &Record, seq: u64, nothing_queued: bool) -> bool {
     record.result_seq == seq
         && record.turn_base != Some(record.result_seq)
         && record.status.as_deref() != Some("done")
-        && read_queue(queue).is_ok_and(|entries| entries.is_empty())
+        && nothing_queued
 }
 
 /// Compacts the session of worker name if it is still idle at result seq, as an open turn that writes no result. The
 /// status stays what it was: claude's status hooks run during the compaction too.
 fn compact_session(records: &Records, name: &str, seq: u64) -> Result<(), String> {
-    let queue = records.queue_dir(name);
+    let nothing_queued = records.queued(name)?.is_empty();
     let mut idle = false;
     let mut ask_permissions = false;
     let mut status = None;
     let mut status_at = None;
     records.update(name, |r| {
-        idle = idle_at(r, &queue, seq);
+        idle = idle_at(r, seq, nothing_queued);
         ask_permissions = r.ask_permissions;
         if idle {
             r.turn_base = Some(seq);
@@ -461,6 +409,74 @@ fn compact_session(records: &Records, name: &str, seq: u64) -> Result<(), String
     compacted.map(|_| ())
 }
 
+enum TurnEnd {
+    /// The result was written; the size of claude's last context in tokens.
+    Result(u64),
+    /// The turn was closed elsewhere and the result dropped.
+    Dropped,
+    /// A died result was written.
+    Died,
+}
+
+/// Runs the open turn of worker name on its claimed messages and closes it with a result.
+fn run_turn(
+    records: &Records,
+    name: &str,
+    ask_permissions: bool,
+    Turn { base, claimed }: Turn,
+) -> Result<TurnEnd, String> {
+    let input = claimed
+        .iter()
+        .map(|q| q.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let (kind, text, tokens) = match prepare(name) {
+        Ok((workspace, resume)) => {
+            match run_claude(name, &workspace, resume.as_deref(), ask_permissions, input) {
+                Ok((event, tokens)) => (ResultKind::Result, result_text(&event), tokens),
+                Err(text) => (ResultKind::Died, text, 0),
+            }
+        }
+        Err(e) => (
+            ResultKind::Died,
+            format!("{e}\nLog: journalctl --user -u {}", unit(name)),
+            0,
+        ),
+    };
+    let written = finish(name, kind, &text, |r| {
+        if r.turn_base != Some(base) {
+            return false;
+        }
+        if r.status.as_deref() != Some("done") {
+            r.status = Some("idle".to_string());
+        }
+        r.status_at = Some(now());
+        true
+    })?;
+    match written {
+        None => {
+            let _ = writeln!(
+                io::stderr(),
+                "jw: {name}: turn closed elsewhere, result dropped"
+            );
+            Ok(TurnEnd::Dropped)
+        }
+        // after a death the messages stay: the next turn runs them again
+        Some(_) if kind == ResultKind::Died => Ok(TurnEnd::Died),
+        Some(_) => {
+            for q in &claimed {
+                if let Err(e) = records.dequeue(name, &q.id) {
+                    let _ = writeln!(
+                        io::stderr(),
+                        "jw: {name}: cannot delete a queued message: {e}"
+                    );
+                }
+            }
+            Ok(TurnEnd::Result(tokens))
+        }
+    }
+}
+
 /// Runs the queued messages of headless worker name as turns of claude, one result per turn, until the queue is empty.
 /// With compact, first compacts the session if it is still idle at that result.
 pub fn cmd_worker_turn(name: &str, compact: Option<u64>) -> Result<(), String> {
@@ -477,52 +493,12 @@ pub fn cmd_worker_turn(name: &str, compact: Option<u64>) -> Result<(), String> {
         }
     }
     let mut context = None;
-    while let Some(Turn { base, entries }) = open_turn(&records, name)? {
-        context = None;
-        let input = entries
-            .iter()
-            .map(|(_, text)| text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let (kind, text, tokens) = match prepare(name) {
-            Ok((workspace, resume)) => {
-                match run_claude(name, &workspace, resume.as_deref(), ask_permissions, input) {
-                    Ok((event, tokens)) => (ResultKind::Result, result_text(&event), tokens),
-                    Err(text) => (ResultKind::Died, text, 0),
-                }
-            }
-            Err(e) => (
-                ResultKind::Died,
-                format!("{e}\nLog: journalctl --user -u {}", unit(name)),
-                0,
-            ),
+    while let Some(turn) = open_turn(&records, name)? {
+        context = match run_turn(&records, name, ask_permissions, turn)? {
+            TurnEnd::Result(tokens) => Some(tokens),
+            TurnEnd::Dropped => None,
+            TurnEnd::Died => return Ok(()),
         };
-        let written = finish(name, kind, &text, |r| {
-            if r.turn_base != Some(base) {
-                return false;
-            }
-            if r.status.as_deref() != Some("done") {
-                r.status = Some("idle".to_string());
-            }
-            r.status_at = Some(now());
-            true
-        })?;
-        // after a death the messages stay: the next turn runs them again
-        if written.is_some() && kind == ResultKind::Result {
-            for (path, _) in &entries {
-                let _ = fs::remove_file(path);
-            }
-        }
-        match written {
-            None => {
-                let _ = writeln!(
-                    io::stderr(),
-                    "jw: {name}: turn closed elsewhere, result dropped"
-                );
-            }
-            Some(_) if kind == ResultKind::Died => break,
-            Some(_) => context = Some(tokens),
-        }
     }
     if context.is_some_and(|tokens| tokens >= COMPACT_MIN_TOKENS) {
         if let Err(e) = schedule_compact(&records, name) {
@@ -564,11 +540,11 @@ pub fn cmd_worker_compact(name: &str, seq: u64) -> Result<(), String> {
     let Some(workspace) = record.workspace.as_deref() else {
         return Ok(());
     };
-    if !record.headless
-        || record.reaped.is_some()
-        || !idle_at(&record, &records.queue_dir(name), seq)
-        || Systemd.is_active(&unit(name)) != Some(false)
-    {
+    if !record.headless || record.reaped.is_some() {
+        return Ok(());
+    }
+    let nothing_queued = records.queued(name)?.is_empty();
+    if !idle_at(&record, seq, nothing_queued) || Systemd.is_active(&unit(name)) != Some(false) {
         return Ok(());
     }
     let argv = vec![

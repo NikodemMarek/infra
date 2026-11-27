@@ -2,6 +2,7 @@ use super::{Bucket, Kv, KvError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[path = "../common/nats.rs"]
+#[allow(clippy::duplicate_mod)]
 mod nats;
 use nats::{closed_url, NatsServer};
 

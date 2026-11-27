@@ -5,15 +5,18 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::kv::{nats_url, Bucket, Kv, KvError};
 use crate::procs::home;
 
 const RECORD_MAX: u64 = 65536;
+const QUEUE_MESSAGE_MAX: usize = 786432;
 const RECORD_DAYS: u64 = 7;
 const LOCK_WAIT: Duration = Duration::from_secs(5);
 const RESULT_TEXT_MAX: usize = 262144;
@@ -252,9 +255,13 @@ fn read_capped(path: &Path, max: u64) -> Option<Vec<u8>> {
     (data.len() as u64 <= max).then_some(data)
 }
 
-/// The session records, $XDG_STATE_HOME/agent-sessions/<name>.json.
+/// The connection of this process, shared by every `Records::open`.
+static SHARED_KV: Mutex<Option<Arc<Kv>>> = Mutex::new(None);
+
+/// The session records, $XDG_STATE_HOME/agent-sessions/<name>.json, and the queues of the headless workers in NATS KV.
 pub struct Records {
     dir: PathBuf,
+    kv: Arc<Kv>,
 }
 
 /// The entries of the directory at path, none if it does not exist.
@@ -268,13 +275,29 @@ fn dir_entries(path: &Path) -> Result<Vec<fs::DirEntry>, String> {
 
 impl Records {
     pub fn open() -> Result<Records, String> {
+        let mut shared = SHARED_KV.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(kv) = shared.as_ref() {
+            return Ok(Records::with(Arc::clone(kv)));
+        }
+        let records = Records::connect(&nats_url())?;
+        *shared = Some(Arc::clone(&records.kv));
+        Ok(records)
+    }
+
+    /// Records on a fresh connection to the NATS server at url.
+    pub fn connect(url: &str) -> Result<Records, String> {
+        Ok(Records::with(Arc::new(Kv::connect(url)?)))
+    }
+
+    fn with(kv: Arc<Kv>) -> Records {
         let state = env::var("XDG_STATE_HOME")
             .ok()
             .filter(|s| Path::new(s).is_absolute())
             .unwrap_or_else(|| format!("{}/.local/state", home()));
-        Ok(Records {
+        Records {
             dir: PathBuf::from(state).join("agent-sessions"),
-        })
+            kv,
+        }
     }
 
     /// The record of session name, None if it is missing or not a plain, small JSON object file.
@@ -288,11 +311,6 @@ impl Records {
         Ok(serde_json::from_slice(&data)
             .ok()
             .and_then(Record::from_value))
-    }
-
-    /// The directory of the messages queued for headless worker name.
-    pub fn queue_dir(&self, name: &str) -> PathBuf {
-        self.dir.join("queue").join(name)
     }
 
     /// The records, sorted by name.
@@ -412,7 +430,7 @@ impl Records {
                 let _ = fs::remove_file(&path);
                 if let Some(name) = name {
                     let _ = fs::remove_dir_all(self.dir.join("results").join(&name));
-                    let _ = fs::remove_dir_all(self.dir.join("queue").join(&name));
+                    let _ = self.kv.purge(Bucket::Queue, &format!("{name}.*"));
                 }
             }
         }
@@ -574,6 +592,106 @@ impl Records {
                 .map_err(|e| format!("cannot delete the result of {name}: {e}"))?;
         }
         Ok(())
+    }
+}
+
+/// A message queued for a headless worker; revision is that of its queue entry.
+pub struct Queued {
+    pub id: String,
+    pub text: String,
+    pub revision: u64,
+}
+
+fn queue_key(name: &str, id: &str) -> String {
+    format!("{name}.{id}")
+}
+
+fn queue_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    format!("{nanos:020}-{}", process::id())
+}
+
+/// The queue of a worker: an entry is created holding the message, a turn claims it by rewriting it at the revision it
+/// listed and deletes it after the turn; a sender that gives up cancels it by blanking it at its revision. Either
+/// rewrite invalidates the other's revision, so exactly one of them wins.
+impl Records {
+    /// Queues text for worker name; returns the id and revision of the entry.
+    pub fn enqueue(&self, name: &str, text: &str) -> Result<(String, u64), String> {
+        let fail = |e: &str| format!("cannot queue the message for {name}: {e}");
+        if text.is_empty() {
+            return Err(fail("empty message"));
+        }
+        if text.len() > QUEUE_MESSAGE_MAX {
+            return Err(fail(&format!(
+                "it is larger than {QUEUE_MESSAGE_MAX} bytes"
+            )));
+        }
+        loop {
+            let id = queue_id();
+            match self
+                .kv
+                .create(Bucket::Queue, &queue_key(name, &id), text.as_bytes())
+            {
+                Ok(revision) => return Ok((id, revision)),
+                Err(KvError::Conflict) => {}
+                Err(e) => return Err(fail(&e.to_string())),
+            }
+        }
+    }
+
+    /// The messages queued for worker name by id; cancelled entries are left out.
+    pub fn queued(&self, name: &str) -> Result<Vec<Queued>, String> {
+        let prefix = format!("{name}.");
+        let mut queued = vec![];
+        for key in self.kv.keys(Bucket::Queue)? {
+            let Some(id) = key.strip_prefix(&prefix).filter(|id| !id.contains('.')) else {
+                continue;
+            };
+            let Some(entry) = self.kv.get(Bucket::Queue, &key)? else {
+                continue;
+            };
+            if !entry.value.is_empty() {
+                queued.push(Queued {
+                    id: id.to_string(),
+                    text: String::from_utf8_lossy(&entry.value).into_owned(),
+                    revision: entry.revision,
+                });
+            }
+        }
+        Ok(queued)
+    }
+
+    /// Takes the message q for a turn; false if it was cancelled or claimed meanwhile.
+    pub fn claim(&self, name: &str, q: &Queued) -> Result<bool, String> {
+        let key = queue_key(name, &q.id);
+        match self
+            .kv
+            .update(Bucket::Queue, &key, q.text.as_bytes(), q.revision)
+        {
+            Ok(_) => Ok(true),
+            Err(KvError::Conflict) => Ok(false),
+            Err(KvError::Other(e)) => Err(e),
+        }
+    }
+
+    /// Withdraws the message id enqueued at revision; false if a turn claimed it.
+    pub fn cancel(&self, name: &str, id: &str, revision: u64) -> Result<bool, String> {
+        let key = queue_key(name, id);
+        match self.kv.update(Bucket::Queue, &key, b"", revision) {
+            Ok(_) => {
+                let _ = self.kv.purge(Bucket::Queue, &key);
+                Ok(true)
+            }
+            Err(KvError::Conflict) => Ok(false),
+            Err(KvError::Other(e)) => Err(e),
+        }
+    }
+
+    /// Deletes the message id of worker name.
+    pub fn dequeue(&self, name: &str, id: &str) -> Result<(), String> {
+        self.kv.purge(Bucket::Queue, &queue_key(name, id))
     }
 }
 

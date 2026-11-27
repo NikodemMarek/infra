@@ -3,9 +3,13 @@ use super::*;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[path = "../common/nats.rs"]
+#[allow(clippy::duplicate_mod)]
+mod nats;
+
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-struct Tmp(PathBuf);
+struct Tmp(PathBuf, nats::NatsServer);
 
 impl Tmp {
     fn new() -> Tmp {
@@ -14,13 +18,13 @@ impl Tmp {
         let dir = base.join(format!("jw-record-test-{}-{}", process::id(), n));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        Tmp(dir)
+        Tmp(dir, nats::NatsServer::start())
     }
 
     fn records(&self) -> Records {
-        Records {
-            dir: self.0.join("agent-sessions"),
-        }
+        let mut records = Records::connect(&self.1.url()).unwrap();
+        records.dir = self.0.join("agent-sessions");
+        records
     }
 }
 
@@ -385,11 +389,10 @@ fn write_old(r: &Records, name: &str, json: &str) {
     let p = r.dir.join(format!("{name}.json"));
     fs::write(&p, json).unwrap();
     old(&p);
-    for sub in ["results", "queue"] {
-        let d = r.dir.join(sub).join(name);
-        fs::create_dir_all(&d).unwrap();
-        fs::write(d.join("1.json"), "{}").unwrap();
-    }
+    let d = r.dir.join("results").join(name);
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("1.json"), "{}").unwrap();
+    r.enqueue(name, "pending").unwrap();
 }
 
 fn trigger_prune(r: &Records) {
@@ -406,10 +409,10 @@ fn prune_removes_results_and_queue_with_the_record() {
     trigger_prune(&r);
     assert!(!r.dir.join("gone.json").exists());
     assert!(!r.dir.join("results/gone").exists());
-    assert!(!r.dir.join("queue/gone").exists());
+    assert!(r.queued("gone").unwrap().is_empty());
     assert!(r.dir.join("other.json").exists());
     assert!(r.dir.join("results/other").exists());
-    assert!(r.dir.join("queue/other").exists());
+    assert_eq!(r.queued("other").unwrap().len(), 1);
     assert!(r.dir.join("fresh.json").exists());
 }
 
@@ -421,7 +424,7 @@ fn prune_keeps_a_live_headless_record_and_its_files() {
     trigger_prune(&r);
     assert!(r.dir.join("w.json").exists());
     assert!(r.dir.join("results/w/1.json").exists());
-    assert!(r.dir.join("queue/w/1.json").exists());
+    assert_eq!(r.queued("w").unwrap().len(), 1);
 }
 
 #[test]
@@ -432,7 +435,7 @@ fn prune_removes_a_reaped_headless_record_with_its_files() {
     trigger_prune(&r);
     assert!(!r.dir.join("w.json").exists());
     assert!(!r.dir.join("results/w").exists());
-    assert!(!r.dir.join("queue/w").exists());
+    assert!(r.queued("w").unwrap().is_empty());
 }
 
 #[test]
@@ -475,4 +478,252 @@ fn orphan_result_file_is_not_overwritten_and_can_be_acked() {
 fn unit_name() {
     assert_eq!(crate::worker::unit("w"), "jw-worker-w");
     assert_eq!(crate::worker::unit("a.b_c-1"), "jw-worker-a.b_c-1");
+}
+
+mod queue {
+    use crate::kv::{Bucket, Kv};
+    use crate::record::Records;
+
+    use super::nats::{closed_url, NatsServer};
+
+    struct Q {
+        _server: NatsServer,
+        r: Records,
+        kv: Kv,
+    }
+
+    fn setup() -> Q {
+        let server = NatsServer::start();
+        let r = Records::connect(&server.url()).expect("connect");
+        let kv = Kv::connect(&server.url()).expect("connect");
+        Q {
+            _server: server,
+            r,
+            kv,
+        }
+    }
+
+    fn texts(q: &Q, name: &str) -> Vec<String> {
+        q.r.queued(name)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.text)
+            .collect()
+    }
+
+    fn key(name: &str, id: &str) -> String {
+        format!("{name}.{id}")
+    }
+
+    fn is_id(id: &str) -> bool {
+        match id.split_once('-') {
+            Some((t, pid)) => {
+                t.len() == 20
+                    && t.bytes().all(|b| b.is_ascii_digit())
+                    && !pid.is_empty()
+                    && pid.bytes().all(|b| b.is_ascii_digit())
+            }
+            None => false,
+        }
+    }
+
+    #[test]
+    fn connect_failure_names_the_url() {
+        let url = closed_url();
+        let err = Records::connect(&url).err().expect("must fail");
+        assert!(
+            err.starts_with(&format!("cannot reach NATS at {url}: ")),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn enqueue_then_queued_lists_the_entry() {
+        let q = setup();
+        let (id, rev) = q.r.enqueue("w", "hello").unwrap();
+        assert!(is_id(&id), "{id}");
+        let got = q.r.queued("w").unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, id);
+        assert_eq!(got[0].text, "hello");
+        assert_eq!(got[0].revision, rev);
+        let e = q.kv.get(Bucket::Queue, &key("w", &id)).unwrap().unwrap();
+        assert_eq!(e.value, b"hello");
+        assert_eq!(e.revision, rev);
+    }
+
+    #[test]
+    fn queued_of_an_unknown_session_is_empty() {
+        let q = setup();
+        assert!(q.r.queued("nobody").unwrap().is_empty());
+    }
+
+    #[test]
+    fn ids_are_ordered_and_queued_follows_them() {
+        let q = setup();
+        let mut ids = vec![];
+        for i in 0..5 {
+            ids.push(q.r.enqueue("w", &format!("m{i}")).unwrap().0);
+        }
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_eq!(ids, sorted);
+        let mut unique = ids.clone();
+        unique.dedup();
+        assert_eq!(unique.len(), 5);
+        let got = q.r.queued("w").unwrap();
+        assert_eq!(got.iter().map(|e| e.id.clone()).collect::<Vec<_>>(), ids);
+        assert_eq!(texts(&q, "w"), ["m0", "m1", "m2", "m3", "m4"]);
+        let revs: Vec<u64> = got.iter().map(|e| e.revision).collect();
+        assert!(revs.windows(2).all(|w| w[0] < w[1]), "{revs:?}");
+    }
+
+    #[test]
+    fn queued_orders_by_id_not_by_insertion() {
+        let q = setup();
+        q.kv.put(
+            Bucket::Queue,
+            &key("w", "00000000000000000002-1"),
+            b"second",
+        )
+        .unwrap();
+        q.kv.put(Bucket::Queue, &key("w", "00000000000000000001-1"), b"first")
+            .unwrap();
+        assert_eq!(texts(&q, "w"), ["first", "second"]);
+    }
+
+    #[test]
+    fn enqueue_rejects_an_empty_message() {
+        let q = setup();
+        assert_eq!(
+            q.r.enqueue("w", "").err().unwrap(),
+            "cannot queue the message for w: empty message"
+        );
+        assert!(q.r.queued("w").unwrap().is_empty());
+    }
+
+    #[test]
+    fn enqueue_size_limit() {
+        let q = setup();
+        let err = q.r.enqueue("w", &"a".repeat(786433)).err().unwrap();
+        assert_eq!(
+            err,
+            "cannot queue the message for w: it is larger than 786432 bytes"
+        );
+        assert!(q.r.queued("w").unwrap().is_empty());
+        let (id, _) = q.r.enqueue("w", &"a".repeat(786432)).unwrap();
+        assert_eq!(q.r.queued("w").unwrap()[0].id, id);
+    }
+
+    #[test]
+    fn queued_leaves_out_other_sessions_with_a_dotted_name() {
+        let q = setup();
+        q.r.enqueue("a", "mine").unwrap();
+        q.r.enqueue("a.b", "theirs").unwrap();
+        q.kv.put(Bucket::Queue, &key("a.b", "00000000000000000001-1"), b"x")
+            .unwrap();
+        assert_eq!(texts(&q, "a"), ["mine"]);
+        assert_eq!(texts(&q, "a.b"), ["x", "theirs"]);
+    }
+
+    #[test]
+    fn queued_skips_cancelled_entries_and_reads_non_utf8_lossily() {
+        let q = setup();
+        q.kv.put(Bucket::Queue, &key("w", "00000000000000000001-1"), b"")
+            .unwrap();
+        q.kv.put(
+            Bucket::Queue,
+            &key("w", "00000000000000000002-1"),
+            &[b'a', 0xff, b'b'],
+        )
+        .unwrap();
+        assert_eq!(texts(&q, "w"), ["a\u{fffd}b"]);
+    }
+
+    #[test]
+    fn claim_succeeds_once_then_the_old_revision_conflicts() {
+        let q = setup();
+        let (id, _) = q.r.enqueue("w", "go").unwrap();
+        let entry = q.r.queued("w").unwrap().remove(0);
+        assert_eq!(q.r.claim("w", &entry), Ok(true));
+        assert_eq!(q.r.claim("w", &entry), Ok(false));
+        let after = q.r.queued("w").unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].id, id);
+        assert_eq!(after[0].text, "go");
+        assert!(after[0].revision > entry.revision);
+        assert_eq!(q.r.claim("w", &after[0]), Ok(true));
+    }
+
+    #[test]
+    fn cancel_unclaimed_removes_the_entry() {
+        let q = setup();
+        let (id, rev) = q.r.enqueue("w", "go").unwrap();
+        assert_eq!(q.r.cancel("w", &id, rev), Ok(true));
+        assert!(q.r.queued("w").unwrap().is_empty());
+        assert!(q.kv.get(Bucket::Queue, &key("w", &id)).unwrap().is_none());
+        assert!(!q.kv.keys(Bucket::Queue).unwrap().contains(&key("w", &id)));
+    }
+
+    #[test]
+    fn cancel_after_claim_conflicts_and_keeps_the_entry() {
+        let q = setup();
+        let (id, rev) = q.r.enqueue("w", "go").unwrap();
+        let entry = q.r.queued("w").unwrap().remove(0);
+        assert_eq!(q.r.claim("w", &entry), Ok(true));
+        assert_eq!(q.r.cancel("w", &id, rev), Ok(false));
+        assert_eq!(texts(&q, "w"), ["go"]);
+    }
+
+    #[test]
+    fn claim_after_cancel_is_false() {
+        let q = setup();
+        let (id, rev) = q.r.enqueue("w", "go").unwrap();
+        let entry = q.r.queued("w").unwrap().remove(0);
+        assert_eq!(q.r.cancel("w", &id, rev), Ok(true));
+        assert_eq!(q.r.claim("w", &entry), Ok(false));
+        assert!(q.r.queued("w").unwrap().is_empty());
+    }
+
+    #[test]
+    fn claim_after_a_hand_written_cancel_marker_is_false() {
+        let q = setup();
+        let (id, _) = q.r.enqueue("w", "go").unwrap();
+        let entry = q.r.queued("w").unwrap().remove(0);
+        q.kv.put(Bucket::Queue, &key("w", &id), b"").unwrap();
+        assert_eq!(q.r.claim("w", &entry), Ok(false));
+        assert!(q.r.queued("w").unwrap().is_empty());
+    }
+
+    #[test]
+    fn dequeue_removes_the_entry_and_tolerates_absence() {
+        let q = setup();
+        let (id, _) = q.r.enqueue("w", "one").unwrap();
+        let (other, _) = q.r.enqueue("w", "two").unwrap();
+        assert_eq!(q.r.dequeue("w", &id), Ok(()));
+        assert_eq!(texts(&q, "w"), ["two"]);
+        assert_eq!(q.r.dequeue("w", &id), Ok(()));
+        assert_eq!(q.r.dequeue("nobody", "00000000000000000001-1"), Ok(()));
+        assert_eq!(q.r.queued("w").unwrap()[0].id, other);
+    }
+
+    #[test]
+    fn dequeue_of_a_claimed_entry_removes_it() {
+        let q = setup();
+        let (id, _) = q.r.enqueue("w", "go").unwrap();
+        let entry = q.r.queued("w").unwrap().remove(0);
+        assert_eq!(q.r.claim("w", &entry), Ok(true));
+        assert_eq!(q.r.dequeue("w", &id), Ok(()));
+        assert!(q.r.queued("w").unwrap().is_empty());
+        assert!(q.kv.get(Bucket::Queue, &key("w", &id)).unwrap().is_none());
+    }
+
+    #[test]
+    fn dequeue_does_not_touch_a_prefix_session() {
+        let q = setup();
+        let (id, _) = q.r.enqueue("a", "mine").unwrap();
+        q.r.enqueue("a.b", "theirs").unwrap();
+        assert_eq!(q.r.dequeue("a", &id), Ok(()));
+        assert_eq!(texts(&q, "a.b"), ["theirs"]);
+    }
 }

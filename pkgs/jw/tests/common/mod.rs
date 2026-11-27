@@ -8,6 +8,13 @@ use std::time::{Duration, SystemTime};
 
 use serde_json::Value;
 
+#[allow(clippy::duplicate_mod)]
+mod nats;
+pub use nats::{closed_url, NatsServer};
+#[path = "../../src/kv.rs"]
+pub mod kv;
+use kv::{Bucket, Kv};
+
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 // Checked in as executables: writing them at runtime races other threads' fork+exec (ETXTBSY).
@@ -24,6 +31,8 @@ pub struct Env {
     pub logs: PathBuf,
     bin: PathBuf,
     jj_config: PathBuf,
+    pub nats: NatsServer,
+    kv: Kv,
 }
 
 pub struct Out {
@@ -38,7 +47,11 @@ impl Env {
         let base = fs::canonicalize(std::env::temp_dir()).unwrap();
         let dir = base.join(format!("jw-test-{}-{}", std::process::id(), n));
         let _ = fs::remove_dir_all(&dir);
+        let nats = NatsServer::start();
+        let kv = Kv::connect(&nats.url()).expect("connect to the test nats-server");
         let e = Env {
+            nats,
+            kv,
             home: dir.join("home"),
             root: dir.join("home/projects"),
             state: dir.join("state"),
@@ -84,6 +97,7 @@ impl Env {
             .env("CLAUDE_CONFIG_DIR", self.dir.join("claude"))
             .env("JJ_CONFIG", &self.jj_config)
             .env("FAKE_LOG_DIR", &self.logs)
+            .env("NATS_URL", self.nats.url())
             .env("SHPOOL_STATE", self.dir.join("shpool-state"));
         c
     }
@@ -205,6 +219,34 @@ impl Env {
         let p = self.record_path(name);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, json).unwrap();
+    }
+
+    pub fn nats_url(&self) -> String {
+        self.nats.url()
+    }
+
+    /// The texts queued for name by id; cancelled (empty) entries and other sessions' keys are left out.
+    pub fn queue(&self, name: &str) -> Vec<String> {
+        let prefix = format!("{name}.");
+        let mut keys: Vec<String> = self
+            .kv
+            .keys(Bucket::Queue)
+            .unwrap()
+            .into_iter()
+            .filter(|k| k.strip_prefix(&prefix).is_some_and(|id| !id.contains('.')))
+            .collect();
+        keys.sort();
+        keys.iter()
+            .filter_map(|k| self.kv.get(Bucket::Queue, k).unwrap())
+            .map(|e| String::from_utf8_lossy(&e.value).into_owned())
+            .filter(|t| !t.is_empty())
+            .collect()
+    }
+
+    pub fn put_queue(&self, name: &str, id: &str, text: &str) {
+        self.kv
+            .put(Bucket::Queue, &format!("{name}.{id}"), text.as_bytes())
+            .unwrap();
     }
 
     pub fn log(&self, name: &str) -> String {

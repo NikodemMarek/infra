@@ -395,6 +395,30 @@ fn c16_agent_session_tracks_new_worktree() {
 }
 
 #[test]
+fn c16b_nats_down_only_warns() {
+    let e = Env::new();
+    let repo = e.repo();
+    let url = common::closed_url();
+    let out = create_env(
+        &e,
+        &repo,
+        &[("AGENT_SESSION", "s1"), ("NATS_URL", &url)],
+        AGENT,
+    );
+    let d = printed(&out);
+    assert_eq!(out.stdout, format!("{}\n", d.display()));
+    assert!(
+        out.stderr.contains(&format!(
+            "jw: session worktree {}: cannot reach NATS at {url}: ",
+            d.display()
+        )),
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(d.join(".jj").is_dir());
+}
+
+#[test]
 fn c17_no_tracking_without_agent_session() {
     let e = Env::new();
     let repo = e.repo();
