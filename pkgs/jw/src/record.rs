@@ -54,7 +54,7 @@ fn is_zero(n: &u64) -> bool {
 
 /// The record of an agent session, ADR-056/063. Records written by older versions are read field by field: a field of
 /// the wrong type is ignored, not the record.
-#[derive(Default, Serialize)]
+#[derive(Default, Serialize, Clone)]
 pub struct Record {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -257,24 +257,37 @@ pub struct Records {
     dir: PathBuf,
 }
 
+/// The entries of the directory at path, none if it does not exist.
+fn dir_entries(path: &Path) -> Result<Vec<fs::DirEntry>, String> {
+    match fs::read_dir(path) {
+        Ok(entries) => Ok(entries.flatten().collect()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(vec![]),
+        Err(e) => Err(format!("cannot read {}: {e}", path.display())),
+    }
+}
+
 impl Records {
-    pub fn new() -> Records {
+    pub fn open() -> Result<Records, String> {
         let state = env::var("XDG_STATE_HOME")
             .ok()
             .filter(|s| Path::new(s).is_absolute())
             .unwrap_or_else(|| format!("{}/.local/state", home()));
-        Records {
+        Ok(Records {
             dir: PathBuf::from(state).join("agent-sessions"),
-        }
+        })
     }
 
     /// The record of session name, None if it is missing or not a plain, small JSON object file.
-    pub fn read(&self, name: &str) -> Option<Record> {
+    pub fn read(&self, name: &str) -> Result<Option<Record>, String> {
         if !valid_name(name) {
-            return None;
+            return Ok(None);
         }
-        let data = read_capped(&self.dir.join(format!("{name}.json")), RECORD_MAX)?;
-        Record::from_value(serde_json::from_slice(&data).ok()?)
+        let Some(data) = read_capped(&self.dir.join(format!("{name}.json")), RECORD_MAX) else {
+            return Ok(None);
+        };
+        Ok(serde_json::from_slice(&data)
+            .ok()
+            .and_then(Record::from_value))
     }
 
     /// The directory of the messages queued for headless worker name.
@@ -283,30 +296,31 @@ impl Records {
     }
 
     /// The records, sorted by name.
-    pub fn load_all(&self) -> Vec<(String, Record)> {
-        let Ok(entries) = fs::read_dir(&self.dir) else {
-            return vec![];
-        };
-        let mut files: Vec<String> = entries
-            .flatten()
+    pub fn load_all(&self) -> Result<Vec<(String, Record)>, String> {
+        let mut files: Vec<String> = dir_entries(&self.dir)?
+            .iter()
             .filter_map(|e| e.file_name().into_string().ok())
             .collect();
         files.sort();
-        files
-            .iter()
-            .filter_map(|f| {
-                let name = f.strip_suffix(".json")?;
-                Some((name.to_string(), self.read(name)?))
-            })
-            .collect()
+        let mut records = vec![];
+        for file in &files {
+            let Some(name) = file.strip_suffix(".json") else {
+                continue;
+            };
+            if let Some(record) = self.read(name)? {
+                records.push((name.to_string(), record));
+            }
+        }
+        Ok(records)
     }
 
     /// Under the records lock calls change on the record of session name (empty if there is none) and writes it
-    /// unless that returns false; returns the record.
+    /// unless that returns false; returns the record. change may run again, so it must have no side effects beyond
+    /// what it captures.
     pub fn update(
         &self,
         name: &str,
-        change: impl FnOnce(&mut Record) -> bool,
+        mut change: impl FnMut(&mut Record) -> bool,
     ) -> Result<Record, String> {
         if !valid_name(name) {
             return Err(format!("invalid session name: '{name}'"));
@@ -341,7 +355,7 @@ impl Records {
         }
         let path = self.dir.join(format!("{name}.json"));
         let existed = fs::symlink_metadata(&path).is_ok();
-        let mut record = self.read(name).unwrap_or_default();
+        let mut record = self.read(name)?.unwrap_or_default();
         if !change(&mut record) {
             return Ok(record);
         }
@@ -392,7 +406,7 @@ impl Records {
                 .map(str::to_string);
             let kept = name
                 .as_deref()
-                .and_then(|name| self.read(name))
+                .and_then(|name| self.read(name).ok().flatten())
                 .is_some_and(|r| r.long_lived() && r.reaped.is_none());
             if old && !kept {
                 let _ = fs::remove_file(&path);
@@ -419,7 +433,7 @@ impl Records {
             if r.status.as_deref() != Some("done") && !unchanged {
                 r.status = Some(state.to_string());
                 r.status_at = Some(now());
-                r.waiting_for = waiting_for;
+                r.waiting_for = waiting_for.clone();
                 changed = true;
             }
             if r.cache_expires_at != cache_expires_at {
@@ -432,22 +446,25 @@ impl Records {
     }
 
     /// Under the records lock: if guard (which may change the record) returns true, writes the next numbered result of
-    /// session name, saves the record with the turn closed and returns the number; false: nothing is written.
+    /// session name, saves the record with the turn closed and returns the number; false: nothing is written. guard
+    /// may run again, so it must have no side effects beyond what it captures.
     pub fn write_result(
         &self,
         name: &str,
         kind: ResultKind,
         text: &str,
-        guard: impl FnOnce(&mut Record) -> bool,
+        mut guard: impl FnMut(&mut Record) -> bool,
     ) -> Result<Option<u64>, String> {
         let mut written = Ok(None);
         self.update(name, |r| {
             if !guard(r) {
                 return false;
             }
-            let seq = self.last_seq(name, r) + 1;
-            written = self.store_result(name, seq, kind, text).map(|()| Some(seq));
-            if written.is_ok() {
+            written = self.last_seq(name, r).and_then(|last| {
+                let seq = last + 1;
+                self.store_result(name, seq, kind, text).map(|()| Some(seq))
+            });
+            if let Ok(Some(seq)) = written {
                 r.result_seq = seq;
                 r.turn_base = None;
             }
@@ -501,15 +518,12 @@ impl Records {
 
     /// The numbers of the unacked results of session name, ascending: the numeric `<n>.json` file names are the
     /// source of truth.
-    pub fn result_seqs(&self, name: &str) -> Vec<u64> {
+    pub fn result_seqs(&self, name: &str) -> Result<Vec<u64>, String> {
         if !valid_name(name) {
-            return vec![];
+            return Ok(vec![]);
         }
-        let Ok(entries) = fs::read_dir(self.dir.join("results").join(name)) else {
-            return vec![];
-        };
-        let mut seqs: Vec<u64> = entries
-            .flatten()
+        let mut seqs: Vec<u64> = dir_entries(&self.dir.join("results").join(name))?
+            .iter()
             .filter_map(|e| {
                 e.file_name()
                     .to_str()?
@@ -519,20 +533,21 @@ impl Records {
             })
             .collect();
         seqs.sort_unstable();
-        seqs
+        Ok(seqs)
     }
 
     /// The highest result number of session name: a result file renamed into place before its record was saved
     /// counts.
-    fn last_seq(&self, name: &str, record: &Record) -> u64 {
-        let on_disk = self.result_seqs(name).last().copied().unwrap_or_default();
-        record.result_seq.max(on_disk)
+    fn last_seq(&self, name: &str, record: &Record) -> Result<u64, String> {
+        let on_disk = self.result_seqs(name)?.last().copied().unwrap_or_default();
+        Ok(record.result_seq.max(on_disk))
     }
 
     /// The unacked results of session name, by number; an unreadable file is reported on stderr and skipped.
-    pub fn results(&self, name: &str) -> Vec<TurnResult> {
+    pub fn results(&self, name: &str) -> Result<Vec<TurnResult>, String> {
         let dir = self.dir.join("results").join(name);
-        self.result_seqs(name)
+        Ok(self
+            .result_seqs(name)?
             .into_iter()
             .filter_map(|seq| {
                 let result = read_capped(&dir.join(format!("{seq}.json")), RESULT_FILE_MAX)
@@ -542,19 +557,19 @@ impl Records {
                 }
                 result
             })
-            .collect()
+            .collect())
     }
 
     /// Deletes the results of session name up to seq; a seq beyond the last result fails.
     pub fn ack(&self, name: &str, seq: u64) -> Result<(), String> {
         let record = self
-            .read(name)
+            .read(name)?
             .ok_or_else(|| format!("no session record {name}"))?;
-        if seq > self.last_seq(name, &record) {
+        if seq > self.last_seq(name, &record)? {
             return Err(format!("no result {seq} of {name}"));
         }
         let dir = self.dir.join("results").join(name);
-        for n in self.result_seqs(name).into_iter().filter(|&n| n <= seq) {
+        for n in self.result_seqs(name)?.into_iter().filter(|&n| n <= seq) {
             fs::remove_file(dir.join(format!("{n}.json")))
                 .map_err(|e| format!("cannot delete the result of {name}: {e}"))?;
         }

@@ -37,9 +37,9 @@ pub fn finish(
     name: &str,
     kind: ResultKind,
     text: &str,
-    guard: impl FnOnce(&mut Record) -> bool,
+    guard: impl FnMut(&mut Record) -> bool,
 ) -> Result<Option<u64>, String> {
-    let seq = Records::new().write_result(name, kind, text, guard)?;
+    let seq = Records::open()?.write_result(name, kind, text, guard)?;
     if let Some(seq) = seq {
         let payload = serde_json::json!({"type": "session.result", "session": name, "seq": seq});
         if let Err(e) = event_pub("session.result", &payload.to_string()) {
@@ -125,15 +125,12 @@ fn start_turn(records: &Records, name: &str, record: Record) -> Result<Delivery,
 
 /// Queues text for worker name and makes sure a turn will run it.
 pub fn deliver(name: &str, text: &str) -> Result<Delivery, String> {
-    let records = Records::new();
-    let queue = records.queue_dir(name);
-    let mut entry = Err(String::new());
-    // the turn runner reads the queue under the same lock: an entry is either in its turn or seen as open here
-    let record = records.update(name, |_| {
-        entry = enqueue(&queue, name, text);
-        false
+    let records = Records::open()?;
+    let entry = enqueue(&records.queue_dir(name), name, text)?;
+    // the turn runner reads the queue under the records lock: an entry is either in its turn or seen as open here
+    let record = records.update(name, |_| false).inspect_err(|_| {
+        let _ = fs::remove_file(&entry);
     })?;
-    let entry = entry?;
     let e = match start_turn(&records, name, record) {
         Ok(delivery) => return Ok(delivery),
         Err(e) => e,
@@ -456,7 +453,7 @@ fn compact_session(records: &Records, name: &str, seq: u64) -> Result<(), String
         let ours =
             r.turn_base == Some(seq) && r.result_seq == seq && r.status.as_deref() != Some("done");
         if ours {
-            r.status = status;
+            r.status = status.clone();
             r.status_at = status_at;
         }
         ours
@@ -467,8 +464,8 @@ fn compact_session(records: &Records, name: &str, seq: u64) -> Result<(), String
 /// Runs the queued messages of headless worker name as turns of claude, one result per turn, until the queue is empty.
 /// With compact, first compacts the session if it is still idle at that result.
 pub fn cmd_worker_turn(name: &str, compact: Option<u64>) -> Result<(), String> {
-    let records = Records::new();
-    let Some(record) = records.read(name).filter(|r| r.headless) else {
+    let records = Records::open()?;
+    let Some(record) = records.read(name)?.filter(|r| r.headless) else {
         return Err(format!("{name} is not a headless worker"));
     };
     let ask_permissions = record.ask_permissions;
@@ -504,18 +501,18 @@ pub fn cmd_worker_turn(name: &str, compact: Option<u64>) -> Result<(), String> {
             if r.turn_base != Some(base) {
                 return false;
             }
-            // after a death the messages stay: the next turn runs them again
-            if kind == ResultKind::Result {
-                for (path, _) in &entries {
-                    let _ = fs::remove_file(path);
-                }
-            }
             if r.status.as_deref() != Some("done") {
                 r.status = Some("idle".to_string());
             }
             r.status_at = Some(now());
             true
         })?;
+        // after a death the messages stay: the next turn runs them again
+        if written.is_some() && kind == ResultKind::Result {
+            for (path, _) in &entries {
+                let _ = fs::remove_file(path);
+            }
+        }
         match written {
             None => {
                 let _ = writeln!(
@@ -537,7 +534,7 @@ pub fn cmd_worker_turn(name: &str, compact: Option<u64>) -> Result<(), String> {
 
 /// Starts the compaction of worker name's session shortly, if it only waits for events on its open MRs.
 fn schedule_compact(records: &Records, name: &str) -> Result<(), String> {
-    let Some(record) = records.read(name).filter(|r| {
+    let Some(record) = records.read(name)?.filter(|r| {
         r.status.as_deref() != Some("done") && r.mrs.iter().any(|mr| !r.merged_mrs.contains(mr))
     }) else {
         return Ok(());
@@ -560,8 +557,8 @@ fn schedule_compact(records: &Records, name: &str) -> Result<(), String> {
 /// Starts the turn that compacts the session of headless worker name, unless it has had a result, a message, a turn
 /// or an end since result seq.
 pub fn cmd_worker_compact(name: &str, seq: u64) -> Result<(), String> {
-    let records = Records::new();
-    let Some(record) = records.read(name) else {
+    let records = Records::open()?;
+    let Some(record) = records.read(name)? else {
         return Ok(());
     };
     let Some(workspace) = record.workspace.as_deref() else {

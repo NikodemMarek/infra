@@ -51,18 +51,26 @@ fn waiting_text(child: &str, record: &Record, event: &Map<String, Value>) -> Opt
 }
 
 /// The message for a result of child: None once the supervisor acked it (its file is gone).
-fn result_text(records: &Records, child: &str, event: &Map<String, Value>) -> Option<String> {
-    let seq = event.get("seq").and_then(Value::as_u64)?;
-    let result = records.results(child).into_iter().find(|r| r.seq == seq)?;
+fn result_text(
+    records: &Records,
+    child: &str,
+    event: &Map<String, Value>,
+) -> Result<Option<String>, String> {
+    let Some(seq) = event.get("seq").and_then(Value::as_u64) else {
+        return Ok(None);
+    };
+    let Some(result) = records.results(child)?.into_iter().find(|r| r.seq == seq) else {
+        return Ok(None);
+    };
     let quoted = quoted_head(&result.text, QUOTE_MAX);
     let quoted = quoted.strip_prefix('\n').unwrap_or("  > (no message)");
     let what = match result.kind {
         ResultKind::Result => "finished a turn",
         ResultKind::Died => "died during a turn",
     };
-    Some(format!(
+    Ok(Some(format!(
         "Session {child}, which reports to you, {what} (result {seq}; full text: `jw session results -s {child}`; once handled: `jw session ack {child} {seq}`):\n\n{quoted}"
-    ))
+    )))
 }
 
 /// The JSON line `{"to", "text"}` that `jw msg` delivers for the claude event in input; None for an event that
@@ -82,8 +90,8 @@ fn notice(input: &str) -> Result<Option<String>, String> {
     else {
         return Ok(None);
     };
-    let records = Records::new();
-    let Some(record) = records.read(child) else {
+    let records = Records::open()?;
+    let Some(record) = records.read(child)? else {
         return Ok(None);
     };
     let Some(to) = record
@@ -93,14 +101,14 @@ fn notice(input: &str) -> Result<Option<String>, String> {
     else {
         return Ok(None);
     };
-    let Some(supervisor) = records.read(to) else {
+    let Some(supervisor) = records.read(to)? else {
         return Ok(None);
     };
     if supervisor.status.as_deref() == Some("done") || supervisor.reaped.is_some() {
         return Ok(None);
     }
     let text = if event["type"] == "session.result" {
-        result_text(&records, child, &event)
+        result_text(&records, child, &event)?
     } else {
         waiting_text(child, &record, &event)
     };

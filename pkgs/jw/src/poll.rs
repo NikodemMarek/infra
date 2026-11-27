@@ -577,25 +577,27 @@ fn poll_record(name: &str, r: &Record) {
             return;
         }
     }
-    let updated = Records::new().update(name, |rec| {
-        if rec.workspace.is_none() {
-            return false;
-        }
-        let mut changed = rec.mr_marks != polled.marks;
-        rec.mr_marks = polled.marks;
-        if sent_merged {
-            for url in newly {
-                if !rec.merged_mrs.contains(&url) {
-                    rec.merged_mrs.push(url);
+    let updated = Records::open().and_then(|records| {
+        records.update(name, |rec| {
+            if rec.workspace.is_none() {
+                return false;
+            }
+            let mut changed = rec.mr_marks != polled.marks;
+            rec.mr_marks = polled.marks.clone();
+            if sent_merged {
+                for url in &newly {
+                    if !rec.merged_mrs.contains(url) {
+                        rec.merged_mrs.push(url.clone());
+                        changed = true;
+                    }
+                }
+                if finished && rec.notified.is_none() {
+                    rec.notified = Some(now());
                     changed = true;
                 }
             }
-            if finished && rec.notified.is_none() {
-                rec.notified = Some(now());
-                changed = true;
-            }
-        }
-        changed
+            changed
+        })
     });
     if let Err(e) = updated {
         eprintln!("jw: {name}: {}", write_error(&e));
@@ -611,7 +613,7 @@ fn record_died(
     name: &str,
     r: &Record,
     text: &str,
-    guard: impl FnOnce(&mut Record) -> bool,
+    mut guard: impl FnMut(&mut Record) -> bool,
 ) -> Result<bool, String> {
     let supervised = r
         .reports_to
@@ -621,7 +623,7 @@ fn record_died(
         return Ok(worker::finish(name, ResultKind::Died, text, guard)?.is_some());
     }
     let mut changed = false;
-    Records::new().update(name, |rec| {
+    Records::open()?.update(name, |rec| {
         changed = guard(rec);
         changed
     })?;
@@ -654,7 +656,7 @@ fn headless_died(name: &str, r: &Record) -> Result<bool, String> {
     };
     // a message turn sets busy (or keeps done): an open turn of another status is a compaction, which writes no result
     if !matches!(r.status.as_deref(), Some("busy" | "done")) {
-        Records::new().update(name, |rec| {
+        Records::open()?.update(name, |rec| {
             let close = gone(rec);
             if close {
                 rec.turn_base = None;
@@ -713,7 +715,7 @@ fn report_died(records: &[(String, Record)]) {
 /// Publishes failed pipelines, new comments and reviews, and merges of the MRs of agent sessions as forge.* events, and
 /// records the sessions that died mid-turn.
 pub fn cmd_poll() -> Result<(), String> {
-    let records = Records::new().load_all();
+    let records = Records::open()?.load_all()?;
     report_died(&records);
     let deadline = Instant::now() + POLL_DEADLINE;
     for (i, (name, record)) in records.iter().enumerate() {
