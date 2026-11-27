@@ -37,6 +37,8 @@
   memoryDir ? "$HOME/.local/share/claude/memory",
   # cross-repo knowledge file imported by CLAUDE.md; must start with $HOME/ (rendered as ~/, so permission rules match). null -> $dataDir/knowledge.md
   knowledgeFile ? null,
+  # long-lived login token (`claude setup-token`) claude-mate passes as CLAUDE_CODE_OAUTH_TOKEN; shell-expanded at runtime
+  mateTokenFile ? "$HOME/.local/share/claude/mate-token",
 }: let
   mdEntries = dir: lib.filterAttrs (n: t: t == "regular" && lib.hasSuffix ".md" n) (builtins.readDir dir);
 
@@ -80,6 +82,7 @@
     "projectsDir"
     "memoryDir"
     "knowledgeFile"
+    "mateTokenFile"
   ];
 
   # Inner builder: takes fully-resolved config. Wrapped in makeOverridable so
@@ -96,6 +99,7 @@
       projectsDir,
       memoryDir,
       knowledgeFile,
+      mateTokenFile,
     }: let
       # "$HOME/.local/share/claude" -> "~/.local/share/claude" (for prose in the markdown files)
       # The deny rules in the settings use the `~/` form, so a dataDir outside $HOME would silently disable them.
@@ -345,6 +349,19 @@
         '';
       };
 
+      # The coordinators' .credentials.json can't be shared (see matePreamble), so the mate
+      # reuses the account through a setup-token token, which claude never refreshes or writes.
+      mateToken = writeShellScript "claude-mate-token" ''
+        if [ ! -s "${mateTokenFile}" ]; then
+          echo "claude-mate: no login token in ${mateTokenFile}; create it once with:" >&2
+          echo "  claude setup-token" >&2
+          echo "  install -m 600 /dev/stdin \"${mateTokenFile}\"   # paste the token, Enter, Ctrl-D" >&2
+          exit 1
+        fi
+        CLAUDE_CODE_OAUTH_TOKEN="$(<"${mateTokenFile}")"
+        export CLAUDE_CODE_OAUTH_TOKEN
+      '';
+
       # Sourced after the preamble: a plain interactive `claude [prompt]` in a repo's main jj
       # workspace runs in its own one (`--worktree`, see `jw hook`). Anything with
       # flags or a subcommand, or already in a <repo>.agents/<name> workspace, runs as is.
@@ -449,6 +466,7 @@
             --run "source ${workspace}" \
             ${wrapperArgs}
           makeWrapper ${claude-code}/bin/claude $out/bin/claude-mate \
+            --run "source ${mateToken}" \
             --run "source ${matePreamble}" \
             --run "source ${workspace}" \
             ${wrapperArgs}
@@ -461,7 +479,7 @@
           # Overlay-friendly customisation, e.g.
           #   prev.claude.extend { skills.foo = ./foo; settings.permissions.allow = [ "..." ]; }
           # attrsets (settings, agents, skills) deep-merge, extraPackages concatenates,
-          # instructions/dataDir/projectsDir/memoryDir/knowledgeFile are replaced. Results carry `extend` again.
+          # instructions/dataDir/projectsDir/memoryDir/knowledgeFile/mateTokenFile are replaced. Results carry `extend` again.
           extend = cfg: let
             unknown = lib.subtractLists knownKeys (lib.attrNames cfg);
           in
@@ -472,6 +490,7 @@
                 projectsDir = cfg.projectsDir or projectsDir;
                 memoryDir = cfg.memoryDir or memoryDir;
                 knowledgeFile = cfg.knowledgeFile or knowledgeFile;
+                mateTokenFile = cfg.mateTokenFile or mateTokenFile;
                 settings = deepMerge settings (cfg.settings or {});
                 # `null` entries remove an agent/skill, e.g. `skills.commit = null;`
                 agents = dropNulls (deepMerge agents (cfg.agents or {}));
@@ -505,5 +524,5 @@ in
       if settings == null
       then import ./settings.nix
       else settings;
-    inherit extraPackages dataDir projectsDir memoryDir knowledgeFile;
+    inherit extraPackages dataDir projectsDir memoryDir knowledgeFile mateTokenFile;
   }

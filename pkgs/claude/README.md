@@ -113,12 +113,11 @@ The same package also installs `bin/claude-mate`, the entry point of the first m
   sessions           -> ../sessions
   projects           -> ../projects
   jj-agents          -> ../jj-agents
-  .credentials.json  its own login (`/login`), not shared
 ```
 
 - The settings are the coordinator's without `enabledPlugins`, plus the deny rules in `mate/settings.nix` (no edits under `projectsDir`, no subagents, and a list of state-changing jj, git, forge, glab, gh and claude commands). The deny list is best-effort and backed by the prompt; a read-only Bash hook or allow-list is a follow-up. It has no agents and only the skills in `mate/skills/`.
 - `sessions`, `projects` and `jj-agents` are relative links into the coordinator's dir, so both roles share one session registry and one transcript store (jw reads them from there). A real directory in the way is left alone with a warning.
-- The login is not linked: claude replaces `.credentials.json` on every token refresh, which would log the coordinators out.
+- The login is not linked: claude replaces `.credentials.json` on every token refresh, which would log the coordinators out. Instead claude-mate reads a long-lived token from `mateTokenFile` (default `$HOME/.local/share/claude/mate-token`, shell-expanded) and passes it as `CLAUDE_CODE_OAUTH_TOKEN`, which claude never refreshes or writes; it refuses to start without it. Create it once, from any logged-in `claude`: `claude setup-token`, then `install -m 600 /dev/stdin ~/.local/share/claude/mate-token`, paste the token, Enter, Ctrl-D. Rerun when it expires (about a year). jw drops `CLAUDE_CODE_*` from the sessions it starts, so the mate's coordinators keep their own login.
 - The launch does not touch the memory dir, but exports `CLAUDE_MEMORY_DIR` and `CLAUDE_PROJECTS_DIR` like `claude`, and uses the same workspace logic.
 
 ## Migrating from ~/.claude
@@ -158,7 +157,7 @@ final: prev: {
 }
 ```
 
-`extend` accepts `instructions`, `agents`, `skills`, `settings`, `extraPackages`, `dataDir`, `projectsDir`, `memoryDir` and `knowledgeFile` (other names fail with an error). It deep-merges `settings`, `agents` and `skills` (attrsets recurse, lists such as `permissions.allow` are concatenated and deduplicated), concatenates `extraPackages`, and replaces `instructions` / `dataDir` / `projectsDir` / `memoryDir` / `knowledgeFile`. A `null` agent/skill removes it: `claude.extend { skills.atomic-commits = null; }`. The result carries `extend` again, so layers chain, and still supports `.override { ... }`, which replaces `instructions` / `agents` / `skills` / `settings` wholesale instead.
+`extend` accepts `instructions`, `agents`, `skills`, `settings`, `extraPackages`, `dataDir`, `projectsDir`, `memoryDir`, `knowledgeFile` and `mateTokenFile` (other names fail with an error). It deep-merges `settings`, `agents` and `skills` (attrsets recurse, lists such as `permissions.allow` are concatenated and deduplicated), concatenates `extraPackages`, and replaces `instructions` / `dataDir` / `projectsDir` / `memoryDir` / `knowledgeFile` / `mateTokenFile`. A `null` agent/skill removes it: `claude.extend { skills.atomic-commits = null; }`. The result carries `extend` again, so layers chain, and still supports `.override { ... }`, which replaces `instructions` / `agents` / `skills` / `settings` wholesale instead.
 
 ## Local/private extensions
 
