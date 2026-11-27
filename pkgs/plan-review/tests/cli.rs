@@ -7,6 +7,7 @@ use common::{now, Env};
 use serde_json::{json, Value};
 
 const MAX: usize = 2_097_152;
+const SESSION_ERR: &str = "plan-review: $AGENT_SESSION is unset or not a valid session name\n";
 
 fn is_hex(s: &str, n: usize) -> bool {
     s.len() == n && s.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
@@ -16,8 +17,30 @@ fn mode(p: &std::path::Path) -> u32 {
     fs::metadata(p).unwrap().permissions().mode() & 0o777
 }
 
+const IID: &str = "0123456789abcdef";
+const ITOKEN: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+
+/// A review.requested event as the server publishes it.
 fn event(id: &str, revision: Value) -> String {
-    json!({"type": "review.requested", "review": id, "revision": revision}).to_string()
+    event_with(json!({"review": id, "revision": revision}))
+}
+
+/// A valid review.requested event with the given fields replaced (null removes one).
+fn event_with(fields: Value) -> String {
+    let mut v = json!({"type": "review.requested", "review": IID, "revision": 1,
+                       "session": "sess-1", "title": "My plan", "token": ITOKEN});
+    for (k, x) in fields.as_object().unwrap() {
+        if x.is_null() {
+            v.as_object_mut().unwrap().remove(k);
+        } else {
+            v[k] = x.clone();
+        }
+    }
+    v.to_string()
+}
+
+fn dead_addr() -> String {
+    common::free_addr()
 }
 
 /// Publishes `plan.html` and returns the review id.
@@ -77,13 +100,55 @@ fn publish_absolute_path_is_stored_as_given() {
 }
 
 #[test]
-fn publish_snapshots_exact_bytes() {
+fn publish_snapshots_exact_utf8_text() {
     let e = Env::new();
-    let bytes: Vec<u8> = vec![0, 255, 10, 13, 200, 1, 2, 3];
-    fs::write(e.work.join("plan.html"), &bytes).unwrap();
-    assert_eq!(e.publish("plan.html", "t").code, 0);
+    let text = "<p>é\0\r\n\"q\" \\ \u{1F600} \u{2028}</p>\n\n";
+    fs::write(e.work.join("plan.html"), text).unwrap();
+    let o = e.publish("plan.html", "t");
+    assert_eq!(o.code, 0, "{}", o.stderr);
     let id = &e.ids()[0];
-    assert_eq!(fs::read(e.root().join(id).join("r1.html")).unwrap(), bytes);
+    assert_eq!(
+        fs::read(e.root().join(id).join("r1.html")).unwrap(),
+        text.as_bytes()
+    );
+}
+
+#[test]
+fn publish_rejects_file_that_is_not_utf8() {
+    let e = Env::new();
+    let path = e.work.join("plan.html");
+    fs::write(&path, [b'<', 0xff, 0xfe, b'>']).unwrap();
+    let o = e.publish(path.to_str().unwrap(), "t");
+    assert_eq!(o.code, 1);
+    assert_eq!(o.stdout, "");
+    assert_eq!(
+        o.stderr,
+        format!("plan-review: {} is not valid UTF-8\n", path.display())
+    );
+    assert_no_side_effects(&e);
+}
+
+#[test]
+fn publish_server_down_exits_1_naming_the_address() {
+    let e = Env::new();
+    e.write_plan("plan.html", "x");
+    let dead = dead_addr();
+    let o = e.run(
+        &e.work,
+        &[("AGENT_SESSION", "sess-1"), ("PLAN_REVIEW_ADDR", &dead)],
+        "",
+        &["publish", "plan.html", "t"],
+    );
+    assert_eq!(o.code, 1);
+    assert_eq!(o.stdout, "");
+    assert!(
+        o.stderr.starts_with(&format!(
+            "plan-review: cannot reach the plan-review server at {dead}: "
+        )),
+        "{}",
+        o.stderr
+    );
+    assert_no_side_effects(&e);
 }
 
 #[test]
@@ -191,15 +256,19 @@ fn publish_sends_review_requested_event() {
     let stdin = lines.next().unwrap().strip_prefix("stdin=").unwrap();
     assert_eq!(lines.next(), None);
     let v: Value = serde_json::from_str(stdin).unwrap();
-    assert_eq!(v, json!({"review": id, "revision": 1}));
+    let token = e.meta(&id)["token"].clone();
+    assert_eq!(
+        v,
+        json!({"review": id, "revision": 1, "session": "sess-1", "title": "My plan", "token": token})
+    );
 
     e.write_plan("plan.html", "v2");
-    assert_eq!(e.publish("plan.html", "t").code, 0);
+    assert_eq!(e.publish("plan.html", "Second").code, 0);
     let log = e.log("event-pub.log");
     let last = log.lines().last().unwrap().strip_prefix("stdin=").unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(last).unwrap(),
-        json!({"review": id, "revision": 2})
+        json!({"review": id, "revision": 2, "session": "sess-1", "title": "Second", "token": token})
     );
 }
 
@@ -210,7 +279,13 @@ fn publish_event_pub_failure_exits_1_and_keeps_snapshot() {
     e.write_plan("plan.html", "v1");
     let o = e.publish("plan.html", "t");
     assert_eq!(o.code, 1);
-    assert!(o.stderr.contains("plan-review:"), "{}", o.stderr);
+    assert!(o.stderr.starts_with("plan-review: "), "{}", o.stderr);
+    assert!(
+        o.stderr
+            .contains("(the snapshot r1 is kept, publish again for the next revision)"),
+        "{}",
+        o.stderr
+    );
     assert_eq!(o.stdout, "");
     let ids = e.ids();
     assert_eq!(ids.len(), 1);
@@ -274,7 +349,7 @@ fn publish_rejects_empty_title_after_oneline() {
         e.write_plan("plan.html", "x");
         let o = e.publish("plan.html", title);
         assert_eq!(o.code, 1, "title {title:?}");
-        assert!(o.stderr.contains("plan-review:"), "{}", o.stderr);
+        assert_eq!(o.stderr, "plan-review: the title is empty\n");
         assert_eq!(o.stdout, "");
         assert_no_side_effects(&e);
     }
@@ -288,7 +363,7 @@ fn publish_rejects_unset_session() {
     e.write_plan("plan.html", "x");
     let o = e.run(&e.work, &[], "", &["publish", "plan.html", "t"]);
     assert_eq!(o.code, 1);
-    assert!(o.stderr.contains("plan-review:"), "{}", o.stderr);
+    assert_eq!(o.stderr, SESSION_ERR);
     assert_no_side_effects(&e);
 }
 
@@ -299,7 +374,7 @@ fn publish_rejects_empty_and_invalid_session() {
         e.write_plan("plan.html", "x");
         let o = e.publish_as(s, "plan.html", "t");
         assert_eq!(o.code, 1, "session {s:?}");
-        assert!(o.stderr.contains("plan-review:"), "{}", o.stderr);
+        assert_eq!(o.stderr, SESSION_ERR, "session {s:?}");
         assert_no_side_effects(&e);
     }
 }
@@ -397,13 +472,22 @@ fn publish_rejection_keeps_existing_review_untouched() {
 
 // ---- intake
 
-const URL_PREFIX: &str = "http://127.0.0.1:4388/r/";
+fn url_prefix(e: &Env) -> String {
+    format!("{}/r/", e.origin())
+}
+
+fn assert_intake_nothing(e: &Env, stdin: &str, what: &str) {
+    let o = e.intake(stdin);
+    assert_eq!(o.code, 0, "{what}: {}", o.stderr);
+    assert_eq!(o.stdout, "", "{what}");
+    assert_eq!(e.log("notify-send.log"), "", "{what}");
+    assert_eq!(e.log("xdg-open.log"), "", "{what}");
+}
 
 #[test]
 fn intake_notifies_with_expected_argv() {
     let e = Env::new();
-    let id = publish_one(&e);
-    let o = e.intake(&event(&id, json!(1)));
+    let o = e.intake(&event(IID, json!(1)));
     assert_eq!(o.code, 0, "{}", o.stderr);
     let calls = e.calls("notify-send.log");
     assert_eq!(calls.len(), 1);
@@ -423,11 +507,20 @@ fn intake_notifies_with_expected_argv() {
 }
 
 #[test]
+fn intake_needs_no_store() {
+    let e = Env::new();
+    assert!(e.ids().is_empty());
+    let o = e.intake(&event("fedcba9876543210", json!(7)));
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let calls = e.calls("notify-send.log");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0][6], "sess-1 \u{b7} r7");
+}
+
+#[test]
 fn intake_body_is_markup_escaped() {
     let e = Env::new();
-    let id = publish_one(&e);
-    e.set_meta(&id, "session", json!("a&b<c>"));
-    let o = e.intake(&event(&id, json!(1)));
+    let o = e.intake(&event_with(json!({"session": "a&b<c>"})));
     assert_eq!(o.code, 0, "{}", o.stderr);
     let calls = e.calls("notify-send.log");
     assert_eq!(calls.len(), 1);
@@ -435,39 +528,70 @@ fn intake_body_is_markup_escaped() {
 }
 
 #[test]
-fn intake_uses_latest_revision_and_title_in_notification() {
+fn intake_title_and_session_are_flattened_to_one_line() {
     let e = Env::new();
-    let id = publish_one(&e);
-    e.write_plan("plan.html", "v2");
-    assert_eq!(e.publish("plan.html", "Second title").code, 0);
-    assert_eq!(e.intake(&event(&id, json!(2))).code, 0);
+    let o = e.intake(&event_with(
+        json!({"title": "  A\n\tB \u{2028} c\u{1}d  ", "session": "x\ny\tz"}),
+    ));
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let calls = e.calls("notify-send.log");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0][5], "Plan review: A B cd");
+    assert_eq!(calls[0][6], "x y z \u{b7} r1");
+}
+
+#[test]
+fn intake_uses_revision_title_and_session_of_the_event() {
+    let e = Env::new();
+    let o = e.intake(&event_with(
+        json!({"revision": 12, "title": "Second title", "session": "s-2"}),
+    ));
+    assert_eq!(o.code, 0, "{}", o.stderr);
     let calls = e.calls("notify-send.log");
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0][5], "Plan review: Second title");
-    assert_eq!(calls[0][6], "sess-1 \u{b7} r2");
+    assert_eq!(calls[0][6], "s-2 \u{b7} r12");
 }
 
 #[test]
 fn intake_open_action_runs_xdg_open_with_url() {
     let e = Env::new();
-    let id = publish_one(&e);
-    let token = e.meta(&id)["token"].as_str().unwrap().to_string();
     e.set_flag("notify-send.out", "open\n");
-    let o = e.intake(&event(&id, json!(1)));
+    let o = e.intake(&event(IID, json!(1)));
     assert_eq!(o.code, 0, "{}", o.stderr);
     let calls = e.calls("xdg-open.log");
-    assert_eq!(calls, vec![vec![format!("{URL_PREFIX}{id}?t={token}")]]);
-    assert!(!o.stdout.contains(&token));
-    assert!(!o.stderr.contains(&token));
+    assert_eq!(
+        calls,
+        vec![vec![format!("{}{IID}?t={ITOKEN}", url_prefix(&e))]]
+    );
+    assert!(!o.stdout.contains(ITOKEN));
+    assert!(!o.stderr.contains(ITOKEN));
+}
+
+#[test]
+fn intake_url_uses_the_configured_address() {
+    let e = Env::new();
+    let other = dead_addr();
+    e.set_flag("notify-send.out", "open\n");
+    let o = e.run(
+        &e.work,
+        &[("PLAN_REVIEW_ADDR", &other)],
+        &event(IID, json!(1)),
+        &["intake"],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        e.calls("xdg-open.log"),
+        vec![vec![format!("http://{other}/r/{IID}?t={ITOKEN}")]]
+    );
 }
 
 #[test]
 fn intake_other_action_output_does_not_open() {
     for out in ["", "close", "opened", "x open"] {
         let e = Env::new();
-        let id = publish_one(&e);
         e.set_flag("notify-send.out", &format!("{out}\n"));
-        let o = e.intake(&event(&id, json!(1)));
+        let o = e.intake(&event(IID, json!(1)));
         assert_eq!(o.code, 0, "{out:?}: {}", o.stderr);
         assert_eq!(e.calls("notify-send.log").len(), 1);
         assert!(e.calls("xdg-open.log").is_empty(), "{out:?}");
@@ -477,54 +601,53 @@ fn intake_other_action_output_does_not_open() {
 #[test]
 fn intake_never_prints_the_url() {
     let e = Env::new();
-    let id = publish_one(&e);
-    let token = e.meta(&id)["token"].as_str().unwrap().to_string();
     e.set_flag("notify-send.out", "open\n");
-    let o = e.intake(&event(&id, json!(1)));
+    let o = e.intake(&event(IID, json!(1)));
     assert_eq!(o.stdout, "");
-    assert!(!o.stderr.contains(&token));
-    assert!(!o.stderr.contains(URL_PREFIX));
+    assert!(!o.stderr.contains(ITOKEN));
+    assert!(!o.stderr.contains(&url_prefix(&e)));
 }
 
 #[test]
-fn intake_stale_revision_does_nothing() {
+fn intake_bad_token_does_nothing() {
     let e = Env::new();
-    let id = publish_one(&e);
-    e.write_plan("plan.html", "v2");
-    assert_eq!(e.publish("plan.html", "t").code, 0);
-    e.set_flag("notify-send.out", "open\n");
-    let o = e.intake(&event(&id, json!(1)));
-    assert_eq!(o.code, 0, "{}", o.stderr);
-    assert_eq!(e.log("notify-send.log"), "");
-    assert_eq!(e.log("xdg-open.log"), "");
+    for token in [
+        json!(""),
+        json!("A1B2C3D4E5F60718293A4B5C6D7E8F90"),
+        json!("a1b2c3d4e5f60718293a4b5c6d7e8f9"),
+        json!("a1b2c3d4e5f60718293a4b5c6d7e8f900"),
+        json!("g1b2c3d4e5f60718293a4b5c6d7e8f90"),
+        json!("a1b2c3d4e5f60718293a4b5c6d7e8f9\n"),
+        json!(12345),
+        json!(["a1b2c3d4e5f60718293a4b5c6d7e8f90"]),
+    ] {
+        e.set_flag("notify-send.out", "open\n");
+        assert_intake_nothing(
+            &e,
+            &event_with(json!({ "token": token })),
+            &format!("token {token}"),
+        );
+    }
+    assert_intake_nothing(&e, &event_with(json!({"token": null})), "missing token");
 }
 
 #[test]
-fn intake_future_revision_does_nothing() {
+fn intake_title_or_session_not_a_string_does_nothing() {
     let e = Env::new();
-    let id = publish_one(&e);
-    let o = e.intake(&event(&id, json!(2)));
-    assert_eq!(o.code, 0, "{}", o.stderr);
-    assert_eq!(e.log("notify-send.log"), "");
-}
-
-#[test]
-fn intake_unknown_id_does_nothing() {
-    let e = Env::new();
-    publish_one(&e);
-    e.set_flag("notify-send.out", "open\n");
-    let o = e.intake(&event("0123456789abcdef", json!(1)));
-    assert_eq!(o.code, 0, "{}", o.stderr);
-    assert_eq!(e.log("notify-send.log"), "");
-    assert_eq!(e.log("xdg-open.log"), "");
-}
-
-#[test]
-fn intake_unknown_id_without_store_does_nothing() {
-    let e = Env::new();
-    let o = e.intake(&event("0123456789abcdef", json!(1)));
-    assert_eq!(o.code, 0, "{}", o.stderr);
-    assert_eq!(e.log("notify-send.log"), "");
+    for v in [json!(1), json!(["x"]), json!({"a": 1}), json!(true)] {
+        assert_intake_nothing(
+            &e,
+            &event_with(json!({ "title": v })),
+            &format!("title {v}"),
+        );
+        assert_intake_nothing(
+            &e,
+            &event_with(json!({ "session": v })),
+            &format!("session {v}"),
+        );
+    }
+    assert_intake_nothing(&e, &event_with(json!({"title": null})), "missing title");
+    assert_intake_nothing(&e, &event_with(json!({"session": null})), "missing session");
 }
 
 #[test]
@@ -540,44 +663,40 @@ fn intake_bad_id_does_nothing() {
         "0123456789abcde/",
     ] {
         let e = Env::new();
-        publish_one(&e);
-        let o = e.intake(&event(id, json!(1)));
-        assert_eq!(o.code, 0, "id {id:?}: {}", o.stderr);
-        assert_eq!(e.log("notify-send.log"), "", "id {id:?}");
-        assert_eq!(e.log("xdg-open.log"), "", "id {id:?}");
+        e.set_flag("notify-send.out", "open\n");
+        assert_intake_nothing(&e, &event(id, json!(1)), &format!("id {id:?}"));
     }
+    let e = Env::new();
+    assert_intake_nothing(&e, &event_with(json!({"review": 5})), "numeric id");
+    assert_intake_nothing(&e, &event_with(json!({"review": null})), "no id");
 }
 
 #[test]
 fn intake_bad_revision_does_nothing() {
     let e = Env::new();
-    let id = publish_one(&e);
     for rev in [
         json!(0),
         json!(-1),
         json!("1"),
         json!(1.5),
-        json!(null),
         json!([1]),
+        json!(true),
     ] {
-        let o = e.intake(&event(&id, rev.clone()));
-        assert_eq!(o.code, 0, "revision {rev}: {}", o.stderr);
-        assert_eq!(e.log("notify-send.log"), "", "revision {rev}");
+        assert_intake_nothing(&e, &event(IID, rev.clone()), &format!("revision {rev}"));
     }
-    let o = e.intake(&json!({"review": id}).to_string());
-    assert_eq!(o.code, 0);
-    let o = e.intake(&json!({"revision": 1}).to_string());
-    assert_eq!(o.code, 0);
-    assert_eq!(e.log("notify-send.log"), "");
+    assert_intake_nothing(
+        &e,
+        &event_with(json!({"revision": null})),
+        "missing revision",
+    );
 }
 
 #[test]
 fn intake_notify_failure_exits_0_without_opening() {
     let e = Env::new();
-    let id = publish_one(&e);
     e.set_flag("notify-send.fail", "");
     e.set_flag("notify-send.out", "open\n");
-    let o = e.intake(&event(&id, json!(1)));
+    let o = e.intake(&event(IID, json!(1)));
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(e.calls("notify-send.log").len(), 1);
     assert_eq!(e.log("xdg-open.log"), "");
@@ -586,19 +705,17 @@ fn intake_notify_failure_exits_0_without_opening() {
 #[test]
 fn intake_xdg_open_failure_exits_0() {
     let e = Env::new();
-    let id = publish_one(&e);
     e.set_flag("xdg-open.fail", "");
     e.set_flag("notify-send.out", "open\n");
-    let o = e.intake(&event(&id, json!(1)));
+    let o = e.intake(&event(IID, json!(1)));
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(e.calls("xdg-open.log").len(), 1);
 }
 
 #[test]
-fn intake_invalid_json_exits_1() {
+fn intake_non_object_exits_1() {
     for input in ["", "nope", "{", "[1]", "\"str\"", "42", "null"] {
         let e = Env::new();
-        publish_one(&e);
         let o = e.intake(input);
         assert_eq!(o.code, 1, "input {input:?}");
         assert!(o.stderr.contains("plan-review:"), "{}", o.stderr);
@@ -608,8 +725,29 @@ fn intake_invalid_json_exits_1() {
 
 // ---- list
 
-fn list_line(id: &str, token: &str, state: &str, session: &str, rev: u64, title: &str) -> String {
-    format!("{URL_PREFIX}{id}?t={token}\t{state}\t{session}\tr{rev}\t{title}")
+fn list_line(
+    e: &Env,
+    id: &str,
+    token: &str,
+    state: &str,
+    session: &str,
+    rev: u64,
+    title: &str,
+) -> String {
+    format!(
+        "{}{id}?t={token}\t{state}\t{session}\tr{rev}\t{title}",
+        url_prefix(e)
+    )
+}
+
+#[test]
+fn list_server_down_fails() {
+    let e = Env::new();
+    let dead = dead_addr();
+    let o = e.run(&e.work, &[("PLAN_REVIEW_ADDR", &dead)], "", &["list"]);
+    assert_ne!(o.code, 0);
+    assert_eq!(o.stdout, "");
+    assert!(o.stderr.starts_with("plan-review: "), "{}", o.stderr);
 }
 
 #[test]
@@ -636,7 +774,7 @@ fn list_line_format() {
         o.stdout,
         format!(
             "{}\n",
-            list_line(&id, &token, "open", "sess-1", 1, "My plan")
+            list_line(&e, &id, &token, "open", "sess-1", 1, "My plan")
         )
     );
 }
@@ -652,7 +790,7 @@ fn list_shows_latest_revision() {
         e.list().stdout,
         format!(
             "{}\n",
-            list_line(&id, &token, "open", "sess-1", 2, "Renamed")
+            list_line(&e, &id, &token, "open", "sess-1", 2, "Renamed")
         )
     );
 }
@@ -717,8 +855,8 @@ fn list_mixed_states_and_sessions() {
         e.list().stdout,
         format!(
             "{}\n{}\n",
-            list_line(&b, &tb, "open", "s-two", 1, "Second"),
-            list_line(&a, &ta, "sent", "s-one", 1, "First")
+            list_line(&e, &b, &tb, "open", "s-two", 1, "Second"),
+            list_line(&e, &a, &ta, "sent", "s-one", 1, "First")
         )
     );
 }
@@ -751,11 +889,18 @@ fn store_falls_back_to_home_local_state_when_xdg_unset_or_relative() {
         } else {
             &[]
         };
-        let envs: Vec<(&str, &str)> = [("AGENT_SESSION", "sess-1")]
-            .into_iter()
-            .chain(xdg.map(|x| ("XDG_STATE_HOME", x)))
-            .collect();
-        let o = e.run_without(unset, &e.work, &envs, "", &["publish", "plan.html", "t"]);
+        let server_envs: Vec<(&str, &str)> =
+            xdg.map(|x| ("XDG_STATE_HOME", x)).into_iter().collect();
+        let server = e.start_server(unset, &server_envs);
+        let o = e.run(
+            &e.work,
+            &[
+                ("AGENT_SESSION", "sess-1"),
+                ("PLAN_REVIEW_ADDR", &server.addr),
+            ],
+            "",
+            &["publish", "plan.html", "t"],
+        );
         assert_eq!(o.code, 0, "{}", o.stderr);
         let root = home.join(".local/state/plan-review");
         assert!(root.is_dir(), "xdg {xdg:?}");
@@ -865,9 +1010,9 @@ fn framed(t: &str) -> usize {
 fn header(e: &Env) -> String {
     format!(
         "Feedback from the user on plan review \"My plan\" (r1 of /w/plan.html), sent from the plan-review page.\n\
-         Full feedback: {}/{NID}/feedback-r1.json\n\
+         Full feedback: curl -s {}/api/feedback/{NID}/1 | jq -r .text\n\
          Revise, then edit /w/plan.html and run plan-review publish again for the next revision.",
-        e.root().display()
+        e.origin()
     )
 }
 
@@ -1258,8 +1403,54 @@ fn notice_old_revision_is_still_delivered() {
     let (to, t) = notice_ok(&e, &submitted(NID, json!(1)));
     assert_eq!(to, "sess-1");
     assert!(t.contains("(r1 of /w/plan.html)"), "{t:?}");
-    assert!(t.contains("feedback-r1.json"), "{t:?}");
+    assert!(t.contains(&format!("/api/feedback/{NID}/1 | jq")), "{t:?}");
     assert!(t.ends_with("  > old words"), "{t:?}");
+}
+
+#[test]
+fn notice_server_down_exits_1_without_output() {
+    let e = Env::new();
+    notice_setup(&e, json!({"message": "hi"}));
+    let dead = dead_addr();
+    let o = e.run(
+        &e.work,
+        &[("PLAN_REVIEW_ADDR", &dead)],
+        &submitted(NID, json!(1)),
+        &["notice"],
+    );
+    assert_eq!(o.code, 1);
+    assert_eq!(o.stdout, "");
+    assert!(o.stderr.starts_with("plan-review: "), "{}", o.stderr);
+}
+
+#[test]
+fn notice_nothing_to_do_needs_no_server() {
+    let e = Env::new();
+    let dead = dead_addr();
+    for ev in [
+        json!({"type": "review.requested", "review": NID, "revision": 1}),
+        json!({"type": "review.submitted", "review": "../x", "revision": 1}),
+        json!({"type": "review.submitted", "review": NID, "revision": 0}),
+    ] {
+        let o = e.run(
+            &e.work,
+            &[("PLAN_REVIEW_ADDR", &dead)],
+            &ev.to_string(),
+            &["notice"],
+        );
+        assert_eq!(o.code, 0, "{ev}: {}", o.stderr);
+        assert_eq!(o.stdout, "", "{ev}");
+    }
+}
+
+#[test]
+fn notice_text_is_the_servers_untruncated_text_cut_by_the_cli() {
+    let e = Env::new();
+    let msg = "w".repeat(20_000);
+    notice_setup(&e, json!({"message": msg}));
+    let (_, t) = notice_ok(&e, &submitted(NID, json!(1)));
+    assert!(t.ends_with(TRUNC), "{t:?}");
+    assert_eq!(framed(&t), 7900);
 }
 
 #[test]
@@ -1289,4 +1480,39 @@ fn notice_multibyte_cut_counts_chars_and_does_not_panic() {
         assert_eq!(framed(&t), 7900, "pad {pad}");
         assert!(t.contains("zażółć"), "pad {pad}");
     }
+}
+
+// ---- overlay origin
+
+fn http_get(addr: &str, path: &str) -> String {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
+    write!(
+        s,
+        "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut buf = Vec::new();
+    s.read_to_end(&mut buf).unwrap();
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+#[test]
+fn artifact_overlay_posts_to_the_configured_origin() {
+    let e = Env::new();
+    let id = publish_one(&e);
+    let token = e.meta(&id)["token"].as_str().unwrap().to_string();
+    let resp = http_get(&e.addr, &format!("/r/{id}/1?t={token}"));
+    assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+    assert!(
+        resp.contains(&e.origin()),
+        "origin {} missing: {resp}",
+        e.origin()
+    );
+    assert!(
+        !resp.contains("127.0.0.1:4388"),
+        "hardcoded origin left: {resp}"
+    );
 }

@@ -1,7 +1,7 @@
 use std::env;
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -9,18 +9,22 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-const MAX_HTML: u64 = 2_097_152;
+pub const MAX_HTML: u64 = 2_097_152;
 const MAX_TITLE_CHARS: usize = 200;
 const KEEP_SECS: u64 = 604_800;
+const DEFAULT_ADDR: &str = "127.0.0.1:4388";
 
-macro_rules! addr {
-    () => {
-        "127.0.0.1:4388"
-    };
+/// `$PLAN_REVIEW_ADDR`, `127.0.0.1:4388` when unset or empty: where the server binds and the clients connect.
+pub fn addr() -> String {
+    env::var("PLAN_REVIEW_ADDR")
+        .ok()
+        .filter(|a| !a.is_empty())
+        .unwrap_or_else(|| DEFAULT_ADDR.to_string())
 }
 
-pub const ADDR: &str = addr!();
-pub const ORIGIN: &str = concat!("http://", addr!());
+pub fn origin() -> String {
+    format!("http://{}", addr())
+}
 
 pub struct Store {
     pub root: PathBuf,
@@ -44,6 +48,16 @@ pub struct ReviewRef {
     pub revision: u64,
 }
 
+/// The payload of `review.requested`.
+#[derive(Serialize, Deserialize)]
+pub struct Requested {
+    pub review: String,
+    pub revision: u64,
+    pub session: String,
+    pub title: String,
+    pub token: String,
+}
+
 impl Store {
     pub fn new(root: PathBuf) -> Store {
         Store { root }
@@ -61,40 +75,14 @@ impl Store {
         Ok(Store::new(state.join("plan-review")))
     }
 
-    /// Snapshot `file` as the next revision of the review of (session, file), then publish `review.requested`.
-    pub fn publish(&self, session: &str, file: &Path, title: &str) -> Result<(), String> {
-        if !valid_session(session) {
-            return Err("$AGENT_SESSION is unset or not a valid session name".to_string());
-        }
-        let path = file
-            .to_str()
-            .ok_or_else(|| format!("{} is not valid UTF-8", file.display()))?;
-        if !path.ends_with(".html") {
-            return Err("the file must end in .html".to_string());
-        }
-        let title: String = oneline(title).chars().take(MAX_TITLE_CHARS).collect();
-        let title = title.trim_end();
-        if title.is_empty() {
-            return Err("the title is empty".to_string());
-        }
-        let html = read_html(file)?;
-        let review = self.snapshot(session, path, title, &html)?;
-        event_pub("review.requested", &review).map_err(|e| {
-            format!(
-                "{e} (the snapshot r{} is kept, publish again for the next revision)",
-                review.revision
-            )
-        })
-    }
-
     /// Writes the next revision of the review of (session, path) under the lock and prunes the old reviews.
-    fn snapshot(
+    pub fn snapshot(
         &self,
         session: &str,
         path: &str,
         title: &str,
         html: &[u8],
-    ) -> Result<ReviewRef, String> {
+    ) -> Result<Requested, String> {
         let _lock = self.lock()?;
         let reviews = self.reviews()?;
         let (id, token, revision) = match reviews
@@ -116,7 +104,7 @@ impl Store {
             session: session.to_string(),
             path: path.to_string(),
             title: title.to_string(),
-            token,
+            token: token.clone(),
             revision,
             updated,
         };
@@ -130,32 +118,17 @@ impl Store {
                 let _ = fs::remove_dir_all(self.root.join(other));
             }
         }
-        Ok(ReviewRef {
+        Ok(Requested {
             review: id,
             revision,
+            session: session.to_string(),
+            title: title.to_string(),
+            token,
         })
     }
 
-    /// Handle a `review.requested` event (its JSON on stdin): notify and open the review on request.
-    pub fn intake(&self, event: &str) -> Result<(), String> {
-        let Some(ReviewRef {
-            review: id,
-            revision,
-        }) = review_ref(event)?
-        else {
-            return Ok(());
-        };
-        let Some(meta) = self.read_meta(&id).filter(|m| m.revision == revision) else {
-            return Ok(());
-        };
-        if let Err(e) = open_on_request(&id, &meta) {
-            eprintln!("plan-review: warning: {e}");
-        }
-        Ok(())
-    }
-
-    /// The lines `plan-review list` prints, newest first.
-    pub fn list(&self) -> Result<Vec<String>, String> {
+    /// The lines of `plan-review list`, newest first, one `\n`-terminated line per review.
+    pub fn list(&self, origin: &str) -> Result<String, String> {
         let mut reviews = self.reviews()?;
         reviews.sort_by(|a, b| b.1.updated.cmp(&a.1.updated).then_with(|| a.0.cmp(&b.0)));
         Ok(reviews
@@ -163,8 +136,8 @@ impl Store {
             .map(|(id, m)| {
                 let sent = self.feedback_path(&id, m.revision).exists();
                 format!(
-                    "{}\t{}\t{}\tr{}\t{}",
-                    review_url(&id, &m.token),
+                    "{origin}/r/{id}?t={}\t{}\t{}\tr{}\t{}\n",
+                    m.token,
                     if sent { "sent" } else { "open" },
                     m.session,
                     m.revision,
@@ -239,18 +212,28 @@ pub fn oneline(s: &str) -> String {
         .join(" ")
 }
 
-fn valid_session(name: &str) -> bool {
+/// The title as stored: one line, at most 200 characters, no trailing space.
+pub fn clean_title(title: &str) -> String {
+    let title: String = oneline(title).chars().take(MAX_TITLE_CHARS).collect();
+    title.trim_end().to_string()
+}
+
+pub fn valid_session(name: &str) -> bool {
     let mut chars = name.chars();
     chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
         && chars.all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
 }
 
 pub fn valid_id(id: &str) -> bool {
-    id.len() == 16 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    lower_hex(id, 16)
 }
 
-fn review_url(id: &str, token: &str) -> String {
-    format!("{ORIGIN}/r/{id}?t={token}")
+pub fn valid_token(token: &str) -> bool {
+    lower_hex(token, 32)
+}
+
+fn lower_hex(s: &str, len: usize) -> bool {
+    s.len() == len && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 pub fn now() -> u64 {
@@ -276,36 +259,6 @@ pub fn write_private(path: &Path, data: &[u8]) -> Result<(), String> {
         .open(path)
         .and_then(|mut f| f.write_all(data))
         .map_err(|e| format!("cannot write {}: {e}", path.display()))
-}
-
-/// The content of the plan: a small regular file of ours, opened without following symlinks or waiting on a FIFO.
-fn read_html(path: &Path) -> Result<Vec<u8>, String> {
-    let fail = |e: io::Error| format!("cannot read {}: {e}", path.display());
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .map_err(fail)?;
-    let meta = file.metadata().map_err(fail)?;
-    if !meta.is_file() {
-        return Err(format!("{} is not a regular file", path.display()));
-    }
-    // SAFETY: geteuid has no preconditions
-    if meta.uid() != unsafe { libc::geteuid() } {
-        return Err(format!("{} is not owned by you", path.display()));
-    }
-    let too_big = || format!("{} is larger than {MAX_HTML} bytes", path.display());
-    if meta.len() > MAX_HTML {
-        return Err(too_big());
-    }
-    let mut data = Vec::new();
-    file.take(MAX_HTML + 1)
-        .read_to_end(&mut data)
-        .map_err(fail)?;
-    if data.len() as u64 > MAX_HTML {
-        return Err(too_big());
-    }
-    Ok(data)
 }
 
 /// Publishes an event of kind with payload as JSON through `event-pub`.
@@ -337,47 +290,4 @@ pub fn event_pub<T: Serialize>(kind: &str, payload: &T) -> Result<(), String> {
             None => format!("event-pub failed: {}", out.status),
         },
     )
-}
-
-/// Notifies about the review and, when the user picks "Open", opens it in the browser.
-fn open_on_request(id: &str, meta: &Meta) -> Result<(), String> {
-    let out = Command::new("notify-send")
-        .args(["-a", "plan-review", "-A", "open=Open", "--"])
-        .arg(format!("Plan review: {}", meta.title))
-        .arg(escape(&format!("{} · r{}", meta.session, meta.revision)))
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| format!("notify-send: {e}"))?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        return Err(
-            match stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()) {
-                Some(line) => format!("notify-send failed: {} ({line})", out.status),
-                None => format!("notify-send failed: {}", out.status),
-            },
-        );
-    }
-    if String::from_utf8_lossy(&out.stdout).trim() != "open" {
-        return Ok(());
-    }
-    // no output of xdg-open is passed on: the URL carries the token
-    let status = Command::new("xdg-open")
-        .arg(review_url(id, &meta.token))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|e| format!("xdg-open: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("xdg-open failed: {status}"))
-    }
-}
-
-fn escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }

@@ -6,12 +6,17 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::store::{event_pub, now, valid_id, write_private, Meta, Store, ADDR, ORIGIN};
+use crate::render::render;
+use crate::store::{
+    addr, clean_title, event_pub, now, origin, valid_id, valid_session, write_private, Meta, Store,
+    MAX_HTML,
+};
 
 const PANEL: &str = include_str!("../assets/panel.html");
 const OVERLAY: &str = include_str!("../assets/overlay.js");
 
 const MAX_BODY: usize = 1_048_576;
+const MAX_PUBLISH_BODY: usize = 8_388_608;
 
 const PANEL_CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'";
 const ARTIFACT_CSP: &str = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:";
@@ -79,12 +84,6 @@ impl<'a> Route<'a> {
             ("GET", &[id, n]) => Some(Route::Artifact(id, revision(n)?)),
             ("POST", &[id, n, "submit"]) => Some(Route::Submit(id, n)),
             _ => None,
-        }
-    }
-
-    fn id(&self) -> &'a str {
-        match *self {
-            Route::Panel(id) | Route::Artifact(id, _) | Route::Submit(id, _) => id,
         }
     }
 }
@@ -168,17 +167,20 @@ pub fn handle(
     req: &Request,
     publish: &mut dyn FnMut(&str, &Value) -> Result<(), String>,
 ) -> Response {
-    if req.host.as_deref() != Some(ADDR) {
+    if req.host.as_deref() != Some(addr().as_str()) {
         return error(403, "forbidden");
     }
     let (path, query) = req.url.split_once('?').unwrap_or((&req.url, ""));
+    if let Some(api) = path.strip_prefix("/api/") {
+        return handle_api(store, req, api, publish);
+    }
     let Some(route) = Route::parse(&req.method, path) else {
         return not_found();
     };
-    if matches!(route, Route::Submit(..)) && req.origin.as_deref() != Some(ORIGIN) {
+    if matches!(route, Route::Submit(..)) && req.origin.as_deref() != Some(origin().as_str()) {
         return error(403, "forbidden");
     }
-    let id = route.id();
+    let (Route::Panel(id) | Route::Artifact(id, _) | Route::Submit(id, _)) = route;
     let Some(meta) = valid_id(id)
         .then(|| store.read_meta(id))
         .flatten()
@@ -205,6 +207,108 @@ pub fn handle(
             submit(store, id, n, &req.body, publish)
         }
     }
+}
+
+/// The API serves local tools only: a browser request (it sends an Origin) is refused.
+fn handle_api(
+    store: &Store,
+    req: &Request,
+    api: &str,
+    publish: &mut dyn FnMut(&str, &Value) -> Result<(), String>,
+) -> Response {
+    if req.origin.is_some() {
+        return error(403, "forbidden");
+    }
+    let parts: Vec<&str> = api.split('/').collect();
+    match (req.method.as_str(), parts.as_slice()) {
+        ("POST", &["publish"]) => publish_review(store, &req.body, publish),
+        ("GET", &["reviews"]) => reviews(store),
+        ("GET", &["feedback", id, n]) => feedback(store, id, n),
+        _ => not_found(),
+    }
+}
+
+#[derive(Deserialize)]
+struct PublishRequest {
+    session: String,
+    path: String,
+    title: String,
+    html: String,
+}
+
+fn publish_review(
+    store: &Store,
+    body: &[u8],
+    publish: &mut dyn FnMut(&str, &Value) -> Result<(), String>,
+) -> Response {
+    if body.len() > MAX_PUBLISH_BODY {
+        return error(413, &format!("the plan is larger than {MAX_HTML} bytes"));
+    }
+    let Ok(plan) = serde_json::from_slice::<PublishRequest>(body) else {
+        return error(400, "the request is malformed");
+    };
+    if !valid_session(&plan.session) {
+        return error(400, "$AGENT_SESSION is unset or not a valid session name");
+    }
+    if !plan.path.ends_with(".html") {
+        return error(400, "the file must end in .html");
+    }
+    let title = clean_title(&plan.title);
+    if title.is_empty() {
+        return error(400, "the title is empty");
+    }
+    if plan.html.len() as u64 > MAX_HTML {
+        return error(413, &format!("the plan is larger than {MAX_HTML} bytes"));
+    }
+    let requested = match store.snapshot(&plan.session, &plan.path, &title, plan.html.as_bytes()) {
+        Ok(requested) => requested,
+        Err(e) => return error(500, &e),
+    };
+    let sent = serde_json::to_value(&requested)
+        .map_err(|e| e.to_string())
+        .and_then(|payload| publish("review.requested", &payload));
+    if let Err(e) = sent {
+        return error(
+            502,
+            &format!(
+                "{e} (the snapshot r{} is kept, publish again for the next revision)",
+                requested.revision
+            ),
+        );
+    }
+    Response::new(
+        200,
+        "application/json",
+        json!({"review": requested.review, "revision": requested.revision}).to_string(),
+    )
+}
+
+fn reviews(store: &Store) -> Response {
+    match store.list(&origin()) {
+        Ok(lines) => Response::new(200, "text/plain; charset=utf-8", lines),
+        Err(e) => error(500, &e),
+    }
+}
+
+fn feedback(store: &Store, id: &str, n: &str) -> Response {
+    let Some(n) = revision(n).filter(|_| valid_id(id)) else {
+        return not_found();
+    };
+    let Some(meta) = store.read_meta(id) else {
+        return not_found();
+    };
+    let Some(submission) = fs::read(store.feedback_path(id, n))
+        .ok()
+        .and_then(|data| serde_json::from_slice::<Submission>(&data).ok())
+    else {
+        return not_found();
+    };
+    let text = render(&origin(), id, n, &meta, &submission);
+    Response::new(
+        200,
+        "application/json",
+        json!({"to": meta.session, "text": text}).to_string(),
+    )
 }
 
 fn panel(store: &Store, id: &str, meta: &Meta) -> Response {
@@ -241,7 +345,8 @@ fn inject(html: &[u8]) -> Vec<u8> {
         .rposition(|w| w.eq_ignore_ascii_case(b"</body>"))
         .unwrap_or(html.len());
     let mut out = html[..at].to_vec();
-    out.extend_from_slice(format!("<script data-plan-review>{OVERLAY}</script>").as_bytes());
+    let overlay = OVERLAY.replace("{{origin}}", &origin());
+    out.extend_from_slice(format!("<script data-plan-review>{overlay}</script>").as_bytes());
     out.extend_from_slice(&html[at..]);
     out
 }
@@ -300,7 +405,8 @@ fn save(store: &Store, id: &str, n: u64, body: &[u8]) -> Result<PathBuf, Respons
 }
 
 pub fn serve(store: &Store) -> Result<(), String> {
-    let server = tiny_http::Server::http(ADDR).map_err(|e| format!("cannot bind {ADDR}: {e}"))?;
+    let addr = addr();
+    let server = tiny_http::Server::http(&addr).map_err(|e| format!("cannot bind {addr}: {e}"))?;
     for mut request in server.incoming_requests() {
         let header = |name: &'static str| {
             request
@@ -318,7 +424,7 @@ pub fn serve(store: &Store) -> Result<(), String> {
         };
         let read = request
             .as_reader()
-            .take(MAX_BODY as u64 + 1)
+            .take(MAX_PUBLISH_BODY as u64 + 1)
             .read_to_end(&mut req.body);
         let response = match read {
             Ok(_) => handle(store, &req, &mut event_pub),

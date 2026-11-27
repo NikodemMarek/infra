@@ -1,4 +1,6 @@
+mod client;
 mod notice;
+mod render;
 mod server;
 mod store;
 
@@ -38,7 +40,7 @@ enum Command {
     Notice,
     /// list the reviews, newest first: URL, open or sent, session, revision, title
     List,
-    /// serve the review pages on 127.0.0.1:4388 (run by the plan-review user service)
+    /// serve the review pages and the API on 127.0.0.1:4388 (run by the plan-review container)
     #[command(hide = true)]
     Serve,
 }
@@ -60,26 +62,16 @@ fn read_event() -> Result<String, String> {
 }
 
 fn run(command: Command) -> Result<(), String> {
-    let store = Store::from_env()?;
     match command {
-        Command::Publish { file, title } => {
-            let session = std::env::var("AGENT_SESSION").unwrap_or_default();
-            let file = std::path::absolute(file).map_err(|e| e.to_string())?;
-            store.publish(&session, &file, &title)
-        }
-        Command::Intake => store.intake(&read_event()?),
+        Command::Publish { file, title } => client::publish(&file, &title),
+        Command::Intake => client::intake(&read_event()?),
         Command::Notice => {
-            if let Some(line) = notice::notice(&store, &read_event()?)? {
+            if let Some(line) = notice::notice(&read_event()?)? {
                 println!("{line}");
             }
             Ok(())
         }
-        Command::List => {
-            for line in store.list()? {
-                println!("{line}");
-            }
-            Ok(())
-        }
-        Command::Serve => server::serve(&store),
+        Command::List => client::list(),
+        Command::Serve => server::serve(&Store::from_env()?),
     }
 }
