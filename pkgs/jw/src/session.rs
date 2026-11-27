@@ -75,6 +75,7 @@ pub fn cmd_session_list(a: SessionListArgs) -> Result<(), String> {
     }
     let running = Shpool.list()?;
     let records = Records::open()?;
+    let mut unacked = records.unacked()?;
     for (name, record) in records.load_all()? {
         if a.reports_to.is_some() && record.reports_to != a.reports_to {
             continue;
@@ -86,7 +87,7 @@ pub fn cmd_session_list(a: SessionListArgs) -> Result<(), String> {
             } else {
                 running.contains_key(&name)
             },
-            unacked: records.result_seqs(&name)?,
+            unacked: unacked.remove(&name).unwrap_or_default(),
             record: &record,
         };
         println!(
@@ -165,7 +166,7 @@ pub fn cmd_session_status(a: SessionStatusArgs) -> Result<(), String> {
 }
 
 /// Records dir in the worktrees of this agent session.
-pub fn track_worktree(dir: &str) -> Result<(), String> {
+pub fn track_worktree(records: &Records, dir: &str) -> Result<(), String> {
     let name = agent_session_name()?;
     let real = Some(Path::new(dir))
         .filter(|d| d.is_absolute())
@@ -173,7 +174,7 @@ pub fn track_worktree(dir: &str) -> Result<(), String> {
         .filter(|d| d.is_dir())
         .and_then(|d| d.into_os_string().into_string().ok())
         .ok_or_else(|| format!("not an absolute directory: {dir}"))?;
-    Records::open()?.update(&name, |r| {
+    records.update(&name, |r| {
         let known = r.worktrees.len();
         r.worktrees.retain(|w| Path::new(w).exists());
         let pruned = r.worktrees.len() != known;

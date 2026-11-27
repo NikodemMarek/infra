@@ -13,7 +13,7 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::jj::Jj;
 use crate::procs::claude_dir;
-use crate::record::{now, valid_name};
+use crate::record::{now, valid_name, Records};
 use crate::session::track_worktree;
 use crate::workspace::{basename, dirname, has_agents_suffix, is_dir, layout, realpath};
 
@@ -356,7 +356,7 @@ pub fn create(name: &str, cwd: &str) -> Result<String, String> {
     };
     if created {
         if env::var("AGENT_SESSION").is_ok_and(|s| !s.is_empty()) {
-            if let Err(e) = track_worktree(&dir) {
+            if let Err(e) = Records::open().and_then(|records| track_worktree(&records, &dir)) {
                 eprintln!("jw: session worktree {dir}: {e}");
             }
         }

@@ -423,9 +423,9 @@ fn c17_no_tracking_without_agent_session() {
     let e = Env::new();
     let repo = e.repo();
     printed(&create(&e, &repo, AGENT));
-    assert!(!e.state.join("agent-sessions").exists());
+    assert!(e.record_names().is_empty());
     printed(&create_env(&e, &repo, &[("AGENT_SESSION", "")], "s-x"));
-    assert!(!e.state.join("agent-sessions").exists());
+    assert!(e.record_names().is_empty());
 }
 
 #[test]

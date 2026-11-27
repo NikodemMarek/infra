@@ -203,22 +203,73 @@ impl Env {
         d
     }
 
-    pub fn record_path(&self, name: &str) -> PathBuf {
-        self.state
-            .join("agent-sessions")
-            .join(format!("{name}.json"))
-    }
-
     pub fn record(&self, name: &str) -> Value {
-        let p = self.record_path(name);
-        let text = fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
+        let entry = self
+            .kv
+            .get(Bucket::Sessions, name)
+            .unwrap()
+            .unwrap_or_else(|| panic!("no session record {name}"));
+        let text = String::from_utf8_lossy(&entry.value).into_owned();
         serde_json::from_str(&text).unwrap_or_else(|e| panic!("bad record json ({e}): {text}"))
     }
 
+    pub fn has_record(&self, name: &str) -> bool {
+        self.kv.get(Bucket::Sessions, name).unwrap().is_some()
+    }
+
     pub fn write_record(&self, name: &str, json: &str) {
-        let p = self.record_path(name);
-        fs::create_dir_all(p.parent().unwrap()).unwrap();
-        fs::write(p, json).unwrap();
+        self.kv
+            .put(Bucket::Sessions, name, json.as_bytes())
+            .unwrap();
+    }
+
+    pub fn remove_record(&self, name: &str) {
+        self.kv.purge(Bucket::Sessions, name).unwrap();
+    }
+
+    /// The session record keys.
+    pub fn record_names(&self) -> Vec<String> {
+        self.kv.keys(Bucket::Sessions).unwrap()
+    }
+
+    /// The results of name by seq.
+    pub fn results(&self, name: &str) -> Vec<Value> {
+        let prefix = format!("{name}.");
+        let mut found: Vec<(u64, Value)> = self
+            .kv
+            .keys(Bucket::Results)
+            .unwrap()
+            .into_iter()
+            .filter_map(|k| {
+                let seq: u64 = k.strip_prefix(&prefix)?.parse().ok()?;
+                let e = self.kv.get(Bucket::Results, &k).unwrap()?;
+                Some((seq, serde_json::from_slice(&e.value).unwrap()))
+            })
+            .collect();
+        found.sort_by_key(|f| f.0);
+        found.into_iter().map(|f| f.1).collect()
+    }
+
+    pub fn put_result(&self, name: &str, seq: u64, json: &str) {
+        self.kv
+            .put(Bucket::Results, &format!("{name}.{seq}"), json.as_bytes())
+            .unwrap();
+    }
+
+    pub fn has_result(&self, name: &str, seq: u64) -> bool {
+        self.kv
+            .get(Bucket::Results, &format!("{name}.{seq}"))
+            .unwrap()
+            .is_some()
+    }
+
+    pub fn result(&self, name: &str, seq: u64) -> Value {
+        let entry = self
+            .kv
+            .get(Bucket::Results, &format!("{name}.{seq}"))
+            .unwrap()
+            .unwrap_or_else(|| panic!("no result {name}.{seq}"));
+        serde_json::from_slice(&entry.value).unwrap()
     }
 
     pub fn nats_url(&self) -> String {
