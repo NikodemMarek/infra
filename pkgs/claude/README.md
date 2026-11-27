@@ -9,8 +9,8 @@ nix build .#claude                                # build it (from the repo root
 
 ## Layout
 
-- `pkgs/claude/` - the wrapper (`default.nix`), `CLAUDE.md`, `mate.md` (the first mate's role prompt, appended with `--append-system-prompt-file` to the system prompt of every session `jw mate` starts or resumes), `agents/*.md`, `settings.nix` (rendered to `settings.json`), `permissions.nix` (imported by `settings.nix`) and this README
-- `pkgs/agent-skills/skills/` - `*/SKILL.md`, tool-agnostic skills shared by Claude and other tools (`jj`, `atomic-commits`, `commit`, `drill-me`, `visual-plan`, `coordinator` for the main session, `afk` for the first mate); `claude` takes them from the `agent-skills` package
+- `pkgs/claude/` - the wrapper (`default.nix`), `CLAUDE.md`, `mate.md` (the first mate's role prompt, appended with `--append-system-prompt-file` to the system prompt of every session `jw mate` starts or resumes), `agents/*.md`, `settings.nix` (rendered to `settings.json`), `permissions.nix` (imported by `settings.nix`), `mate/` (the first mate's own `CLAUDE.md`, `settings.nix` and `skills/`, see "First mate") and this README
+- `pkgs/agent-skills/skills/` - `*/SKILL.md`, tool-agnostic skills shared by Claude and other tools (`jj`, `atomic-commits`, `commit`, `drill-me`, `visual-plan`, `coordinator` for the main session); `claude` takes them from the `agent-skills` package
 - `pkgs/jj-upload`, `pkgs/claude-hooks`, `pkgs/claude-statusline`, `pkgs/agent-skills` - the other tools
 - `pkgs/default.nix` - registers `claude` and the tools; `overlays/default.nix` exposes them as the `additions` overlay and `flake.nix` exports them as `packages`
 
@@ -102,6 +102,26 @@ Managed entries are symlinks refreshed on every launch; stale ones from older bu
 
 `dataDir` is shell-expanded at runtime and must start with `$HOME/` (checked at build time; the markdown prose shows it as `~/...`). Variants (e.g. different `extend` results) sharing one `dataDir` re-link each other's entries on every launch; give a variant its own `dataDir` to run them side by side. `memoryDir` follows the same rules (shell-expanded, `$HOME/` prefix) and is independent of `dataDir`: variants with different `dataDir`s can share one memory repo.
 
+## First mate
+
+The same package also installs `bin/claude-mate`, the entry point of the first mate (the supervisor session `jw mate` runs). It always uses `CLAUDE_CONFIG_DIR=<dataDir>/mate` (ignoring the environment) and is built from the same inputs, so `extend` reaches it too.
+
+```
+~/.local/share/claude/mate/
+  CLAUDE.md          -> /nix/store/...-claude-mate-config/CLAUDE.md (from pkgs/claude/mate/, standalone)
+  settings.json      -> /nix/store/...-claude-mate-config/settings.json
+  skills/afk         -> /nix/store/...-claude-mate-config/skills/afk
+  sessions           -> ../sessions
+  projects           -> ../projects
+  jj-agents          -> ../jj-agents
+  .credentials.json  its own login (`/login`), not shared
+```
+
+- The settings are the coordinator's without `enabledPlugins`, plus the deny rules in `mate/settings.nix` (no edits under `projectsDir`, no subagents, and a list of state-changing jj, git, forge, glab, gh and claude commands). The deny list is best-effort and backed by the prompt; a read-only Bash hook or allow-list is a follow-up. It has no agents and only the skills in `mate/skills/`.
+- `sessions`, `projects` and `jj-agents` are relative links into the coordinator's dir, so both roles share one session registry and one transcript store (jw reads them from there). A real directory in the way is left alone with a warning.
+- The login is not linked: claude replaces `.credentials.json` on every token refresh, which would log the coordinators out.
+- The launch does not touch the memory dir, but exports `CLAUDE_MEMORY_DIR` and `CLAUDE_PROJECTS_DIR` like `claude`, and uses the same workspace logic.
+
 ## Migrating from ~/.claude
 
 1. Quit all running claude sessions.
@@ -139,7 +159,7 @@ final: prev: {
 }
 ```
 
-`extend` accepts `instructions`, `agents`, `skills`, `settings`, `extraPackages`, `dataDir`, `projectsDir` and `memoryDir` (other names fail with an error). It deep-merges `settings`, `agents` and `skills` (attrsets recurse, lists such as `permissions.allow` are concatenated and deduplicated), concatenates `extraPackages`, and replaces `instructions` / `dataDir` / `projectsDir` / `memoryDir`. A `null` agent/skill removes it: `claude.extend { skills.atomic-commits = null; }`. The result carries `extend` again, so layers chain, and still supports `.override { ... }`, which replaces `instructions` / `agents` / `skills` / `settings` wholesale instead.
+`extend` accepts `instructions`, `agents`, `skills`, `settings`, `extraPackages`, `dataDir`, `projectsDir`, `memoryDir` and `knowledgeFile` (other names fail with an error). It deep-merges `settings`, `agents` and `skills` (attrsets recurse, lists such as `permissions.allow` are concatenated and deduplicated), concatenates `extraPackages`, and replaces `instructions` / `dataDir` / `projectsDir` / `memoryDir` / `knowledgeFile`. A `null` agent/skill removes it: `claude.extend { skills.atomic-commits = null; }`. The result carries `extend` again, so layers chain, and still supports `.override { ... }`, which replaces `instructions` / `agents` / `skills` / `settings` wholesale instead.
 
 ## Local/private extensions
 
