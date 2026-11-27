@@ -69,20 +69,6 @@ pub fn has_agents_suffix(path: &str) -> bool {
     path.len() > ".agents".len() && path.ends_with(".agents")
 }
 
-/// The workspaces gitlab-context creates: it reuses and cleans them.
-pub fn is_gitlab(name: &str) -> bool {
-    let Some(rest) = name.strip_prefix("gl-") else {
-        return false;
-    };
-    let letters = |s: &&str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_lowercase());
-    let digits = |s: &&str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    match rest.split('-').collect::<Vec<_>>().as_slice() {
-        [kind, id] => letters(kind) && digits(id),
-        [kind, id, n] => letters(kind) && digits(id) && digits(n),
-        _ => false,
-    }
-}
-
 /// (home, name, path) of the agent workspace a record points to, if there is one.
 pub fn agent_workspace(ws: Option<&str>) -> Option<(String, String, String)> {
     let ws = ws.filter(|w| !w.contains('\0') && Path::new(w).is_absolute())?;
