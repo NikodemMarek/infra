@@ -39,7 +39,7 @@ spec:
             defaultMode: 0440
       containers:
         - name: matrix-gateway
-          image: ghcr.io/nikodemmarek/matrix-gateway:main@sha256:c2912ceaaa55da6869b419ed8cbb01e6709542b30df1c1b72fcb55de6fc21aa6
+          image: ghcr.io/nikodemmarek/matrix-gateway:main@sha256:e258ae147a0def1604609f32cf8418cc330ee9fa2e9776c998ab770bf9af8ecd
           env:
             - name: MATRIX_HOMESERVER
               value: http://synapse.matrix.svc.cluster.local:8008
