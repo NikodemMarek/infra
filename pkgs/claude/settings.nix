@@ -194,4 +194,6 @@
   theme = "dark";
   skipAutoPermissionPrompt = true;
   skipDangerousModePermissionPrompt = true;
+  # Bypass-mode sessions otherwise hold `jw msg` messages (no sender mode attested) for manual approval.
+  crossSessionInbound = "accept";
 }
