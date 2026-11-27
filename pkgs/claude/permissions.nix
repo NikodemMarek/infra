@@ -75,8 +75,6 @@
     "Bash(shpool attach:*)"
     "Bash(shpool --no-daemonize attach:*)"
 
-    "Edit(~/.local/state/agent-sessions/**)"
-
     "Bash(sudo:*)"
 
     # MR/PR comments, replies and resolves go only through `forge pr review` drafts.

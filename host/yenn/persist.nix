@@ -19,7 +19,6 @@
         ".local/share/claude"
         ".local/share/containers"
         ".local/share/nvim"
-        ".local/state/agent-sessions"
         ".local/share/fish"
         ".local/share/Steam"
 
