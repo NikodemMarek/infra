@@ -69,6 +69,7 @@
     "Bash(mvn test:*)"
     "Bash(mvn compile:*)"
     "Bash(mvn verify:*)"
+    "Edit(@knowledgeFile@)"
   ];
   deny = [
     # Sessions are started only with `jw agent`: others have no jw session record.
@@ -103,7 +104,6 @@
     "Bash(gh api *comments*)"
     "Bash(gh api *reviews*)"
   ];
-  ask = ["Edit(@knowledgeFile@)"];
   additionalDirectories = ["@memoryDir@" "@projectsDir@"];
   # every session starts in auto mode, also those jw and the event handlers start
   defaultMode = "auto";
