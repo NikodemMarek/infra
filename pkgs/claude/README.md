@@ -10,7 +10,7 @@ nix build .#claude                                # build it (from the repo root
 ## Layout
 
 - `pkgs/claude/` - the wrapper (`default.nix`), `CLAUDE.md`, `mate.md` (the first mate's role prompt, appended with `--append-system-prompt-file` to the system prompt of every session `jw mate` starts or resumes), `agents/*.md`, `settings.nix` (rendered to `settings.json`), `permissions.nix` (imported by `settings.nix`) and this README
-- `pkgs/agent-skills/skills/` - `*/SKILL.md`, tool-agnostic skills shared by Claude and other tools (`jj`, `atomic-commits`, `commit`, `drill-me`, `visual-plan`, `afk` for the first mate); `claude` takes them from the `agent-skills` package
+- `pkgs/agent-skills/skills/` - `*/SKILL.md`, tool-agnostic skills shared by Claude and other tools (`jj`, `atomic-commits`, `commit`, `drill-me`, `visual-plan`, `coordinator` for the main session, `afk` for the first mate); `claude` takes them from the `agent-skills` package
 - `pkgs/jj-upload`, `pkgs/claude-hooks`, `pkgs/claude-statusline`, `pkgs/agent-skills` - the other tools
 - `pkgs/default.nix` - registers `claude` and the tools; `overlays/default.nix` exposes them as the `additions` overlay and `flake.nix` exports them as `packages`
 
