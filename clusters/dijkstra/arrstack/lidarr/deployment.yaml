@@ -37,7 +37,7 @@ spec:
                 path: cookies.txt
       containers:
         - name: lidarr
-          image: linuxserver/lidarr:nightly-4.0.0.5236-ls228
+          image: linuxserver/lidarr:nightly-4.0.0.5247-ls230
           env:
             - name: PUID
               value: "1000"
