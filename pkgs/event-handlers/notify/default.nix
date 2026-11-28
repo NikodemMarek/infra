@@ -4,6 +4,7 @@
   libnotify,
   xdg-utils,
   jq,
+  jw,
   # low | normal | critical
   urgency ? "normal",
 }:
@@ -19,6 +20,7 @@ writeShellApplication {
   ];
   text = ''
     event=$(cat)
+    export PATH="$PATH:${jw}/bin"
 
     summary=$(jq -r '"\(.project // .host): \(.type | split(".") | last | gsub("_"; " "))"' <<<"$event")
     # notification bodies are markup, hence @html
@@ -31,14 +33,9 @@ writeShellApplication {
     if [[ -z "$url" ]]; then
       # the name comes from an event: build a path only from a valid one
       session=$(jq -r '.session | strings | select(test("^[A-Za-z0-9][A-Za-z0-9._-]*\\z"))' <<<"$event" || true)
-      state=''${XDG_STATE_HOME:-}
-      [[ "$state" == /* ]] || state=$HOME/.local/state
-      record=$state/agent-sessions/$session.json
-      if [[ -n "$session" && -f "$record" && ! -L "$record" && "$(stat -c %s "$record")" -le 65536 ]]; then
-        # -s: a file with several JSON values is rejected, not read from its first one
-        url=$(jq -rs 'if length == 1 and (.[0] | type) == "object"
-          then .[0] | (.url | strings | select(. != "")) // (.mrs | arrays | first | strings) // ""
-          else "" end' "$record" 2>/dev/null || true)
+      if [[ -n "$session" ]]; then
+        url=$(jw session get -s "$session" 2>/dev/null |
+          jq -r '(.url | strings | select(. != "")) // (.mrs | arrays | first | strings) // ""' 2>/dev/null || true)
       fi
     fi
 
